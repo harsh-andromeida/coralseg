@@ -21,7 +21,7 @@ export default defineConfig(() => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    port: 1425,
     strictPort: true,
     host: host || false,
     headers: {
@@ -32,12 +32,12 @@ export default defineConfig(() => ({
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: 1426,
         }
       : {
           protocol: "ws",
           host: "localhost",
-          port: 1420,
+          port: 1425,
         },
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
