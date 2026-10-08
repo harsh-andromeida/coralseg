@@ -10,6 +10,7 @@ import glob
 import json
 import base64
 import time
+import datetime
 import threading
 from typing import Dict, List, Optional, Any
 from pathlib import Path
@@ -41,7 +42,7 @@ from core.models import (
 from core.segmentation import run_segmentation
 from core.taxonomy import enrich_masks_with_taxonomy_and_bleaching
 from core.visualization import create_segmentation_overlay, generate_distinct_colors
-from core.export import build_coco_json, create_coco_dataset_zip
+from core.export import build_coco_json, create_coco_dataset_zip, export_dataset_to_directory
 from core.batch import BatchProcessor
 
 from app.schemas import (
@@ -58,6 +59,8 @@ from app.schemas import (
     BatchStartRequest,
     BatchPrioritizeRequest,
     BatchStatusResponse,
+    ExportFolderRequest,
+    ExportFolderResponse,
 )
 
 app = FastAPI(
@@ -837,24 +840,40 @@ def get_analysis_result(image_name: str):
     }
 
 
-@app.get("/api/batch/export/coco-zip")
-def export_batch_coco_dataset():
+def _gather_processed_dataset_items(image_names: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
-    Assembles and streams a complete structured dataset archive (.zip)
-    containing COCO JSON annotations, original images, summary.csv, and dataset_summary.json
-    for all images processed up to this point.
+    Collects structured telemetry, taxonomy annotations, masks, and metadata
+    for all images processed via batch processor, active analysis studio sessions, or caches.
     """
-    # Collect all processed image names
+    # 1. Image names from batch processor
     processed_names = _BATCH_PROCESSOR.get_processed_images_list()
 
-    # Also include any images from _ENRICH_CACHE
-    cached_names = set(k.split("_")[0] for k in _ENRICH_CACHE.keys())
-    all_target_names = list(dict.fromkeys(processed_names + [n for n in cached_names if n in _IMAGE_STORE]))
+    # 2. Image names from _ENRICH_CACHE
+    enrich_names = [
+        name for name in _IMAGE_STORE.keys()
+        if any(k.startswith(f"{name}_") for k in _ENRICH_CACHE.keys())
+    ]
+
+    # 3. Image names from _BASE_SEG_CACHE
+    seg_names = [
+        name for name in _IMAGE_STORE.keys()
+        if any(k.startswith(f"{name}_") for k in _BASE_SEG_CACHE.keys())
+    ]
+
+    all_target_names = list(dict.fromkeys(processed_names + enrich_names + seg_names))
+
+    # If explicit image_names filter is provided, restrict to them (or include if in store)
+    if image_names:
+        allowed = set(image_names)
+        all_target_names = [n for n in all_target_names if n in allowed]
+        for req_name in image_names:
+            if req_name in _IMAGE_STORE and req_name not in all_target_names:
+                all_target_names.append(req_name)
 
     if not all_target_names:
         raise HTTPException(
             status_code=400,
-            detail="No images have finished processing yet. Please wait for at least one image to complete.",
+            detail="No analyzed images available to export yet. Please analyze at least one image before exporting.",
         )
 
     processed_items = []
@@ -863,35 +882,51 @@ def export_batch_coco_dataset():
         w = pil_img.width if pil_img else 1024
         h = pil_img.height if pil_img else 768
 
-        # Find raw enriched masks
-        matching_keys = [k for k in _ENRICH_CACHE.keys() if k.startswith(f"{name}_")]
-        if matching_keys:
-            masks_info, full_image_eval, health_summary = _ENRICH_CACHE[matching_keys[-1]]
+        # Find raw enriched masks if present
+        matching_enrich_keys = [k for k in _ENRICH_CACHE.keys() if k.startswith(f"{name}_")]
+        if matching_enrich_keys:
+            masks_info, full_image_eval, health_summary = _ENRICH_CACHE[matching_enrich_keys[-1]]
         else:
-            masks_info, full_image_eval, health_summary = [], {}, {}
+            matching_base_keys = [k for k in _BASE_SEG_CACHE.keys() if k.startswith(f"{name}_")]
+            if matching_base_keys:
+                masks_info = _BASE_SEG_CACHE[matching_base_keys[-1]]
+            else:
+                masks_info = []
+            full_image_eval, health_summary = {}, {}
 
         batch_item = _BATCH_PROCESSOR.get_image_result(name) or {}
-        segments = batch_item.get("segments", [])
+        segments = list(batch_item.get("segments", []))
         if not segments and masks_info:
             # Reconstruct table segments
-            for m in masks_info:
+            for idx, m in enumerate(masks_info):
                 tax = m.get("taxonomy", {})
                 bl = m.get("bleaching", {})
+                m_id = m.get("id", idx + 1)
                 segments.append({
-                    "id": m["id"],
-                    "id_str": f"#{m['id']}",
+                    "id": m_id,
+                    "id_str": f"#{m_id}",
                     "genus": tax.get("genus", "Coral"),
                     "growth_form": tax.get("growth_form", "-"),
-                    "taxon_conf": round(float(tax.get("confidence_pct", 0)), 1),
+                    "taxon_conf": round(float(tax.get("confidence_pct", 90.0)), 1),
                     "condition": "Bleached" if bl.get("is_bleached") else "Healthy",
-                    "condition_conf": round(float(bl.get("confidence_pct", 0)), 1),
+                    "condition_conf": round(float(bl.get("confidence_pct", 90.0)), 1),
                     "area_pct": m.get("area_pct", 0.0),
                     "area_px": m.get("area_px", m.get("area", 0)),
-                    "predicted_iou": round(float(m["predicted_iou"]), 3),
+                    "predicted_iou": round(float(m.get("predicted_iou", 0.90)), 3),
                     "color_hex": m.get("color_hex", "#00cccc"),
                     "centroid": [int(v) for v in m["centroid"]] if m.get("centroid") else None,
                     "bbox": [int(v) for v in m["bbox"]] if m.get("bbox") else None,
                 })
+
+        cov_pct = batch_item.get("coverage_pct", 0.0)
+        if cov_pct == 0.0 and segments and w > 0 and h > 0:
+            total_px = sum(s.get("area_px", 0) for s in segments)
+            cov_pct = round((total_px / (w * h)) * 100.0, 2)
+
+        bleach_pct = batch_item.get(
+            "bleaching_prevalence_pct",
+            health_summary.get("bleaching_prevalence_pct", 0.0),
+        )
 
         processed_items.append({
             "image_name": name,
@@ -900,12 +935,46 @@ def export_batch_coco_dataset():
             "masks_info": masks_info,
             "segments": segments,
             "corals_count": len(segments),
-            "coverage_pct": batch_item.get("coverage_pct", 0.0),
-            "bleaching_prevalence_pct": batch_item.get("bleaching_prevalence_pct", health_summary.get("bleaching_prevalence_pct", 0.0)),
+            "coverage_pct": cov_pct,
+            "bleaching_prevalence_pct": bleach_pct,
             "summary": batch_item.get("summary", {}),
             "health_summary": health_summary,
             "scene_eval": full_image_eval,
         })
+
+    return processed_items
+
+
+@app.get("/api/batch/export/default-path")
+def get_default_export_path():
+    """Returns a platform-appropriate default folder path for dataset export."""
+    home = Path.home()
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder_name = f"reefvision_dataset_{timestamp_str}"
+    for candidate_name in ["Downloads", "Desktop", "Documents"]:
+        candidate_dir = home / candidate_name
+        if candidate_dir.exists() and candidate_dir.is_dir():
+            return {
+                "default_folder": str(candidate_dir / folder_name),
+                "parent_dir": str(candidate_dir),
+                "suggested_name": folder_name,
+            }
+    return {
+        "default_folder": str(home / folder_name),
+        "parent_dir": str(home),
+        "suggested_name": folder_name,
+    }
+
+
+@app.get("/api/batch/export/coco-zip")
+def export_batch_coco_dataset(image_name: Optional[str] = None):
+    """
+    Assembles and streams a complete structured dataset archive (.zip)
+    containing COCO JSON annotations, original images, summary.csv, and dataset_summary.json
+    for all images processed up to this point.
+    """
+    img_filter = [image_name] if image_name else None
+    processed_items = _gather_processed_dataset_items(image_names=img_filter)
 
     zip_bytes = create_coco_dataset_zip(processed_items, _IMAGE_STORE)
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -919,4 +988,54 @@ def export_batch_coco_dataset():
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
+
+
+@app.post("/api/batch/export/to-folder", response_model=ExportFolderResponse)
+def export_dataset_to_custom_folder(req: ExportFolderRequest):
+    """
+    Exports the complete structured dataset directly into a user-specified custom folder.
+    Creates annotations/instances_default.json, images/, summary.csv, dataset_summary.json,
+    and README.md directly in that folder, with an optional bundled .zip archive.
+    """
+    if not req.folder_path or not req.folder_path.strip():
+        raise HTTPException(status_code=400, detail="Destination folder path cannot be empty.")
+
+    target_path = Path(req.folder_path.strip()).expanduser().resolve()
+    try:
+        target_path.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Cannot create or access destination folder: {e}")
+
+    processed_items = _gather_processed_dataset_items(image_names=req.image_names)
+    res = export_dataset_to_directory(
+        processed_items=processed_items,
+        image_store=_IMAGE_STORE,
+        output_dir=target_path,
+        include_zip=req.include_zip,
+    )
+
+    if req.open_folder:
+        try:
+            if sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", str(target_path)])
+            elif sys.platform == "win32":
+                import os
+                os.startfile(str(target_path))
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", str(target_path)])
+        except Exception as e:
+            logger.warning(f"Could not open folder in file manager: {e}")
+
+    return ExportFolderResponse(
+        success=True,
+        folder_path=str(target_path),
+        total_images=res.get("total_images", 0),
+        images_saved=res.get("images_saved", 0),
+        total_corals=res.get("total_corals", 0),
+        written_files_count=res.get("written_files_count", 0),
+        zip_file=res.get("zip_file"),
+    )
+
 

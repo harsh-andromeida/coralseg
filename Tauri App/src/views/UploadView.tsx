@@ -21,6 +21,7 @@ import {
 import JSZip from "jszip";
 import { BrandLogo } from "../components/BrandLogo";
 import { UISelect } from "../components/UISelect";
+import { ExportDatasetModal } from "../components/ExportDatasetModal";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -55,7 +56,6 @@ import {
   pauseBatch,
   resumeBatch,
   cancelBatch,
-  downloadBatchCocoZip,
 } from "../services/api";
 
 interface ModelGroupDef {
@@ -111,7 +111,7 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
   // Batch Background Processing State
   const [batchStatus, setBatchStatus] = useState<BatchStatusResponse | null>(null);
   const [isStartingBatch, setIsStartingBatch] = useState<boolean>(false);
-  const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
+  const [isExportDatasetModalOpen, setIsExportDatasetModalOpen] = useState<boolean>(false);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
   const [activeBatchImages, setActiveBatchImages] = useState<LoadedImage[]>([]);
   const [isCancellingBatch, setIsCancellingBatch] = useState<boolean>(false);
@@ -514,23 +514,6 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
     }
   };
 
-  const handleExportBatchZip = async () => {
-    setIsExportingZip(true);
-    try {
-      const res = await downloadBatchCocoZip();
-      if (res.success && res.path) {
-        setExportFeedback(`Dataset exported: ${res.path.split(/[/\\]/).pop()}`);
-        setTimeout(() => setExportFeedback(null), 5000);
-      } else if (res.error) {
-        alert(`Export failed: ${res.error}`);
-      }
-    } catch (e: any) {
-      alert(`Export error: ${e?.message || e}`);
-    } finally {
-      setIsExportingZip(false);
-    }
-  };
-
   const handleLaunchStudioNow = () => {
     if (activeBatchImages.length > 0) {
       onLaunchStudio(activeBatchImages);
@@ -724,17 +707,13 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
             <Button
               type="button"
               variant="outline"
-              className="h-9 px-3 text-xs font-bold gap-1.5 border-teal-300 text-teal-800 bg-teal-50/60 hover:bg-teal-100 hover:border-teal-400 rounded-lg transition-colors"
-              onClick={handleExportBatchZip}
-              disabled={!hasProcessed || isExportingZip}
-              title="Download structured COCO dataset (.zip) containing images, COCO JSON annotations, and summary.csv"
+              className="h-9 px-3 text-xs font-bold gap-1.5 border-teal-300 text-teal-800 bg-teal-50/60 hover:bg-teal-100 hover:border-teal-400 rounded-lg transition-colors cursor-pointer"
+              onClick={() => setIsExportDatasetModalOpen(true)}
+              disabled={!hasProcessed}
+              title="Export complete structured dataset into a custom destination folder or as a .zip"
             >
-              {isExportingZip ? (
-                <Loader2 size={13} className="animate-spin text-teal-700" />
-              ) : (
-                <FolderArchive size={14} className="text-teal-700" />
-              )}
-              <span>COCO Dataset (.zip)</span>
+              <FolderArchive size={14} className="text-teal-700" />
+              <span>Export Dataset</span>
             </Button>
           </div>
         </div>
@@ -1460,6 +1439,11 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ExportDatasetModal
+        open={isExportDatasetModalOpen}
+        onOpenChange={setIsExportDatasetModalOpen}
+      />
     </div>
   );
 };

@@ -118,3 +118,22 @@ class BatchStatusResponse(BaseModel):
     current_stage: str
     images_order: List[str]
     items: Dict[str, Any]
+
+
+class ExportFolderRequest(BaseModel):
+    folder_path: str = Field(description="Target directory path on local filesystem")
+    include_zip: bool = Field(default=False, description="Whether to also generate .zip archive inside the folder")
+    open_folder: bool = Field(default=True, description="Whether to open the target folder in OS file manager")
+    image_names: Optional[List[str]] = Field(default=None, description="Optional subset of image names to export")
+
+
+class ExportFolderResponse(BaseModel):
+    success: bool
+    folder_path: str
+    total_images: int
+    images_saved: int
+    total_corals: int
+    written_files_count: int
+    zip_file: Optional[str] = None
+    error: Optional[str] = None
+

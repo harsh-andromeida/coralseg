@@ -162,6 +162,64 @@ def test_endpoints():
     assert "images/coral_test.png" in namelist
     print(f"  COCO dataset zip verified with files: {namelist}")
 
+    # Test GET /api/batch/export/default-path
+    resp = client.get("/api/batch/export/default-path")
+    assert resp.status_code == 200, f"Default path failed: {resp.text}"
+    def_path_info = resp.json()
+    assert "default_folder" in def_path_info
+    print(f"  Export default-path verified: {def_path_info['default_folder']}")
+
+    # Test POST /api/batch/export/to-folder with mock item and underscore filename
+    import tempfile, shutil
+    from app.main import _IMAGE_STORE, _ENRICH_CACHE
+    test_img_name = "test_coral_reef_01.png"
+    _IMAGE_STORE[test_img_name] = mock_img
+    _ENRICH_CACHE[f"{test_img_name}_16_0.5_0.5_100"] = (
+        [{
+            "id": 1,
+            "area_px": 512,
+            "area_pct": 12.5,
+            "predicted_iou": 0.94,
+            "taxonomy": {"genus": "Acropora", "growth_form": "Branching", "confidence_pct": 95.0},
+            "bleaching": {"is_bleached": False, "confidence_pct": 90.0},
+            "color_hex": "#00cccc",
+            "bbox": [10, 10, 20, 20],
+            "centroid": [20, 20],
+        }],
+        {"overall_assessment": "healthy"},
+        {"bleaching_prevalence_pct": 0.0},
+    )
+
+    # Test export to zip with underscore image
+    resp = client.get(f"/api/batch/export/coco-zip?image_name={test_img_name}")
+    assert resp.status_code == 200, f"Underscore image zip export failed: {resp.text}"
+    assert len(resp.content) > 0
+    print("  COCO dataset zip for image with underscores verified.")
+
+    # Test export to custom directory
+    temp_export_dir = tempfile.mkdtemp(prefix="reefvision_test_export_")
+    try:
+        resp = client.post("/api/batch/export/to-folder", json={
+            "folder_path": temp_export_dir,
+            "include_zip": True,
+            "open_folder": False,
+        })
+        assert resp.status_code == 200, f"Export to folder failed: {resp.text}"
+        res_data = resp.json()
+        assert res_data["success"] is True
+        assert res_data["total_images"] >= 1
+        export_p = Path(temp_export_dir)
+        assert (export_p / "annotations" / "instances_default.json").exists()
+        assert (export_p / "images" / test_img_name).exists()
+        assert (export_p / "summary.csv").exists()
+        assert (export_p / "dataset_summary.json").exists()
+        assert (export_p / "README.md").exists()
+        print(f"  Export to custom folder verified with {res_data['written_files_count']} files.")
+    finally:
+        shutil.rmtree(temp_export_dir, ignore_errors=True)
+        _IMAGE_STORE.pop(test_img_name, None)
+        _ENRICH_CACHE.pop(f"{test_img_name}_16_0.5_0.5_100", None)
+
     print("\nAll API endpoint unit tests PASSED successfully!")
 
 

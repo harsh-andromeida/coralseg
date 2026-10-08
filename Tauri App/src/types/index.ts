@@ -134,3 +134,31 @@ export interface BatchStatusResponse {
   images_order: string[];
   items: Record<string, BatchItemStatus>;
 }
+
+export interface DefaultExportPathResponse {
+  default_folder: string;
+  parent_dir: string;
+  suggested_name: string;
+}
+
+export interface ExportToFolderRequest {
+  folder_path: string;
+  include_zip?: boolean;
+  open_folder?: boolean;
+  image_names?: string[];
+}
+
+export interface ExportToFolderResponse {
+  success: boolean;
+  folder_path: string;
+  total_images: number;
+  images_saved: number;
+  total_corals: number;
+  written_files_count: number;
+  zip_file?: string | null;
+  error?: string | null;
+}
+
+export type ExportFolderResponse = ExportToFolderResponse;
+
+

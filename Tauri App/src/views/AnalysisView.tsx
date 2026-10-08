@@ -16,6 +16,7 @@ import { ImageViewer } from "../components/ImageViewer";
 import { MetricCards } from "../components/MetricCards";
 import { SegmentsTable } from "../components/SegmentsTable";
 import { ExportPanel } from "../components/ExportPanel";
+import { ExportDatasetModal } from "../components/ExportDatasetModal";
 import { Button } from "@/components/ui/button";
 import {
   LoadedImage,
@@ -38,7 +39,6 @@ import {
   cancelBatch,
   prioritizeBatchImage,
   getPrecomputedResult,
-  downloadBatchCocoZip,
 } from "../services/api";
 
 interface AnalysisViewProps {
@@ -96,7 +96,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
 
   // Background Batch Tracking & Dataset Export
   const [batchStatus, setBatchStatus] = useState<BatchStatusResponse | null>(null);
-  const [isExportingBatch, setIsExportingBatch] = useState<boolean>(false);
+  const [isExportDatasetModalOpen, setIsExportDatasetModalOpen] = useState<boolean>(false);
   const [isCancellingBatch, setIsCancellingBatch] = useState<boolean>(false);
   const [batchFeedback, setBatchFeedback] = useState<string | null>(null);
 
@@ -458,30 +458,12 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
               type="button"
               variant="outline"
               size="sm"
-              disabled={batchStatus.completed === 0 || isExportingBatch}
-              onClick={async () => {
-                setIsExportingBatch(true);
-                try {
-                  const res = await downloadBatchCocoZip();
-                  if (res.success && res.path) {
-                    setBatchFeedback(`Dataset exported: ${res.path.split(/[/\\]/).pop()}`);
-                    setTimeout(() => setBatchFeedback(null), 5000);
-                  }
-                } catch (e: any) {
-                  alert(`Export error: ${e?.message || e}`);
-                } finally {
-                  setIsExportingBatch(false);
-                }
-              }}
-              className="h-6 px-2.5 text-[10px] font-bold gap-1 text-teal-300 bg-teal-950/80 border-teal-700/80 hover:bg-teal-900 hover:text-white rounded-md"
-              title="Download all images processed until now in structured COCO format (.zip)"
+              onClick={() => setIsExportDatasetModalOpen(true)}
+              className="h-6 px-2.5 text-[10px] font-bold gap-1 text-teal-300 bg-teal-950/80 border-teal-700/80 hover:bg-teal-900 hover:text-white rounded-md cursor-pointer"
+              title="Export all processed images or current image to custom folder or .zip archive"
             >
-              {isExportingBatch ? (
-                <Loader2 size={10} className="animate-spin text-teal-300" />
-              ) : (
-                <FolderArchive size={11} className="text-teal-300" />
-              )}
-              <span>Export Dataset (.zip)</span>
+              <FolderArchive size={11} className="text-teal-300" />
+              <span>Export Dataset</span>
             </Button>
           </div>
         </div>
@@ -608,6 +590,12 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
           </div>
         </main>
       </div>
+
+      <ExportDatasetModal
+        open={isExportDatasetModalOpen}
+        onOpenChange={setIsExportDatasetModalOpen}
+        imageName={currentImage?.name}
+      />
     </div>
   );
 };

@@ -6,6 +6,9 @@ import {
   SampleItem,
   AnalysisData,
   BatchStatusResponse,
+  DefaultExportPathResponse,
+  ExportToFolderRequest,
+  ExportFolderResponse,
 } from "../types";
 
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -301,8 +304,55 @@ export async function getPrecomputedResult(imageName: string): Promise<any> {
   return res.json();
 }
 
-export async function downloadBatchCocoZip(): Promise<{ success: boolean; path?: string; error?: string }> {
-  const url = `${API_BASE}/batch/export/coco-zip`;
+export async function getDefaultExportPath(): Promise<DefaultExportPathResponse> {
+  const res = await fetch(`${API_BASE}/batch/export/default-path`);
+  if (!res.ok) throw new Error("Failed to get default export path");
+  return res.json();
+}
+
+export async function exportDatasetToFolder(
+  params: ExportToFolderRequest
+): Promise<ExportFolderResponse> {
+  const res = await fetch(`${API_BASE}/batch/export/to-folder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to export dataset to folder");
+  }
+  return res.json();
+}
+
+export async function pickFolderNative(defaultPath?: string): Promise<string | null> {
+  if (typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string | null>("pick_folder_dialog", {
+        defaultPath: defaultPath || null,
+      });
+    } catch (e) {
+      console.warn("Failed to open Tauri native folder dialog:", e);
+    }
+  }
+  return null;
+}
+
+export async function openFolderNative(path: string): Promise<void> {
+  if (typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_folder", { path });
+    } catch (e) {
+      console.warn("Failed to open folder natively:", e);
+    }
+  }
+}
+
+export async function downloadBatchCocoZip(imageName?: string): Promise<{ success: boolean; path?: string; error?: string }> {
+  const query = imageName ? `?image_name=${encodeURIComponent(imageName)}` : "";
+  const url = `${API_BASE}/batch/export/coco-zip${query}`;
   const res = await fetch(url);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -347,3 +397,4 @@ export async function downloadBatchCocoZip(): Promise<{ success: boolean; path?:
   }, 300);
   return { success: true, path: defaultName };
 }
+

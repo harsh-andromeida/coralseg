@@ -148,11 +148,57 @@ fn save_file_dialog(
     }
 }
 
+#[tauri::command]
+fn pick_folder_dialog(default_path: Option<String>) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(ref dp) = default_path {
+        let p = PathBuf::from(dp);
+        if p.exists() {
+            if p.is_dir() {
+                dialog = dialog.set_directory(&p);
+            } else if let Some(parent) = p.parent() {
+                dialog = dialog.set_directory(parent);
+            }
+        }
+    } else if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        let dl = PathBuf::from(home).join("Downloads");
+        if dl.exists() {
+            dialog = dialog.set_directory(&dl);
+        }
+    }
+    dialog.pick_folder().map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg(&path).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("explorer").arg(&path).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = Command::new("xdg-open").arg(&path).spawn().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![save_file_dialog])
+        .invoke_handler(tauri::generate_handler![
+            save_file_dialog,
+            pick_folder_dialog,
+            open_folder
+        ])
         .setup(|app| {
             let root = get_project_root();
             if !is_backend_running() {
