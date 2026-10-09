@@ -7,7 +7,7 @@ import {
   createColumnHelper,
   SortingState,
 } from "@tanstack/react-table";
-import { ArrowUpDown, ArrowUp, ArrowDown, Layers, Search } from "lucide-react";
+import { ArrowUpDown, ArrowUp, ArrowDown, Layers, Search, Edit3 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -23,6 +23,7 @@ import {
   CardContent,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InfoTooltip } from "./InfoTooltip";
@@ -34,6 +35,8 @@ interface SegmentsTableProps {
   selectedSegmentId?: number | null;
   onSelectSegment?: (id: number | null) => void;
   isLoading?: boolean;
+  onOpenEditor?: () => void;
+  onEditSegment?: (segmentId: number) => void;
 }
 
 const columnHelper = createColumnHelper<CoralSegment>();
@@ -53,6 +56,8 @@ export const SegmentsTable: React.FC<SegmentsTableProps> = ({
   selectedSegmentId,
   onSelectSegment,
   isLoading = false,
+  onOpenEditor,
+  onEditSegment,
 }) => {
   const [sorting, setSorting] = useState<SortingState>([]);
 
@@ -137,12 +142,36 @@ export const SegmentsTable: React.FC<SegmentsTableProps> = ({
         header: "IoU Confidence",
         cell: (info) => (
           <span className="font-mono text-xs font-semibold text-foreground">
-            {info.getValue().toFixed(3)}
+            {info.row.original.is_human_annotated ? "1.000 (Human)" : info.getValue().toFixed(3)}
           </span>
         ),
       }),
+      columnHelper.display({
+        id: "actions",
+        header: "Action",
+        cell: (info) => (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onEditSegment) {
+                onEditSegment(info.row.original.id);
+              } else if (onOpenEditor) {
+                onOpenEditor();
+              }
+            }}
+            className="h-6 px-2 text-[10px] font-semibold text-primary hover:text-primary hover:bg-primary/10 gap-1 cursor-pointer"
+            title="Edit this coral mask in Annotation Studio"
+          >
+            <Edit3 className="size-3" />
+            <span>Edit</span>
+          </Button>
+        ),
+      }),
     ],
-    []
+    [onEditSegment, onOpenEditor]
   );
 
   const table = useReactTable({
@@ -166,6 +195,19 @@ export const SegmentsTable: React.FC<SegmentsTableProps> = ({
         </div>
 
         <div className="flex items-center gap-2 shrink-0 flex-nowrap">
+          {onOpenEditor && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onOpenEditor}
+              className="h-7 px-2.5 text-xs font-semibold gap-1.5 text-primary border-primary/25 bg-primary/10 hover:bg-primary/20 cursor-pointer mr-1"
+              title="Open Manual Segmentation Studio"
+            >
+              <Edit3 className="size-3.5" />
+              <span>Edit Segmentation</span>
+            </Button>
+          )}
           <Badge
             variant="outline"
             className="font-mono text-xs bg-muted/40 text-muted-foreground border-border/80 shrink-0"

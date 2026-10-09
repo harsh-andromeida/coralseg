@@ -137,3 +137,29 @@ class ExportFolderResponse(BaseModel):
     zip_file: Optional[str] = None
     error: Optional[str] = None
 
+
+class PromptPoint(BaseModel):
+    x: float
+    y: float
+    label: int = Field(default=1, description="1: positive / foreground, 0: negative / background")
+
+
+class SegmentPromptRequest(BaseModel):
+    image_name: str
+    points: List[PromptPoint]
+
+
+class EditedSegmentItem(BaseModel):
+    id: int
+    genus: str = "Coral"
+    growth_form: str = "-"
+    condition: str = "Healthy"
+    color_hex: Optional[str] = None
+    polygon: List[List[float]] = Field(description="List of [x, y] polygon coordinates")
+
+
+class SaveAnnotationsRequest(BaseModel):
+    image_name: str
+    segments: List[EditedSegmentItem]
+
+

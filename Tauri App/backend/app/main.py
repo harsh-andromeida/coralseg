@@ -44,6 +44,12 @@ from core.taxonomy import enrich_masks_with_taxonomy_and_bleaching
 from core.visualization import create_segmentation_overlay, generate_distinct_colors
 from core.export import build_coco_json, create_coco_dataset_zip, export_dataset_to_directory
 from core.batch import BatchProcessor
+from core.interactive_segmentation import (
+    SAM_SESSION,
+    mask_to_polygon,
+    polygon_to_mask,
+    calculate_polygon_metrics,
+)
 
 from app.schemas import (
     DevicePreferenceRequest,
@@ -61,6 +67,10 @@ from app.schemas import (
     BatchStatusResponse,
     ExportFolderRequest,
     ExportFolderResponse,
+    PromptPoint,
+    SegmentPromptRequest,
+    EditedSegmentItem,
+    SaveAnnotationsRequest,
 )
 
 app = FastAPI(
@@ -594,6 +604,313 @@ def render_overlay(req: OverlayRequest):
         "overlay_base64": f"data:image/png;base64,{base64_str}",
         "width": overlay_pil.width,
         "height": overlay_pil.height,
+    }
+
+
+@app.get("/api/analysis/polygons/{image_name}")
+def get_image_polygons(image_name: str):
+    """
+    Returns polygon boundaries and metadata for all detected or human-annotated
+    coral instances for an image.
+    """
+    if image_name not in _IMAGE_STORE:
+        # Try finding in demo_images
+        dirs = _resolve_demo_dirs()
+        for sdir in dirs:
+            target = os.path.join(sdir, image_name)
+            if os.path.isfile(target):
+                _IMAGE_STORE[image_name] = Image.open(target).convert("RGB")
+                break
+        if image_name not in _IMAGE_STORE:
+            raise HTTPException(status_code=404, detail=f"Image '{image_name}' not loaded in session")
+
+    pil_img = _IMAGE_STORE[image_name]
+    img_h, img_w = pil_img.height, pil_img.width
+
+    matching_keys = [k for k in _ENRICH_CACHE.keys() if k.startswith(f"{image_name}_")]
+    masks_info = []
+    if matching_keys:
+        masks_info, _, _ = _ENRICH_CACHE[matching_keys[-1]]
+    else:
+        # Check base seg cache
+        base_keys = [k for k in _BASE_SEG_CACHE.keys() if k.startswith(f"{image_name}_")]
+        if base_keys:
+            masks_info = _BASE_SEG_CACHE[base_keys[-1]]
+
+    results = []
+    for m in masks_info:
+        seg_id = m.get("id", m.get("segment_id", len(results) + 1))
+        tax = m.get("taxonomy", {})
+        bl = m.get("bleaching", {})
+
+        # Use existing polygon if present, else trace outer contour
+        poly = m.get("polygon")
+        if poly is None:
+            seg_mask = m.get("mask", m.get("segmentation"))
+            if seg_mask is not None:
+                poly = mask_to_polygon(seg_mask, tolerance=1.8, max_points=100)
+                m["polygon"] = poly
+            else:
+                poly = []
+
+        is_human = m.get("is_human_annotated", False)
+        taxon_conf = 100.0 if is_human else round(float(tax.get("confidence_pct", 0.0)), 1)
+        cond_conf = 100.0 if is_human else round(float(bl.get("confidence_pct", 0.0)), 1)
+        iou_val = 1.0 if is_human else round(float(m.get("predicted_iou", 0.0)), 3)
+
+        cond_label = "Bleached" if bl.get("is_bleached") else "Healthy"
+
+        results.append({
+            "id": seg_id,
+            "id_str": f"#{seg_id}",
+            "genus": tax.get("genus", "Coral"),
+            "growth_form": tax.get("growth_form", "-"),
+            "taxon_conf": taxon_conf,
+            "condition": cond_label,
+            "condition_conf": cond_conf,
+            "area_pct": m.get("area_pct", 0.0),
+            "area_px": m.get("area_px", m.get("area", 0)),
+            "predicted_iou": iou_val,
+            "color_hex": m.get("color_hex", "#00cccc"),
+            "polygon": poly,
+            "bbox": [int(v) for v in m["bbox"]] if m.get("bbox") else None,
+            "centroid": [int(v) for v in m["centroid"]] if m.get("centroid") else None,
+            "is_human_annotated": is_human,
+        })
+
+    return {
+        "image_name": image_name,
+        "width": img_w,
+        "height": img_h,
+        "segments": results,
+    }
+
+
+@app.post("/api/analysis/segment-prompt")
+def run_interactive_prompt_segmentation(req: SegmentPromptRequest):
+    """
+    Executes interactive SAM point prompt segmentation.
+    Given click coordinates and positive/negative labels, generates a crisp mask polygon in ~15-25ms.
+    """
+    all_ready, _ = check_models_download_status()
+    if not all_ready:
+        raise HTTPException(
+            status_code=428,
+            detail="Foundation models are not downloaded. Please download all models before interactive segmentation.",
+        )
+
+    img_name = req.image_name
+    if img_name not in _IMAGE_STORE:
+        # Check demo images
+        dirs = _resolve_demo_dirs()
+        for sdir in dirs:
+            target = os.path.join(sdir, img_name)
+            if os.path.isfile(target):
+                _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
+                break
+        if img_name not in _IMAGE_STORE:
+            raise HTTPException(status_code=404, detail=f"Image '{img_name}' not loaded in session")
+
+    pil_img = _IMAGE_STORE[img_name]
+    sam_bundle = load_coralscop_model(device=_ACTIVE_DEVICE_PREF)
+
+    pts = [{"x": p.x, "y": p.y, "label": p.label} for p in req.points]
+    try:
+        result = SAM_SESSION.prompt_segment(
+            sam_bundle=sam_bundle,
+            image_name=img_name,
+            pil_image=pil_img,
+            points=pts,
+        )
+        return {
+            "status": "success",
+            "image_name": img_name,
+            **result,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Interactive segmentation failed: {str(e)}")
+
+
+@app.post("/api/analysis/save-annotations")
+def save_manual_annotations(req: SaveAnnotationsRequest):
+    """
+    Saves user-edited and newly created coral instance annotations for an image.
+    Marks all modified annotations as 100% confidence human ground truth.
+    Recalculates exact area, percent cover, health metrics, and re-renders overlay.
+    """
+    img_name = req.image_name
+    if img_name not in _IMAGE_STORE:
+        # Check demo images
+        dirs = _resolve_demo_dirs()
+        for sdir in dirs:
+            target = os.path.join(sdir, img_name)
+            if os.path.isfile(target):
+                _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
+                break
+        if img_name not in _IMAGE_STORE:
+            raise HTTPException(status_code=404, detail=f"Image '{img_name}' not loaded in session")
+
+    pil_img = _IMAGE_STORE[img_name]
+    img_h, img_w = pil_img.height, pil_img.width
+    total_pixels = img_h * img_w
+
+    masks_info = []
+    union_mask = np.zeros((img_h, img_w), dtype=bool)
+
+    distinct_colors = generate_distinct_colors(max(len(req.segments), 1))
+
+    for idx, item in enumerate(req.segments):
+        m_id = item.id if item.id > 0 else (idx + 1)
+        c_rgb = distinct_colors[idx % len(distinct_colors)]
+        c_hex = item.color_hex or f"#{c_rgb[0]:02x}{c_rgb[1]:02x}{c_rgb[2]:02x}"
+
+        # Parse RGB if hex provided
+        if item.color_hex and item.color_hex.startswith("#") and len(item.color_hex) == 7:
+            try:
+                c_rgb = (
+                    int(item.color_hex[1:3], 16),
+                    int(item.color_hex[3:5], 16),
+                    int(item.color_hex[5:7], 16),
+                )
+            except Exception:
+                pass
+
+        mask = polygon_to_mask(item.polygon, img_h, img_w)
+        metrics = calculate_polygon_metrics(item.polygon, img_h, img_w)
+        union_mask = np.logical_or(union_mask, mask)
+
+        is_bleached = item.condition.strip().lower() == "bleached"
+
+        mask_dict = {
+            "id": m_id,
+            "segment_id": m_id,
+            "mask": mask,
+            "segmentation": mask,
+            "polygon": item.polygon,
+            "area": metrics["area_px"],
+            "area_px": metrics["area_px"],
+            "area_pct": metrics["area_pct"],
+            "bbox": metrics["bbox"],
+            "centroid": metrics["centroid"],
+            "predicted_iou": 1.0,
+            "stability_score": 1.0,
+            "color_rgb": c_rgb,
+            "instance_color_rgb": c_rgb,
+            "color_hex": c_hex,
+            "instance_color_hex": c_hex,
+            "is_human_annotated": True,
+            "taxonomy": {
+                "genus": item.genus or "Coral",
+                "growth_form": item.growth_form or "-",
+                "confidence_pct": 100.0,
+                "primary_label": item.genus or "Coral",
+            },
+            "bleaching": {
+                "is_bleached": is_bleached,
+                "status": "Bleached" if is_bleached else "Healthy",
+                "confidence_pct": 100.0,
+                "bleached_prob": 1.0 if is_bleached else 0.0,
+            },
+        }
+        masks_info.append(mask_dict)
+
+    # Recalculate summary metrics
+    coral_covered_pixels = int(np.sum(union_mask))
+    coral_coverage_pct = round((coral_covered_pixels / max(total_pixels, 1)) * 100.0, 2)
+
+    summary_stats = {
+        "total_corals_detected": len(masks_info),
+        "coral_coverage_pct": coral_coverage_pct,
+        "coral_covered_pixels": coral_covered_pixels,
+        "total_image_pixels": total_pixels,
+        "image_resolution": f"{img_w}x{img_h}",
+        "mean_iou_confidence": 1.0 if masks_info else 0.0,
+        "mean_stability_score": 1.0 if masks_info else 0.0,
+    }
+
+    bleached_count = sum(1 for m in masks_info if m["bleaching"]["is_bleached"])
+    healthy_count = len(masks_info) - bleached_count
+    bleaching_prevalence_pct = round((bleached_count / max(len(masks_info), 1)) * 100.0, 1)
+
+    health_summary = {
+        "healthy_count": healthy_count,
+        "bleached_count": bleached_count,
+        "bleaching_prevalence_pct": bleaching_prevalence_pct,
+    }
+
+    # Lightweight table records
+    table_records = []
+    for m in masks_info:
+        tax = m["taxonomy"]
+        bl = m["bleaching"]
+        table_records.append({
+            "id": m["id"],
+            "id_str": f"#{m['id']}",
+            "genus": tax.get("genus", "Coral"),
+            "growth_form": tax.get("growth_form", "-"),
+            "taxon_conf": 100.0,
+            "condition": "Bleached" if bl["is_bleached"] else "Healthy",
+            "condition_conf": 100.0,
+            "area_pct": m["area_pct"],
+            "area_px": m["area_px"],
+            "predicted_iou": 1.0,
+            "color_hex": m["color_hex"],
+            "centroid": list(m["centroid"]) if m.get("centroid") else None,
+            "bbox": list(m["bbox"]) if m.get("bbox") else None,
+            "is_human_annotated": True,
+        })
+
+    # Update in-memory inference caches
+    cache_keys = [k for k in _ENRICH_CACHE.keys() if k.startswith(f"{img_name}_")]
+    if not cache_keys:
+        cache_keys = [f"{img_name}_16_0.5_0.5_100"]
+    for k in cache_keys:
+        _ENRICH_CACHE[k] = (masks_info, {}, health_summary)
+
+    base_cache_keys = [k for k in _BASE_SEG_CACHE.keys() if k.startswith(f"{img_name}_")]
+    if not base_cache_keys:
+        base_cache_keys = [f"{img_name}_16_0.5_0.5"]
+    for bk in base_cache_keys:
+        _BASE_SEG_CACHE[bk] = masks_info
+
+    # Pre-render fresh overlay
+    overlay_res = create_segmentation_overlay(
+        image=pil_img,
+        masks_info=masks_info,
+        alpha=0.45,
+        draw_contours=True,
+        draw_labels=True,
+        draw_boxes=False,
+        color_mode="instance",
+    )
+    overlay_pil = overlay_res if isinstance(overlay_res, Image.Image) else Image.fromarray(overlay_res)
+    buf = io.BytesIO()
+    overlay_pil.save(buf, format="PNG")
+    buf.seek(0)
+    base64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
+    overlay_data_url = f"data:image/png;base64,{base64_str}"
+    _OVERLAY_CACHE[img_name] = overlay_data_url
+
+    # Update batch processor results if present
+    if hasattr(_BATCH_PROCESSOR, "_results") and img_name in _BATCH_PROCESSOR._results:
+        _BATCH_PROCESSOR._results[img_name].update({
+            "status": "completed",
+            "corals_count": len(masks_info),
+            "coverage_pct": coral_coverage_pct,
+            "bleaching_prevalence_pct": bleaching_prevalence_pct,
+            "summary": summary_stats,
+            "segments": table_records,
+            "health_summary": health_summary,
+            "overlay_base64": overlay_data_url,
+        })
+
+    return {
+        "status": "success",
+        "image_name": img_name,
+        "summary": summary_stats,
+        "segments": table_records,
+        "health_summary": health_summary,
+        "overlay_base64": overlay_data_url,
     }
 
 

@@ -220,7 +220,79 @@ def test_endpoints():
         _IMAGE_STORE.pop(test_img_name, None)
         _ENRICH_CACHE.pop(f"{test_img_name}_16_0.5_0.5_100", None)
 
+    print("Testing manual annotation endpoints...")
+    # Register test image for manual annotation
+    manual_img_name = "manual_test_coral.png"
+    pil_test = Image.new("RGB", (200, 200), color=(10, 40, 60))
+    _IMAGE_STORE[manual_img_name] = pil_test
+
+    # 1. Test get polygons when empty
+    resp = client.get(f"/api/analysis/polygons/{manual_img_name}")
+    assert resp.status_code == 200, f"Get polygons failed: {resp.text}"
+    poly_data = resp.json()
+    assert poly_data["image_name"] == manual_img_name
+    assert poly_data["width"] == 200
+    assert poly_data["height"] == 200
+    print("  Polygons retrieval endpoint verified.")
+
+    # 2. Test SAM interactive point prompt segmentation
+    resp = client.post("/api/analysis/segment-prompt", json={
+        "image_name": manual_img_name,
+        "points": [{"x": 100.0, "y": 100.0, "label": 1}],
+    })
+    assert resp.status_code == 200, f"SAM prompt segment failed: {resp.text}"
+    prompt_res = resp.json()
+    assert prompt_res["status"] == "success"
+    assert "polygon" in prompt_res
+    assert "area_px" in prompt_res
+    print(f"  Interactive SAM prompt segmentation verified: area_px={prompt_res['area_px']}, vertices={len(prompt_res['polygon'])}")
+
+    # 3. Test Save Annotations with Ground Truth
+    sample_polygon = [[40.0, 40.0], [120.0, 40.0], [120.0, 120.0], [40.0, 120.0], [40.0, 40.0]]
+    resp = client.post("/api/analysis/save-annotations", json={
+        "image_name": manual_img_name,
+        "segments": [
+            {
+                "id": 1,
+                "genus": "Acropora",
+                "growth_form": "Branching",
+                "condition": "Healthy",
+                "color_hex": "#da70d6",
+                "polygon": sample_polygon,
+            },
+            {
+                "id": 2,
+                "genus": "Porites",
+                "growth_form": "Massive",
+                "condition": "Bleached",
+                "color_hex": "#ffcc00",
+                "polygon": [[130.0, 130.0], [170.0, 130.0], [170.0, 170.0], [130.0, 170.0], [130.0, 130.0]],
+            },
+        ],
+    })
+    assert resp.status_code == 200, f"Save annotations failed: {resp.text}"
+    save_res = resp.json()
+    assert save_res["status"] == "success"
+    assert len(save_res["segments"]) == 2
+    # Verify 100% human ground truth confidence
+    for s in save_res["segments"]:
+        assert s["taxon_conf"] == 100.0, f"Expected 100% taxon confidence, got {s['taxon_conf']}"
+        assert s["condition_conf"] == 100.0, f"Expected 100% condition confidence, got {s['condition_conf']}"
+        assert s["predicted_iou"] == 1.0, f"Expected 1.0 IoU, got {s['predicted_iou']}"
+        assert s["is_human_annotated"] is True
+    # Verify area recalculated
+    assert save_res["summary"]["coral_coverage_pct"] > 0
+    assert save_res["summary"]["mean_iou_confidence"] == 1.0
+    assert save_res["health_summary"]["healthy_count"] == 1
+    assert save_res["health_summary"]["bleached_count"] == 1
+    assert save_res["overlay_base64"].startswith("data:image/png;base64,")
+    print(f"  Save annotations verified: 100% ground truth confidences, coverage={save_res['summary']['coral_coverage_pct']}%, overlay rendered.")
+
+    # Cleanup
+    _IMAGE_STORE.pop(manual_img_name, None)
+
     print("\nAll API endpoint unit tests PASSED successfully!")
+
 
 
 if __name__ == "__main__":

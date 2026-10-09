@@ -71,7 +71,36 @@ export interface CoralSegment {
   color_hex: string;
   centroid?: [number, number];
   bbox?: [number, number, number, number];
+  polygon?: [number, number][];
+  is_human_annotated?: boolean;
 }
+
+export interface PromptPoint {
+  x: number;
+  y: number;
+  label: number; // 1: foreground, 0: background
+}
+
+export interface PromptSegmentResponse {
+  status: string;
+  image_name: string;
+  polygon: [number, number][];
+  area_px: number;
+  area_pct: number;
+  bbox: [number, number, number, number];
+  centroid: [number, number];
+  predicted_iou: number;
+}
+
+export interface SaveAnnotationsResponse {
+  status: string;
+  image_name: string;
+  summary: SummaryStats;
+  segments: CoralSegment[];
+  health_summary: HealthSummary;
+  overlay_base64: string;
+}
+
 
 export interface SummaryStats {
   total_corals_detected: number;

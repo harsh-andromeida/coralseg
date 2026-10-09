@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Maximize2, Image as ImageIcon, Sparkles } from "lucide-react";
+import { Maximize2, Image as ImageIcon, Sparkles, Edit3 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ interface ImageViewerProps {
   analysisStage?: AnalysisStage;
   segments?: CoralSegment[];
   imageResolution?: string;
+  onOpenEditor?: () => void;
 }
 
 export const ImageViewer: React.FC<ImageViewerProps> = ({
@@ -28,6 +29,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
   analysisStage = "idle",
   segments = [],
   imageResolution = "0x0",
+  onOpenEditor,
 }) => {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxMode, setLightboxMode] = useState<"primary" | "secondary">("secondary");
@@ -64,17 +66,35 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
           <ImageIcon className="h-4 w-4 text-primary" />
           <span>{title}</span>
         </CardTitle>
-        <Badge
-          variant="outline"
-          className={cn(
-            "text-[10px] font-mono font-semibold uppercase px-2.5 py-0.5",
-            isOverlay
-              ? "bg-primary/10 text-primary border-primary/25"
-              : "bg-muted/70 text-muted-foreground border-border/80"
+        <div className="flex items-center gap-2">
+          {isOverlay && onOpenEditor && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenEditor();
+              }}
+              className="h-6 px-2 text-[10px] font-semibold gap-1 bg-primary/10 text-primary border-primary/25 hover:bg-primary/20 cursor-pointer"
+              title="Edit masks, adjust vertices, and annotate new corals"
+            >
+              <Edit3 className="h-3 w-3" />
+              <span>Edit Masks</span>
+            </Button>
           )}
-        >
-          {badge}
-        </Badge>
+          <Badge
+            variant="outline"
+            className={cn(
+              "text-[10px] font-mono font-semibold uppercase px-2.5 py-0.5",
+              isOverlay
+                ? "bg-primary/10 text-primary border-primary/25"
+                : "bg-muted/70 text-muted-foreground border-border/80"
+            )}
+          >
+            {badge}
+          </Badge>
+        </div>
       </CardHeader>
       <CardContent
         className={cn(
@@ -184,6 +204,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
         initialMode={lightboxMode}
         segments={segments}
         imageResolution={imageResolution}
+        onOpenEditor={onOpenEditor}
       />
     </div>
   );

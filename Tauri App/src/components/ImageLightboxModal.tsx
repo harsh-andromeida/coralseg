@@ -10,6 +10,7 @@ import {
   Sparkles,
   CheckCircle2,
   AlertTriangle,
+  Edit3,
 } from "lucide-react";
 import { CoralSegment } from "../types";
 
@@ -25,6 +26,7 @@ interface ImageLightboxModalProps {
   initialMode?: "primary" | "secondary";
   segments?: CoralSegment[];
   imageResolution?: string;
+  onOpenEditor?: () => void;
 }
 
 export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
@@ -39,6 +41,7 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
   initialMode = "secondary",
   segments = [],
   imageResolution = "0x0",
+  onOpenEditor,
 }) => {
   const [activeMode, setActiveMode] = useState<"primary" | "secondary">(
     secondarySrc && initialMode === "secondary" ? "secondary" : "primary"
@@ -450,8 +453,22 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
             </div>
           )}
 
-          {/* Close Button */}
-          <div className="lightbox-header-right">
+          {/* Header Right Actions */}
+          <div className="lightbox-header-right flex items-center gap-2">
+            {onOpenEditor && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-600 hover:bg-teal-500 text-white shadow-xs cursor-pointer transition-colors"
+                onClick={() => {
+                  onClose();
+                  onOpenEditor();
+                }}
+                title="Open Manual Segmentation & Mask Editor"
+              >
+                <Edit3 size={13} />
+                <span>Edit Masks</span>
+              </button>
+            )}
             <button
               type="button"
               className="lightbox-close-btn"

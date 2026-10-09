@@ -9,6 +9,10 @@ import {
   DefaultExportPathResponse,
   ExportToFolderRequest,
   ExportFolderResponse,
+  CoralSegment,
+  PromptPoint,
+  PromptSegmentResponse,
+  SaveAnnotationsResponse,
 } from "../types";
 
 const API_BASE = "http://127.0.0.1:8000/api";
@@ -397,4 +401,55 @@ export async function downloadBatchCocoZip(imageName?: string): Promise<{ succes
   }, 300);
   return { success: true, path: defaultName };
 }
+
+export async function getSegmentPolygons(
+  imageName: string
+): Promise<{ image_name: string; width: number; height: number; segments: CoralSegment[] }> {
+  const res = await fetch(`${API_BASE}/analysis/polygons/${encodeURIComponent(imageName)}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to load segment polygons");
+  }
+  return res.json();
+}
+
+export async function promptSegment(
+  imageName: string,
+  points: PromptPoint[]
+): Promise<PromptSegmentResponse> {
+  const res = await fetch(`${API_BASE}/analysis/segment-prompt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_name: imageName, points }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Interactive segmentation failed");
+  }
+  return res.json();
+}
+
+export async function saveAnnotations(
+  imageName: string,
+  segments: {
+    id: number;
+    genus: string;
+    growth_form: string;
+    condition: string;
+    color_hex?: string;
+    polygon: [number, number][];
+  }[]
+): Promise<SaveAnnotationsResponse> {
+  const res = await fetch(`${API_BASE}/analysis/save-annotations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image_name: imageName, segments }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to save annotations");
+  }
+  return res.json();
+}
+
 

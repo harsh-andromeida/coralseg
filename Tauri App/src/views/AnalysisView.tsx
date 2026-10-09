@@ -17,6 +17,7 @@ import { MetricCards } from "../components/MetricCards";
 import { SegmentsTable } from "../components/SegmentsTable";
 import { ExportPanel } from "../components/ExportPanel";
 import { ExportDatasetModal } from "../components/ExportDatasetModal";
+import { SegmentationEditorModal } from "../components/SegmentationEditorModal";
 import { Button } from "@/components/ui/button";
 import {
   LoadedImage,
@@ -99,6 +100,21 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
   const [isExportDatasetModalOpen, setIsExportDatasetModalOpen] = useState<boolean>(false);
   const [isCancellingBatch, setIsCancellingBatch] = useState<boolean>(false);
   const [batchFeedback, setBatchFeedback] = useState<string | null>(null);
+
+  // Manual Segmentation & Annotation Studio Modal State
+  const [isEditorOpen, setIsEditorOpen] = useState<boolean>(false);
+
+  const handleEditorSaveSuccess = (data: {
+    summary: SummaryStats;
+    segments: CoralSegment[];
+    health_summary: HealthSummary;
+    overlay_base64: string;
+  }) => {
+    setStats(data.summary);
+    setSegments(data.segments);
+    setHealthSummary(data.health_summary);
+    setOverlaySrc(data.overlay_base64);
+  };
 
   const currentImage = images[currentIndex] || images[0];
 
@@ -559,6 +575,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
               analysisStage={analysisStage}
               segments={segments}
               imageResolution={stats.image_resolution}
+              onOpenEditor={() => setIsEditorOpen(true)}
             />
 
             {/* 4 KPI Summary Cards with Consistent Height & Typography */}
@@ -571,6 +588,11 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
               selectedSegmentId={selectedMaskId}
               onSelectSegment={(id) => setSelectedMaskId(id)}
               isLoading={isLoading}
+              onOpenEditor={() => setIsEditorOpen(true)}
+              onEditSegment={(id) => {
+                setSelectedMaskId(id);
+                setIsEditorOpen(true);
+              }}
             />
 
             {/* Export & Data Inspector */}
@@ -595,6 +617,20 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
         open={isExportDatasetModalOpen}
         onOpenChange={setIsExportDatasetModalOpen}
         imageName={currentImage?.name}
+      />
+
+      <SegmentationEditorModal
+        isOpen={isEditorOpen}
+        onClose={() => setIsEditorOpen(false)}
+        imageName={currentImage.name}
+        imageSrc={currentImage.dataUrl}
+        imageResolution={stats.image_resolution}
+        initialSegments={segments}
+        onSaveSuccess={handleEditorSaveSuccess}
+        onNavigatePrev={() => setCurrentIndex((prev) => Math.max(prev - 1, 0))}
+        onNavigateNext={() => setCurrentIndex((prev) => Math.min(prev + 1, images.length - 1))}
+        hasPrev={currentIndex > 0}
+        hasNext={currentIndex < images.length - 1}
       />
     </div>
   );
