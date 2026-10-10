@@ -132,6 +132,14 @@ interface EditableSegment {
   is_human_annotated: boolean;
 }
 
+// Deep clone segments to ensure immutable history snapshots
+const cloneSegments = (items: EditableSegment[]): EditableSegment[] => {
+  return items.map((s) => ({
+    ...s,
+    polygon: s.polygon.map(([x, y]) => [x, y] as [number, number]),
+  }));
+};
+
 export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = ({
   isOpen,
   onClose,
@@ -161,6 +169,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
   // SAM Smart Click state
   const [samPoints, setSamPoints] = useState<PromptPoint[]>([]);
+  const [samPointType, setSamPointType] = useState<1 | 0>(1); // 1 = Foreground (+), 0 = Background (-)
   const [isSamLoading, setIsSamLoading] = useState<boolean>(false);
   const [samPendingPolygon, setSamPendingPolygon] = useState<[number, number][] | null>(null);
 
@@ -170,14 +179,20 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
   // Save / Dirty status
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "unsaved" | "saving">("saved");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
-  // History stack for Undo / Redo
-  const [history, setHistory] = useState<EditableSegment[][]>([]);
-  const [historyIdx, setHistoryIdx] = useState<number>(-1);
+  // History stack for Undo / Redo (Ref-backed for zero stale closure bugs)
+  const historyRef = useRef<EditableSegment[][]>([]);
+  const historyIdxRef = useRef<number>(-1);
+  const segmentsRef = useRef<EditableSegment[]>([]);
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Form inputs for new or active coral
+  const [historyIdx, setHistoryIdx] = useState<number>(-1);
+  const [historyLength, setHistoryLength] = useState<number>(0);
+
+  // Form inputs for active or new coral
   const [formGenus, setFormGenus] = useState<string>("Acropora");
   const [formGrowthForm, setFormGrowthForm] = useState<string>("Branching");
   const [formCondition, setFormCondition] = useState<"Healthy" | "Bleached">("Healthy");
@@ -189,6 +204,11 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
   const stageRef = useRef<Konva.Stage | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep segmentsRef in sync
+  useEffect(() => {
+    segmentsRef.current = segments;
+  }, [segments]);
 
   // Load HTML image
   useEffect(() => {
@@ -202,6 +222,170 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     };
   }, [isOpen, imageSrc]);
 
+  // Calculate polygon area (Shoelace formula)
+  const calculatePolygonArea = useCallback(
+    (poly: [number, number][]): { area_px: number; area_pct: number } => {
+      if (!poly || poly.length < 3) return { area_px: 0, area_pct: 0 };
+      let sum = 0;
+      for (let i = 0; i < poly.length; i++) {
+        const j = (i + 1) % poly.length;
+        sum += poly[i][0] * poly[j][1] - poly[j][0] * poly[i][1];
+      }
+      const area_px = Math.round(Math.abs(sum) / 2);
+      const totalPixels = Math.max(imgDimensions.w * imgDimensions.h, 1);
+      const area_pct = Number(((area_px / totalPixels) * 100).toFixed(2));
+      return { area_px, area_pct };
+    },
+    [imgDimensions.w, imgDimensions.h]
+  );
+
+  // Push new state to history stack
+  const pushHistory = useCallback((newSegments: EditableSegment[]) => {
+    const cloned = cloneSegments(newSegments);
+    const curIdx = historyIdxRef.current;
+    const nextHistory = historyRef.current.slice(0, curIdx + 1);
+    nextHistory.push(cloned);
+
+    // Limit history stack size to 50
+    if (nextHistory.length > 50) {
+      nextHistory.shift();
+    }
+
+    historyRef.current = nextHistory;
+    const nextIdx = nextHistory.length - 1;
+    historyIdxRef.current = nextIdx;
+    setHistoryIdx(nextIdx);
+    setHistoryLength(nextHistory.length);
+    setHasUnsavedChanges(true);
+    setSaveStatus("unsaved");
+  }, []);
+
+  // Debounced Autosave (750ms after user stops making edits)
+  const triggerDebouncedAutoSave = useCallback(
+    (itemsToSave: EditableSegment[]) => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+      setHasUnsavedChanges(true);
+      setSaveStatus("unsaved");
+
+      autoSaveTimeoutRef.current = setTimeout(async () => {
+        try {
+          setSaveStatus("saving");
+          const payload = itemsToSave.map((s) => ({
+            id: s.id,
+            genus: s.genus,
+            growth_form: s.growth_form,
+            condition: s.condition,
+            color_hex: s.color_hex,
+            polygon: s.polygon,
+          }));
+          const res = await saveAnnotations(imageName, payload);
+          setHasUnsavedChanges(false);
+          setSaveStatus("saved");
+          setLastSavedTime(new Date().toLocaleTimeString());
+          if (onSaveSuccess && res) {
+            onSaveSuccess({
+              summary: res.summary,
+              segments: res.segments,
+              health_summary: res.health_summary,
+              overlay_base64: res.overlay_base64,
+            });
+          }
+        } catch (e) {
+          console.warn("Autosave warning:", e);
+          setSaveStatus("unsaved");
+        }
+      }, 750);
+    },
+    [imageName, onSaveSuccess]
+  );
+
+  // Explicit Save Annotations Button (Ctrl + S / Cmd + S)
+  const handleExplicitSave = useCallback(async () => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+    setIsSaving(true);
+    setSaveStatus("saving");
+    try {
+      const current = segmentsRef.current;
+      const payload = current.map((s) => ({
+        id: s.id,
+        genus: s.genus,
+        growth_form: s.growth_form,
+        condition: s.condition,
+        color_hex: s.color_hex,
+        polygon: s.polygon,
+      }));
+      const res = await saveAnnotations(imageName, payload);
+      setHasUnsavedChanges(false);
+      setSaveStatus("saved");
+      setLastSavedTime(new Date().toLocaleTimeString());
+      if (onSaveSuccess && res) {
+        onSaveSuccess({
+          summary: res.summary,
+          segments: res.segments,
+          health_summary: res.health_summary,
+          overlay_base64: res.overlay_base64,
+        });
+      }
+    } catch (err: any) {
+      setSaveStatus("unsaved");
+      alert(`Save failed: ${err?.message || err}`);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [imageName, onSaveSuccess]);
+
+  // Undo (Ctrl+Z or Cmd+Z)
+  const handleUndo = useCallback(() => {
+    // If in SAM mode with un-run points, undo the last placed prompt point
+    if (toolMode === "sam" && samPoints.length > 0 && !samPendingPolygon) {
+      setSamPoints((prev) => prev.slice(0, -1));
+      return;
+    }
+    if (historyIdxRef.current > 0) {
+      const prevIdx = historyIdxRef.current - 1;
+      historyIdxRef.current = prevIdx;
+      setHistoryIdx(prevIdx);
+      const restored = cloneSegments(historyRef.current[prevIdx]);
+      setSegments(restored);
+      segmentsRef.current = restored;
+      triggerDebouncedAutoSave(restored);
+    }
+  }, [toolMode, samPoints.length, samPendingPolygon, triggerDebouncedAutoSave]);
+
+  // Redo (Ctrl+Y, Cmd+Shift+Z, Ctrl+Shift+Z)
+  const handleRedo = useCallback(() => {
+    if (historyIdxRef.current < historyRef.current.length - 1) {
+      const nextIdx = historyIdxRef.current + 1;
+      historyIdxRef.current = nextIdx;
+      setHistoryIdx(nextIdx);
+      const restored = cloneSegments(historyRef.current[nextIdx]);
+      setSegments(restored);
+      segmentsRef.current = restored;
+      triggerDebouncedAutoSave(restored);
+    }
+  }, [triggerDebouncedAutoSave]);
+
+  // Fit image to canvas container
+  const handleFitToScreen = useCallback(() => {
+    if (!containerRef.current) return;
+    const { clientWidth, clientHeight } = containerRef.current;
+    if (clientWidth === 0 || clientHeight === 0) return;
+
+    const scaleX = (clientWidth - 48) / imgDimensions.w;
+    const scaleY = (clientHeight - 48) / imgDimensions.h;
+    const fitScale = Math.min(scaleX, scaleY, 1.0);
+
+    const posX = (clientWidth - imgDimensions.w * fitScale) / 2;
+    const posY = (clientHeight - imgDimensions.h * fitScale) / 2;
+
+    setStageScale(Number(fitScale.toFixed(3)));
+    setStagePos({ x: Math.round(posX), y: Math.round(posY) });
+  }, [imgDimensions]);
+
   // Load polygons from backend or fallback to initialSegments
   const loadPolygons = useCallback(async () => {
     try {
@@ -214,18 +398,23 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
           growth_form: s.growth_form || "-",
           condition: s.condition === "Bleached" ? "Bleached" : "Healthy",
           color_hex: s.color_hex || DISTINCT_COLORS[idx % DISTINCT_COLORS.length],
-          polygon: (s.polygon && s.polygon.length >= 3) ? (s.polygon as [number, number][]) : [],
+          polygon: s.polygon && s.polygon.length >= 3 ? (s.polygon as [number, number][]) : [],
           area_px: s.area_px || 0,
           area_pct: s.area_pct || 0,
           visible: true,
           is_human_annotated: s.is_human_annotated || false,
         }));
-        setSegments(loaded);
-        setHistory([loaded]);
+        const cloned = cloneSegments(loaded);
+        setSegments(cloned);
+        segmentsRef.current = cloned;
+        historyRef.current = [cloneSegments(cloned)];
+        historyIdxRef.current = 0;
         setHistoryIdx(0);
+        setHistoryLength(1);
         setHasUnsavedChanges(false);
-        if (loaded.length > 0) {
-          setSelectedId(loaded[0].id);
+        setSaveStatus("saved");
+        if (cloned.length > 0) {
+          setSelectedId(cloned[0].id);
         }
         return;
       }
@@ -247,18 +436,27 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         visible: true,
         is_human_annotated: s.is_human_annotated || false,
       }));
-      setSegments(fallback);
-      setHistory([fallback]);
+      const cloned = cloneSegments(fallback);
+      setSegments(cloned);
+      segmentsRef.current = cloned;
+      historyRef.current = [cloneSegments(cloned)];
+      historyIdxRef.current = 0;
       setHistoryIdx(0);
+      setHistoryLength(1);
       setHasUnsavedChanges(false);
-      if (fallback.length > 0) {
-        setSelectedId(fallback[0].id);
+      setSaveStatus("saved");
+      if (cloned.length > 0) {
+        setSelectedId(cloned[0].id);
       }
     } else {
       setSegments([]);
-      setHistory([[]]);
+      segmentsRef.current = [];
+      historyRef.current = [[]];
+      historyIdxRef.current = 0;
       setHistoryIdx(0);
+      setHistoryLength(1);
       setHasUnsavedChanges(false);
+      setSaveStatus("saved");
       setSelectedId(null);
     }
   }, [imageName, initialSegments]);
@@ -272,55 +470,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       setDrawPoints([]);
       handleFitToScreen();
     }
-  }, [isOpen, imageName, loadPolygons]);
-
-  // Push new state to history stack
-  const pushHistory = useCallback(
-    (newSegments: EditableSegment[]) => {
-      setHistory((prev) => {
-        const next = prev.slice(0, historyIdx + 1);
-        return [...next, newSegments];
-      });
-      setHistoryIdx((prev) => prev + 1);
-      setHasUnsavedChanges(true);
-    },
-    [historyIdx]
-  );
-
-  const handleUndo = useCallback(() => {
-    if (historyIdx > 0) {
-      const prevIdx = historyIdx - 1;
-      setHistoryIdx(prevIdx);
-      setSegments(history[prevIdx]);
-      setHasUnsavedChanges(true);
-    }
-  }, [history, historyIdx]);
-
-  const handleRedo = useCallback(() => {
-    if (historyIdx < history.length - 1) {
-      const nextIdx = historyIdx + 1;
-      setHistoryIdx(nextIdx);
-      setSegments(history[nextIdx]);
-      setHasUnsavedChanges(true);
-    }
-  }, [history, historyIdx]);
-
-  // Recalculate area and area % for a polygon in pure JS (Shoelace formula)
-  const calculatePolygonArea = useCallback(
-    (poly: [number, number][]): { area_px: number; area_pct: number } => {
-      if (!poly || poly.length < 3) return { area_px: 0, area_pct: 0 };
-      let sum = 0;
-      for (let i = 0; i < poly.length; i++) {
-        const j = (i + 1) % poly.length;
-        sum += poly[i][0] * poly[j][1] - poly[j][0] * poly[i][1];
-      }
-      const area_px = Math.round(Math.abs(sum) / 2);
-      const totalPixels = Math.max(imgDimensions.w * imgDimensions.h, 1);
-      const area_pct = Number(((area_px / totalPixels) * 100).toFixed(2));
-      return { area_px, area_pct };
-    },
-    [imgDimensions.w, imgDimensions.h]
-  );
+  }, [isOpen, imageName, loadPolygons, handleFitToScreen]);
 
   // Synchronize form inputs when selected coral changes
   useEffect(() => {
@@ -333,23 +483,6 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       }
     }
   }, [selectedId, segments]);
-
-  // Fit image to canvas container
-  const handleFitToScreen = useCallback(() => {
-    if (!containerRef.current) return;
-    const { clientWidth, clientHeight } = containerRef.current;
-    if (clientWidth === 0 || clientHeight === 0) return;
-
-    const scaleX = (clientWidth - 48) / imgDimensions.w;
-    const scaleY = (clientHeight - 48) / imgDimensions.h;
-    const fitScale = Math.min(scaleX, scaleY, 1.0);
-
-    const posX = (clientWidth - imgDimensions.w * fitScale) / 2;
-    const posY = (clientHeight - imgDimensions.h * fitScale) / 2;
-
-    setStageScale(Number(fitScale.toFixed(3)));
-    setStagePos({ x: Math.round(posX), y: Math.round(posY) });
-  }, [imgDimensions]);
 
   // Mouse wheel zoom anchored to cursor
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
@@ -391,7 +524,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   }, [imgDimensions]);
 
   // Canvas Stage Click Handling
-  const handleStageClick = async (e: Konva.KonvaEventObject<MouseEvent>) => {
+  const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
     // If clicking on background with select tool, deselect
     if (toolMode === "select") {
       if (e.target === e.target.getStage() || e.target.name() === "bg-image") {
@@ -404,39 +537,27 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     if (!pos) return;
     const [clickX, clickY] = pos;
 
-    // SAM Smart Click tool (W)
+    // SAM Smart Click Tool (W): Place point without immediately calling model
     if (toolMode === "sam") {
-      const isNegative = e.evt.button === 2 || e.evt.altKey || e.evt.shiftKey;
+      const isNegativeModifier = e.evt.button === 2 || e.evt.altKey || e.evt.shiftKey;
+      const pointLabel = isNegativeModifier ? 0 : samPointType;
+
       const newPrompt: PromptPoint = {
         x: clickX,
         y: clickY,
-        label: isNegative ? 0 : 1,
+        label: pointLabel,
       };
-      const updatedPrompts = [...samPoints, newPrompt];
-      setSamPoints(updatedPrompts);
-      setIsSamLoading(true);
 
-      try {
-        const res = await promptSegment(imageName, updatedPrompts);
-        if (res && res.polygon && res.polygon.length >= 3) {
-          setSamPendingPolygon(res.polygon);
-        }
-      } catch (err: any) {
-        console.error("SAM Prompt segmentation error:", err);
-      } finally {
-        setIsSamLoading(false);
-      }
+      setSamPoints((prev) => [...prev, newPrompt]);
       return;
     }
 
-    // Manual Polygon Draw tool (P)
+    // Manual Polygon Draw Tool (P)
     if (toolMode === "polygon") {
-      // Check if clicking near start point to close
       if (drawPoints.length >= 3) {
         const [startX, startY] = drawPoints[0];
         const dist = Math.hypot(clickX - startX, clickY - startY);
         if (dist < 18 / stageScale) {
-          // Finish polygon
           finishDrawingPolygon();
           return;
         }
@@ -452,6 +573,25 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       setMouseCanvasPos(pos);
     }
   };
+
+  // Run SAM Model on currently placed points
+  const handleRunSam = useCallback(async () => {
+    if (samPoints.length === 0 || isSamLoading) return;
+    setIsSamLoading(true);
+    try {
+      const res = await promptSegment(imageName, samPoints);
+      if (res && res.polygon && res.polygon.length >= 3) {
+        setSamPendingPolygon(res.polygon);
+      } else {
+        alert("SAM was unable to trace a confident coral boundary. Try placing additional positive points inside the coral colony.");
+      }
+    } catch (err: any) {
+      console.error("SAM Prompt segmentation error:", err);
+      alert(`SAM segmentation error: ${err?.message || err}`);
+    } finally {
+      setIsSamLoading(false);
+    }
+  }, [imageName, samPoints, isSamLoading]);
 
   // Commit SAM mask as coral instance
   const handleCommitSamMask = () => {
@@ -478,6 +618,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
     const nextList = [...segments, newSegment];
     setSegments(nextList);
+    segmentsRef.current = nextList;
     pushHistory(nextList);
     setSelectedId(nextId);
 
@@ -486,8 +627,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     setSamPendingPolygon(null);
     setToolMode("select");
 
-    // Auto-save on polygon completion (Option A)
-    triggerAutoSave(nextList);
+    // Autosave immediately
+    triggerDebouncedAutoSave(nextList);
   };
 
   // Finish manual polygon
@@ -521,6 +662,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
     const nextList = [...segments, newSegment];
     setSegments(nextList);
+    segmentsRef.current = nextList;
     pushHistory(nextList);
     setSelectedId(nextId);
 
@@ -528,8 +670,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     setMouseCanvasPos(null);
     setToolMode("select");
 
-    // Auto-save on polygon completion (Option A)
-    triggerAutoSave(nextList);
+    triggerDebouncedAutoSave(nextList);
   };
 
   // Vertex Drag handler for Selected Polygon
@@ -563,14 +704,15 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     });
 
     setSegments(updated);
+    segmentsRef.current = updated;
   };
 
   const handleVertexDragEnd = () => {
-    pushHistory(segments);
-    triggerAutoSave(segments);
+    pushHistory(segmentsRef.current);
+    triggerDebouncedAutoSave(segmentsRef.current);
   };
 
-  // Add vertex on line segment click
+  // Add vertex on line segment double click
   const handleAddVertexOnEdge = (
     segId: number,
     insertIdx: number,
@@ -590,8 +732,9 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       };
     });
     setSegments(updated);
+    segmentsRef.current = updated;
     pushHistory(updated);
-    triggerAutoSave(updated);
+    triggerDebouncedAutoSave(updated);
   };
 
   // Delete vertex (double-click vertex anchor)
@@ -603,7 +746,6 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       if (s.id !== segId) return s;
       const poly = [...s.polygon];
       poly.splice(vertexIdx, 1);
-      // Ensure closed
       if (poly[0] !== poly[poly.length - 1]) {
         poly[poly.length - 1] = poly[0];
       }
@@ -617,8 +759,9 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       };
     });
     setSegments(updated);
+    segmentsRef.current = updated;
     pushHistory(updated);
-    triggerAutoSave(updated);
+    triggerDebouncedAutoSave(updated);
   };
 
   // Delete whole selected coral mask
@@ -626,9 +769,10 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     if (selectedId === null) return;
     const nextList = segments.filter((s) => s.id !== selectedId);
     setSegments(nextList);
+    segmentsRef.current = nextList;
     pushHistory(nextList);
     setSelectedId(nextList.length > 0 ? nextList[0].id : null);
-    triggerAutoSave(nextList);
+    triggerDebouncedAutoSave(nextList);
   };
 
   // Update genus, growth form, condition of selected coral
@@ -643,8 +787,9 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       };
     });
     setSegments(updated);
+    segmentsRef.current = updated;
     pushHistory(updated);
-    triggerAutoSave(updated);
+    triggerDebouncedAutoSave(updated);
   };
 
   // Toggle coral visibility
@@ -654,78 +799,82 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     );
   };
 
-  // Auto-save helper (Option A)
-  const triggerAutoSave = useCallback(
-    async (itemsToSave: EditableSegment[]) => {
-      try {
-        const payload = itemsToSave.map((s) => ({
-          id: s.id,
-          genus: s.genus,
-          growth_form: s.growth_form,
-          condition: s.condition,
-          color_hex: s.color_hex,
-          polygon: s.polygon,
-        }));
-        const res = await saveAnnotations(imageName, payload);
-        setHasUnsavedChanges(false);
-        setLastSavedTime(new Date().toLocaleTimeString());
-        if (onSaveSuccess && res) {
-          onSaveSuccess({
-            summary: res.summary,
-            segments: res.segments,
-            health_summary: res.health_summary,
-            overlay_base64: res.overlay_base64,
-          });
-        }
-      } catch (e) {
-        console.warn("Auto-save warning:", e);
-      }
-    },
-    [imageName, onSaveSuccess]
-  );
-
-  // Explicit Save Annotations Button (Ctrl + S)
-  const handleExplicitSave = async () => {
-    setIsSaving(true);
-    try {
-      const payload = segments.map((s) => ({
-        id: s.id,
-        genus: s.genus,
-        growth_form: s.growth_form,
-        condition: s.condition,
-        color_hex: s.color_hex,
-        polygon: s.polygon,
-      }));
-      const res = await saveAnnotations(imageName, payload);
-      setHasUnsavedChanges(false);
-      setLastSavedTime(new Date().toLocaleTimeString());
-      if (onSaveSuccess && res) {
-        onSaveSuccess({
-          summary: res.summary,
-          segments: res.segments,
-          health_summary: res.health_summary,
-          overlay_base64: res.overlay_base64,
-        });
-      }
-    } catch (err: any) {
-      alert(`Save failed: ${err?.message || err}`);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  // Keyboard Shortcuts (CVAT / Roboflow Standards)
+  // Comprehensive Keyboard Shortcuts (Undo, Redo, Save, SAM, Tools)
   useEffect(() => {
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) {
+      const activeEl = document.activeElement as HTMLElement;
+      const isInput =
+        activeEl && ["INPUT", "TEXTAREA", "SELECT"].includes(activeEl.tagName);
+
+      const key = e.key.toLowerCase();
+      const isModifier = e.ctrlKey || e.metaKey;
+
+      // Allow Ctrl+S / Cmd+S even inside input fields
+      if (isModifier && key === "s") {
+        e.preventDefault();
+        handleExplicitSave();
         return;
       }
 
-      const key = e.key.toLowerCase();
+      // If user is actively typing in a form input, avoid intercepting single-letter hotkeys
+      if (isInput) return;
 
-      // Tool switches
+      // 1. Undo: Ctrl+Z or Cmd+Z
+      if (isModifier && key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // 2. Redo: Cmd+Shift+Z, Ctrl+Shift+Z, or Ctrl+Y / Cmd+Y
+      if ((isModifier && e.shiftKey && key === "z") || (isModifier && key === "y")) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+
+      // 3. SAM specific flow shortcuts
+      if (toolMode === "sam") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (samPendingPolygon) {
+            handleCommitSamMask();
+          } else if (samPoints.length > 0) {
+            handleRunSam();
+          }
+          return;
+        }
+
+        if (e.key === " " && !samPendingPolygon && samPoints.length > 0) {
+          e.preventDefault();
+          handleRunSam();
+          return;
+        }
+
+        if ((key === "backspace" || key === "delete") && !samPendingPolygon && samPoints.length > 0) {
+          e.preventDefault();
+          setSamPoints((prev) => prev.slice(0, -1));
+          return;
+        }
+      }
+
+      // 4. Manual Polygon shortcuts
+      if (toolMode === "polygon" && drawPoints.length > 0) {
+        if (e.key === "Enter" && drawPoints.length >= 3) {
+          e.preventDefault();
+          finishDrawingPolygon();
+          return;
+        }
+        if (key === "backspace" || key === "delete") {
+          e.preventDefault();
+          setDrawPoints((prev) => prev.slice(0, -1));
+          return;
+        }
+      }
+
+      // 5. Tool switches
       if (key === "v") {
         setToolMode("select");
         setSamPoints([]);
@@ -739,30 +888,22 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         setSamPoints([]);
         setSamPendingPolygon(null);
       } else if (key === "delete" || key === "backspace") {
-        handleDeleteSelected();
+        if (selectedId !== null) {
+          handleDeleteSelected();
+        }
       } else if (e.key === "Escape") {
         if (toolMode === "polygon" && drawPoints.length > 0) {
           setDrawPoints([]);
           setMouseCanvasPos(null);
+        } else if (toolMode === "sam" && samPendingPolygon) {
+          setSamPendingPolygon(null);
         } else if (toolMode === "sam" && samPoints.length > 0) {
           setSamPoints([]);
-          setSamPendingPolygon(null);
+        } else if (selectedId !== null) {
+          setSelectedId(null);
         } else {
           onClose();
         }
-      } else if ((e.ctrlKey || e.metaKey) && key === "s") {
-        e.preventDefault();
-        handleExplicitSave();
-      } else if ((e.ctrlKey || e.metaKey) && key === "z") {
-        e.preventDefault();
-        if (e.shiftKey) {
-          handleRedo();
-        } else {
-          handleUndo();
-        }
-      } else if ((e.ctrlKey || e.metaKey) && key === "y") {
-        e.preventDefault();
-        handleRedo();
       } else if (key === "0" || key === "f") {
         handleFitToScreen();
       } else if (key === "[" && hasPrev && onNavigatePrev) {
@@ -777,13 +918,15 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   }, [
     isOpen,
     toolMode,
-    drawPoints,
     samPoints,
+    samPendingPolygon,
+    drawPoints,
+    selectedId,
     handleExplicitSave,
     handleUndo,
     handleRedo,
+    handleRunSam,
     handleFitToScreen,
-    handleDeleteSelected,
     hasPrev,
     hasNext,
     onNavigatePrev,
@@ -796,49 +939,54 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   const activeSegment = segments.find((s) => s.id === selectedId) || null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-slate-100 select-none overflow-hidden animate-fade-in font-sans">
-      {/* 1. Header Toolbar */}
-      <header className="h-13 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between gap-4 shrink-0 shadow-md">
-        {/* Left: Branding, Filename, Ground Truth Badge */}
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/60 backdrop-blur-xs select-none overflow-hidden animate-fade-in font-sans">
+      {/* 1. Header Toolbar (ReefVision Studio Brand Theme) */}
+      <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center justify-between gap-4 shrink-0 shadow-xs z-20">
+        {/* Left: Branding, Filename, Resolution, Save Status */}
         <div className="flex items-center gap-3 min-w-0">
           <Badge
             variant="outline"
-            className="text-[10px] font-mono font-bold uppercase tracking-wider bg-teal-500/10 text-teal-300 border-teal-500/30 px-2 py-0.5"
+            className="text-[10px] font-mono font-bold uppercase tracking-wider bg-teal-50 text-teal-800 border-teal-200 px-2 py-0.5 shrink-0"
           >
             Human Annotation
           </Badge>
 
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-semibold text-slate-100 truncate max-w-[200px] md:max-w-[320px]">
+            <span className="text-sm font-semibold text-slate-900 truncate max-w-[200px] md:max-w-[320px]">
               {imageName}
             </span>
-            <span className="text-[11px] font-mono text-slate-400">
+            <span className="text-[11px] font-mono text-slate-500 shrink-0">
               {imageResolution && imageResolution !== "0x0"
                 ? imageResolution
                 : `${imgDimensions.w}x${imgDimensions.h}`}
             </span>
           </div>
 
-          {/* Unsaved / Auto-Saved Status */}
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-slate-800/80 border-slate-700/80">
-            {hasUnsavedChanges ? (
-              <>
-                <span className="size-2 rounded-full bg-amber-400 animate-pulse" />
-                <span className="text-amber-300">Unsaved edits</span>
-              </>
+          {/* Live Autosave & Save Status Indicator */}
+          <div className="hidden sm:flex items-center shrink-0">
+            {saveStatus === "saving" ? (
+              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-blue-50 border-blue-200 text-blue-800">
+                <Loader2 size={12} className="animate-spin text-blue-600" />
+                <span>Autosaving...</span>
+              </div>
+            ) : hasUnsavedChanges || saveStatus === "unsaved" ? (
+              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-amber-50 border-amber-200 text-amber-800">
+                <span className="size-2 rounded-full bg-amber-500 animate-pulse" />
+                <span>Unsaved changes</span>
+              </div>
             ) : (
-              <>
-                <CheckCircle2 size={12} className="text-emerald-400" />
-                <span className="text-slate-300">
-                  {lastSavedTime ? `Saved at ${lastSavedTime}` : "Ground Truth Synchronized"}
+              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-emerald-50 border-emerald-200 text-emerald-800">
+                <CheckCircle2 size={12} className="text-emerald-600" />
+                <span>
+                  {lastSavedTime ? `Saved at ${lastSavedTime}` : "Saved"}
                 </span>
-              </>
+              </div>
             )}
           </div>
         </div>
 
         {/* Center: Tools Selector (CVAT / Roboflow Style) */}
-        <div className="flex items-center gap-1 bg-slate-800/90 p-1 rounded-lg border border-slate-700">
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
           <button
             type="button"
             onClick={() => {
@@ -849,8 +997,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
               toolMode === "select"
-                ? "bg-teal-600 text-white shadow-xs"
-                : "text-slate-300 hover:text-white hover:bg-slate-700/60"
+                ? "bg-[#0d7c85] text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900 hover:bg-white"
             }`}
             title="Select & Edit Vertices (Hotkey: V)"
           >
@@ -866,13 +1014,13 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
               toolMode === "sam"
-                ? "bg-teal-600 text-white shadow-xs"
-                : "text-slate-300 hover:text-white hover:bg-slate-700/60"
+                ? "bg-[#0d7c85] text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900 hover:bg-white"
             }`}
-            title="SAM Smart Click Foundation Model (Hotkey: W)"
+            title="SAM Smart Click Model (Hotkey: W)"
           >
             {isSamLoading ? (
-              <Loader2 size={14} className="animate-spin text-teal-300" />
+              <Loader2 size={14} className="animate-spin text-teal-200" />
             ) : (
               <Wand2 size={14} />
             )}
@@ -888,8 +1036,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
               toolMode === "polygon"
-                ? "bg-teal-600 text-white shadow-xs"
-                : "text-slate-300 hover:text-white hover:bg-slate-700/60"
+                ? "bg-[#0d7c85] text-white shadow-xs"
+                : "text-slate-600 hover:text-slate-900 hover:bg-white"
             }`}
             title="Manual Polygon Boundary Draw (Hotkey: P)"
           >
@@ -901,41 +1049,41 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         {/* Right: Undo/Redo, Navigation, Save & Close */}
         <div className="flex items-center gap-2">
           {/* Undo / Redo */}
-          <div className="hidden md:flex items-center gap-1 border-r border-slate-800 pr-2">
+          <div className="hidden md:flex items-center gap-1 border-r border-slate-200 pr-2">
             <Button
               type="button"
               variant="ghost"
               size="icon"
               disabled={historyIdx <= 0}
               onClick={handleUndo}
-              className="h-8 w-8 text-slate-300 hover:text-white hover:bg-slate-800"
-              title="Undo (Ctrl+Z)"
+              className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-40"
+              title="Undo (Ctrl+Z / Cmd+Z)"
             >
-              <Undo2 size={14} />
+              <Undo2 size={15} />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              disabled={historyIdx >= history.length - 1}
+              disabled={historyIdx >= historyLength - 1}
               onClick={handleRedo}
-              className="h-8 w-8 text-slate-300 hover:text-white hover:bg-slate-800"
-              title="Redo (Ctrl+Y)"
+              className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-40"
+              title="Redo (Ctrl+Y / Cmd+Shift+Z)"
             >
-              <Redo2 size={14} />
+              <Redo2 size={15} />
             </Button>
           </div>
 
-          {/* Quick Pagination for high-volume datasets */}
+          {/* Quick Pagination */}
           {(hasPrev || hasNext) && (
-            <div className="flex items-center gap-1 border-r border-slate-800 pr-2">
+            <div className="flex items-center gap-1 border-r border-slate-200 pr-2">
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 disabled={!hasPrev}
                 onClick={onNavigatePrev}
-                className="h-8 w-8 text-slate-300 hover:text-white hover:bg-slate-800"
+                className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-40"
                 title="Previous Image ([)"
               >
                 <ChevronLeft size={16} />
@@ -946,7 +1094,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                 size="icon"
                 disabled={!hasNext}
                 onClick={onNavigateNext}
-                className="h-8 w-8 text-slate-300 hover:text-white hover:bg-slate-800"
+                className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-40"
                 title="Next Image (])"
               >
                 <ChevronRight size={16} />
@@ -961,11 +1109,14 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             size="sm"
             disabled={isSaving}
             onClick={handleExplicitSave}
-            className="h-8 px-3 text-xs font-bold gap-1.5 bg-teal-600 hover:bg-teal-500 text-white shadow-xs cursor-pointer"
-            title="Save Ground Truth Annotations (Ctrl+S)"
+            className="h-8 px-3 text-xs font-semibold gap-1.5 bg-[#0d7c85] hover:bg-[#0b6b73] text-white shadow-xs cursor-pointer"
+            title="Save Annotations (Ctrl+S / Cmd+S)"
           >
             {isSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-            <span>Save (Ctrl+S)</span>
+            <span>Save</span>
+            <kbd className="hidden md:inline-block ml-0.5 text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono">
+              ⌘S
+            </kbd>
           </Button>
 
           {/* Close */}
@@ -974,7 +1125,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             variant="ghost"
             size="icon"
             onClick={onClose}
-            className="h-8 w-8 text-slate-400 hover:text-white hover:bg-slate-800 ml-1"
+            className="h-8 w-8 text-slate-500 hover:text-slate-900 hover:bg-slate-100 ml-1"
             title="Close Editor (Esc)"
           >
             <X size={18} />
@@ -982,12 +1133,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         </div>
       </header>
 
-      {/* 2. Main Studio Body: Canvas + Right Inspector */}
+      {/* 2. Main Studio Body: Viewport Canvas + Right Inspector */}
       <div className="flex flex-1 min-h-0 overflow-hidden relative">
-        {/* Canvas Area */}
+        {/* Canvas Stage Viewport (High-Contrast Neutral Slate #0f172a, matching Lightbox) */}
         <div
           ref={containerRef}
-          className="flex-1 min-w-0 h-full relative bg-slate-950 overflow-hidden select-none"
+          className="flex-1 min-w-0 h-full relative bg-[#0f172a] overflow-hidden select-none"
         >
           {htmlImage && (
             <Stage
@@ -1088,7 +1239,6 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                       {isSelected &&
                         toolMode === "select" &&
                         seg.polygon.map((pt, vIdx) => {
-                          // Skip duplicated closing point to avoid overlapping handle
                           if (vIdx === seg.polygon.length - 1) return null;
                           return (
                             <Circle
@@ -1113,7 +1263,6 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                                 e.cancelBubble = true;
                                 handleDeleteVertex(seg.id, vIdx);
                               }}
-                              style={{ cursor: "move" }}
                             />
                           );
                         })}
@@ -1121,23 +1270,39 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                   );
                 })}
 
-                {/* SAM Pending Prompt Points (Green positive, Red negative) */}
-                {samPoints.map((pt, idx) => (
-                  <Group key={idx} x={pt.x} y={pt.y}>
-                    <Circle
-                      radius={6 / stageScale}
-                      fill={pt.label === 1 ? "#10b981" : "#ef4444"}
-                      stroke="#ffffff"
-                      strokeWidth={2 / stageScale}
-                    />
-                    <Circle
-                      radius={12 / stageScale}
-                      stroke={pt.label === 1 ? "#10b981" : "#ef4444"}
-                      strokeWidth={1 / stageScale}
-                      dash={[3 / stageScale, 3 / stageScale]}
-                    />
-                  </Group>
-                ))}
+                {/* SAM Prompt Points Pins (Green + for Coral, Red - for Background) */}
+                {samPoints.map((pt, idx) => {
+                  const isPositive = pt.label === 1;
+                  const pinColor = isPositive ? "#10b981" : "#ef4444";
+                  return (
+                    <Group key={idx} x={pt.x} y={pt.y}>
+                      <Circle
+                        radius={10 / stageScale}
+                        fill={pinColor}
+                        opacity={0.25}
+                      />
+                      <Circle
+                        radius={7 / stageScale}
+                        fill={pinColor}
+                        stroke="#ffffff"
+                        strokeWidth={1.5 / stageScale}
+                        shadowColor="#000000"
+                        shadowBlur={4}
+                      />
+                      <KonvaText
+                        x={-6 / stageScale}
+                        y={-5 / stageScale}
+                        width={12 / stageScale}
+                        text={isPositive ? "+" : "−"}
+                        fontSize={10 / stageScale}
+                        fontStyle="bold"
+                        fontFamily="sans-serif"
+                        fill="#ffffff"
+                        align="center"
+                      />
+                    </Group>
+                  );
+                })}
 
                 {/* SAM Predicted Polygon Preview */}
                 {samPendingPolygon && samPendingPolygon.length >= 3 && (
@@ -1145,7 +1310,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     points={samPendingPolygon.flatMap((p) => [p[0], p[1]])}
                     closed={true}
                     fill="#10b981"
-                    opacity={0.5}
+                    opacity={0.45}
                     stroke="#ffffff"
                     strokeWidth={2.5 / stageScale}
                     dash={[4 / stageScale, 4 / stageScale]}
@@ -1183,7 +1348,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
           )}
 
           {/* Floating Canvas Controls (Zoom, Fit, Opacity) */}
-          <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-lg border border-slate-800 shadow-lg text-xs">
+          <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2 bg-white/95 backdrop-blur-md p-1.5 rounded-lg border border-slate-200 shadow-md text-xs text-slate-700">
             <Button
               type="button"
               variant="ghost"
@@ -1192,13 +1357,13 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                 const newScale = Math.max(0.2, Number((stageScale * 0.85).toFixed(2)));
                 setStageScale(newScale);
               }}
-              className="h-7 w-7 text-slate-300 hover:text-white"
+              className="h-7 w-7 text-slate-600 hover:text-slate-900"
               title="Zoom Out (-)"
             >
               <ZoomOut size={13} />
             </Button>
 
-            <span className="font-mono text-[11px] text-slate-300 px-1 min-w-[42px] text-center">
+            <span className="font-mono text-[11px] text-slate-700 px-1 min-w-[42px] text-center font-semibold">
               {Math.round(stageScale * 100)}%
             </span>
 
@@ -1210,30 +1375,30 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                 const newScale = Math.min(8.0, Number((stageScale * 1.18).toFixed(2)));
                 setStageScale(newScale);
               }}
-              className="h-7 w-7 text-slate-300 hover:text-white"
+              className="h-7 w-7 text-slate-600 hover:text-slate-900"
               title="Zoom In (+)"
             >
               <ZoomIn size={13} />
             </Button>
 
-            <div className="h-4 w-px bg-slate-800 mx-1" />
+            <div className="h-4 w-px bg-slate-200 mx-1" />
 
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={handleFitToScreen}
-              className="h-7 px-2 text-[11px] text-slate-300 hover:text-white gap-1"
+              className="h-7 px-2 text-[11px] text-slate-600 hover:text-slate-900 gap-1"
               title="Fit to Screen (F / 0)"
             >
               <RotateCcw size={12} />
               <span>Fit (F)</span>
             </Button>
 
-            <div className="h-4 w-px bg-slate-800 mx-1" />
+            <div className="h-4 w-px bg-slate-200 mx-1" />
 
             {/* Opacity Slider */}
-            <div className="flex items-center gap-1.5 px-2 text-[11px] text-slate-400">
+            <div className="flex items-center gap-1.5 px-2 text-[11px] text-slate-600">
               <Sliders size={11} />
               <input
                 type="range"
@@ -1242,60 +1407,179 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                 step="0.05"
                 value={maskOpacity}
                 onChange={(e) => setMaskOpacity(parseFloat(e.target.value))}
-                className="w-16 accent-teal-500 cursor-pointer"
+                className="w-16 accent-teal-600 cursor-pointer"
                 title="Mask Opacity"
               />
             </div>
           </div>
 
-          {/* SAM Floating Commit Bar */}
-          {toolMode === "sam" && samPendingPolygon && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-slate-900/95 backdrop-blur-md px-4 py-2 rounded-xl border border-teal-500/50 shadow-2xl animate-in fade-in slide-in-from-top-4">
-              <div className="flex items-center gap-2 text-xs">
-                <Sparkles size={14} className="text-teal-400 animate-pulse" />
-                <span className="font-semibold text-slate-200">
-                  SAM Colony Mask Generated ({calculatePolygonArea(samPendingPolygon).area_pct}% cover)
-                </span>
-              </div>
+          {/* Enhanced Multi-Point SAM Flow Top Banner */}
+          {toolMode === "sam" && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col sm:flex-row items-center gap-2.5 bg-white/95 text-slate-900 backdrop-blur-md px-4 py-2.5 rounded-xl border border-slate-200 shadow-xl animate-in fade-in slide-in-from-top-3">
+              {/* Left: Mode Title & Info */}
               <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="default"
-                  size="sm"
-                  onClick={handleCommitSamMask}
-                  className="h-7 px-3 text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
-                >
-                  <Check size={13} />
-                  <span>Accept Mask</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setSamPoints([]);
-                    setSamPendingPolygon(null);
-                  }}
-                  className="h-7 px-2.5 text-xs text-slate-400 hover:text-white border-slate-700 bg-slate-800 cursor-pointer"
-                >
-                  Cancel
-                </Button>
+                <div className="p-1.5 rounded-md bg-teal-50 text-teal-700">
+                  <Wand2 size={16} />
+                </div>
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-slate-800">SAM Smart Click</span>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-teal-50 text-teal-700 border-teal-200">
+                      Interactive
+                    </Badge>
+                  </div>
+                  <span className="text-[11px] text-slate-500">
+                    {samPendingPolygon
+                      ? "Colony mask generated. Accept or add points to refine."
+                      : samPoints.length === 0
+                      ? "Click coral to place points, then run model."
+                      : `${samPoints.length} point${samPoints.length > 1 ? "s" : ""} placed (${samPoints.filter((p) => p.label === 1).length} +, ${samPoints.filter((p) => p.label === 0).length} −)`}
+                  </span>
+                </div>
+              </div>
+
+              <div className="h-6 w-px bg-slate-200 hidden sm:block" />
+
+              {/* Point Type Selector (+ / −) */}
+              {!samPendingPolygon && (
+                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setSamPointType(1)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+                      samPointType === 1
+                        ? "bg-emerald-600 text-white shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                    title="Add Positive Foreground Points"
+                  >
+                    <span className="font-bold">+</span>
+                    <span>Coral</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSamPointType(0)}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
+                      samPointType === 0
+                        ? "bg-red-600 text-white shadow-xs"
+                        : "text-slate-600 hover:text-slate-900"
+                    }`}
+                    title="Add Negative Background Points (or hold Alt/Shift)"
+                  >
+                    <span className="font-bold">−</span>
+                    <span>Background</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2">
+                {samPendingPolygon ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={handleCommitSamMask}
+                      className="h-7 px-3 text-xs font-bold bg-[#0d7c85] hover:bg-[#0b6b73] text-white shadow-xs cursor-pointer gap-1"
+                    >
+                      <Check size={13} />
+                      <span>Accept Mask</span>
+                      <kbd className="ml-1 text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono">↵ Enter</kbd>
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isSamLoading}
+                      onClick={handleRunSam}
+                      className="h-7 px-2.5 text-xs text-slate-700 hover:text-slate-900 border-slate-300 hover:bg-slate-50 cursor-pointer gap-1"
+                    >
+                      {isSamLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                      <span>Re-run SAM</span>
+                      <kbd className="ml-1 text-[10px] bg-slate-200 px-1 py-0.2 rounded font-mono">Space</kbd>
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setSamPoints([]);
+                        setSamPendingPolygon(null);
+                      }}
+                      className="h-7 px-2 text-xs text-slate-500 hover:text-slate-800"
+                    >
+                      Discard
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      disabled={samPoints.length === 0 || isSamLoading}
+                      onClick={handleRunSam}
+                      className="h-7 px-3 text-xs font-bold bg-[#0d7c85] hover:bg-[#0b6b73] text-white shadow-xs cursor-pointer gap-1.5"
+                    >
+                      {isSamLoading ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin" />
+                          <span>Computing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={13} />
+                          <span>Run SAM Model</span>
+                          <kbd className="ml-1 text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono">↵ Enter</kbd>
+                        </>
+                      )}
+                    </Button>
+
+                    {samPoints.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setSamPoints((prev) => prev.slice(0, -1))}
+                        className="h-7 px-2 text-xs text-slate-600 hover:text-slate-900 border-slate-300"
+                        title="Undo last point (Backspace)"
+                      >
+                        <Undo2 size={12} />
+                      </Button>
+                    )}
+
+                    {samPoints.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSamPoints([])}
+                        className="h-7 px-2 text-xs text-slate-500 hover:text-slate-800"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           )}
 
-          {/* Polygon Drawing In Progress Instruction Pill */}
+          {/* Polygon Drawing In Progress Instruction Banner */}
           {toolMode === "polygon" && drawPoints.length > 0 && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-slate-900/95 backdrop-blur-md px-4 py-2 rounded-xl border border-cyan-500/50 shadow-2xl text-xs">
-              <span className="text-cyan-300 font-medium">
-                Click around coral boundary • Click start point or double-click to finish
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 bg-white/95 text-slate-900 backdrop-blur-md px-4 py-2 rounded-xl border border-slate-200 shadow-xl text-xs">
+              <span className="text-slate-700 font-medium">
+                Click around coral boundary • Click start point or Close button to finish
               </span>
               <Button
                 type="button"
                 variant="default"
                 size="sm"
                 onClick={finishDrawingPolygon}
-                className="h-6 px-2.5 text-[11px] bg-cyan-600 hover:bg-cyan-500 text-white"
+                className="h-6 px-2.5 text-[11px] font-semibold bg-[#0d7c85] hover:bg-[#0b6b73] text-white"
               >
                 Close Polygon
               </Button>
@@ -1307,7 +1591,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                   setDrawPoints([]);
                   setMouseCanvasPos(null);
                 }}
-                className="h-6 px-2 text-[11px] text-slate-400"
+                className="h-6 px-2 text-[11px] text-slate-500 hover:text-slate-800"
               >
                 Cancel
               </Button>
@@ -1315,25 +1599,25 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
           )}
         </div>
 
-        {/* 3. Right Inspector & Corals Catalog Sidebar */}
-        <aside className="w-80 md:w-92 bg-slate-900 border-l border-slate-800 flex flex-col shrink-0 h-full overflow-hidden shadow-xl">
+        {/* 3. Right Inspector & Corals Catalog Sidebar (Clean Site Theme) */}
+        <aside className="w-80 md:w-92 bg-white border-l border-slate-200 flex flex-col shrink-0 h-full overflow-hidden shadow-lg z-10">
           {/* Active Coral Form Card */}
-          <div className="p-4 border-b border-slate-800 bg-slate-900/80">
+          <div className="p-4 border-b border-slate-200 bg-slate-50/70">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
                   {activeSegment ? `Edit Coral ${activeSegment.id_str}` : "New Coral Definition"}
                 </span>
                 {activeSegment && (
                   <span
-                    className="size-2.5 rounded-full ring-1 ring-white/20"
+                    className="size-2.5 rounded-full ring-1 ring-slate-400"
                     style={{ backgroundColor: activeSegment.color_hex }}
                   />
                 )}
               </div>
               <Badge
                 variant="outline"
-                className="text-[10px] font-mono bg-teal-500/10 text-teal-300 border-teal-500/30"
+                className="text-[10px] font-mono bg-teal-50 text-teal-800 border-teal-200"
               >
                 100% Ground Truth
               </Badge>
@@ -1342,7 +1626,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             <div className="space-y-3">
               {/* Taxon Genus Selector */}
               <div>
-                <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
+                <label className="text-[11px] font-semibold text-slate-700 mb-1 block">
                   Taxon Genus:
                 </label>
                 <select
@@ -1362,7 +1646,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                       }
                     }
                   }}
-                  className="w-full h-8 px-2.5 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-200 focus:outline-hidden focus:border-teal-500 cursor-pointer"
+                  className="w-full h-8 px-2.5 bg-white border border-slate-300 rounded-md text-xs text-slate-800 focus:outline-hidden focus:border-teal-600 focus:ring-1 focus:ring-teal-500 cursor-pointer shadow-2xs"
                 >
                   {TAXONOMY_OPTIONS.map((opt) => (
                     <option key={opt.genus} value={opt.genus}>
@@ -1374,7 +1658,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
               {/* Growth Form Selector */}
               <div>
-                <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
+                <label className="text-[11px] font-semibold text-slate-700 mb-1 block">
                   Growth Form:
                 </label>
                 <select
@@ -1387,7 +1671,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                       setFormGrowthForm(val);
                     }
                   }}
-                  className="w-full h-8 px-2.5 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-200 focus:outline-hidden focus:border-teal-500 cursor-pointer"
+                  className="w-full h-8 px-2.5 bg-white border border-slate-300 rounded-md text-xs text-slate-800 focus:outline-hidden focus:border-teal-600 focus:ring-1 focus:ring-teal-500 cursor-pointer shadow-2xs"
                 >
                   {GROWTH_FORMS.map((form) => (
                     <option key={form} value={form}>
@@ -1399,7 +1683,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
               {/* Condition Toggle (Healthy vs Bleached) */}
               <div>
-                <label className="text-[11px] font-semibold text-slate-300 mb-1 block">
+                <label className="text-[11px] font-semibold text-slate-700 mb-1 block">
                   Health Condition:
                 </label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1415,7 +1699,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     className={`h-7 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                       (activeSegment ? activeSegment.condition : formCondition) === "Healthy"
                         ? "bg-emerald-600 text-white shadow-xs"
-                        : "bg-slate-800 text-slate-400 hover:text-white"
+                        : "bg-slate-200/80 text-slate-700 hover:bg-slate-300/80"
                     }`}
                   >
                     <span>Healthy</span>
@@ -1433,7 +1717,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     className={`h-7 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                       (activeSegment ? activeSegment.condition : formCondition) === "Bleached"
                         ? "bg-red-600 text-white shadow-xs"
-                        : "bg-slate-800 text-slate-400 hover:text-white"
+                        : "bg-slate-200/80 text-slate-700 hover:bg-slate-300/80"
                     }`}
                   >
                     <span>Bleached</span>
@@ -1443,16 +1727,16 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
               {/* Live Area Telemetry */}
               {activeSegment && (
-                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+                <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-[11px] bg-white p-2.5 rounded-lg border border-slate-200/70 shadow-2xs">
                   <div className="flex flex-col">
-                    <span className="text-slate-400">Calculated Area</span>
-                    <span className="font-mono font-semibold text-slate-200">
+                    <span className="text-slate-500">Calculated Area</span>
+                    <span className="font-mono font-semibold text-slate-900">
                       {activeSegment.area_px.toLocaleString()} px²
                     </span>
                   </div>
                   <div className="flex flex-col items-end">
-                    <span className="text-slate-400">Reef Coverage</span>
-                    <span className="font-mono font-semibold text-teal-400">
+                    <span className="text-slate-500">Reef Coverage</span>
+                    <span className="font-mono font-bold text-teal-700">
                       {activeSegment.area_pct}%
                     </span>
                   </div>
@@ -1467,7 +1751,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     variant="outline"
                     size="sm"
                     onClick={handleDeleteSelected}
-                    className="flex-1 h-7 text-xs text-red-400 border-red-900/60 bg-red-950/40 hover:bg-red-900/60 hover:text-red-200"
+                    className="flex-1 h-7 text-xs text-red-600 border-red-200 bg-red-50 hover:bg-red-100 hover:text-red-700 cursor-pointer"
                   >
                     <Trash2 size={12} className="mr-1" />
                     <span>Delete Mask</span>
@@ -1477,7 +1761,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     variant="ghost"
                     size="sm"
                     onClick={() => setSelectedId(null)}
-                    className="h-7 text-xs text-slate-400 hover:text-white"
+                    className="h-7 text-xs text-slate-600 hover:text-slate-900"
                   >
                     Deselect
                   </Button>
@@ -1487,9 +1771,9 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
           </div>
 
           {/* Corals Catalog List */}
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-slate-800 flex items-center justify-between bg-slate-900">
-              <span className="text-xs font-bold text-slate-300">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-white">
+            <div className="px-4 py-2.5 border-b border-slate-200 flex items-center justify-between bg-white">
+              <span className="text-xs font-bold text-slate-800">
                 Instances ({segments.length})
               </span>
               <Button
@@ -1500,19 +1784,19 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                   setSelectedId(null);
                   setToolMode("sam");
                 }}
-                className="h-6 px-2 text-[10px] font-semibold text-teal-300 border-teal-800 bg-teal-950/60 hover:bg-teal-900 gap-1 cursor-pointer"
+                className="h-6 px-2 text-[10px] font-semibold text-teal-700 border-teal-300 bg-teal-50 hover:bg-teal-100 gap-1 cursor-pointer"
               >
                 <Plus size={11} />
                 <span>Add Coral</span>
               </Button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-2 space-y-1 divide-y divide-slate-800/40">
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
               {segments.length === 0 ? (
                 <div className="p-8 text-center text-xs text-slate-500">
                   No coral annotations on this image yet. Click{" "}
-                  <strong className="text-teal-400">SAM Smart Click</strong> or{" "}
-                  <strong className="text-cyan-400">Polygon</strong> above to segment a colony.
+                  <strong className="text-teal-700">SAM Smart Click</strong> or{" "}
+                  <strong className="text-cyan-700">Polygon</strong> above to segment a colony.
                 </div>
               ) : (
                 segments.map((seg) => {
@@ -1523,25 +1807,25 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                       onClick={() => setSelectedId(seg.id)}
                       className={`flex items-center justify-between p-2 rounded-lg text-xs transition-all cursor-pointer ${
                         isSelected
-                          ? "bg-slate-800 border border-teal-500/40"
-                          : "hover:bg-slate-800/60 border border-transparent"
+                          ? "bg-teal-50/80 border border-teal-500/60 shadow-2xs"
+                          : "hover:bg-slate-50 border border-slate-200/80"
                       }`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <span
-                          className="size-2.5 rounded-full ring-1 ring-white/20 shrink-0"
+                          className="size-2.5 rounded-full ring-1 ring-slate-300 shrink-0"
                           style={{ backgroundColor: seg.color_hex }}
                         />
                         <div className="flex flex-col min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <span className="font-mono font-bold text-slate-200">
+                            <span className="font-mono font-bold text-slate-900">
                               {seg.id_str}
                             </span>
-                            <span className="font-semibold text-slate-300 truncate">
+                            <span className="font-semibold text-slate-800 truncate">
                               {seg.genus}
                             </span>
                           </div>
-                          <span className="text-[10px] text-slate-400 truncate">
+                          <span className="text-[10px] text-slate-500 truncate">
                             {seg.growth_form} • {seg.area_pct}%
                           </span>
                         </div>
@@ -1552,8 +1836,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                           variant="outline"
                           className={`text-[9px] px-1.5 py-0 font-semibold ${
                             seg.condition === "Bleached"
-                              ? "bg-red-500/10 text-red-400 border-red-500/30"
-                              : "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                              ? "bg-red-50 text-red-700 border-red-200"
+                              : "bg-emerald-50 text-emerald-700 border-emerald-200"
                           }`}
                         >
                           {seg.condition}
@@ -1565,7 +1849,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                             e.stopPropagation();
                             handleToggleVisibility(seg.id);
                           }}
-                          className="p-1 text-slate-400 hover:text-white"
+                          className="p-1 text-slate-400 hover:text-slate-800"
                           title="Toggle visibility"
                         >
                           {seg.visible ? <Eye size={13} /> : <EyeOff size={13} />}
@@ -1578,7 +1862,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                             setSelectedId(seg.id);
                             handleDeleteSelected();
                           }}
-                          className="p-1 text-slate-500 hover:text-red-400"
+                          className="p-1 text-slate-400 hover:text-red-600"
                           title="Delete"
                         >
                           <Trash2 size={13} />
@@ -1592,30 +1876,30 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
           </div>
 
           {/* Quick Keyboard Shortcuts Footer */}
-          <footer className="p-3 bg-slate-950 border-t border-slate-800 text-[10px] text-slate-400 grid grid-cols-2 gap-1.5">
+          <footer className="p-3 bg-slate-50 border-t border-slate-200 text-[10px] text-slate-600 grid grid-cols-2 gap-2">
             <div>
-              <kbd className="px-1 py-0.5 bg-slate-800 rounded font-mono text-slate-300">V</kbd>{" "}
+              <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded font-mono text-slate-800 shadow-2xs">V</kbd>{" "}
               Select & Edit
             </div>
             <div>
-              <kbd className="px-1 py-0.5 bg-slate-800 rounded font-mono text-slate-300">W</kbd>{" "}
+              <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded font-mono text-slate-800 shadow-2xs">W</kbd>{" "}
               SAM Smart Click
             </div>
             <div>
-              <kbd className="px-1 py-0.5 bg-slate-800 rounded font-mono text-slate-300">P</kbd>{" "}
+              <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded font-mono text-slate-800 shadow-2xs">P</kbd>{" "}
               Polygon Tool
             </div>
             <div>
-              <kbd className="px-1 py-0.5 bg-slate-800 rounded font-mono text-slate-300">Del</kbd>{" "}
-              Delete Mask
+              <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded font-mono text-slate-800 shadow-2xs">⌘Z</kbd>{" "}
+              Undo Action
             </div>
             <div>
-              <kbd className="px-1 py-0.5 bg-slate-800 rounded font-mono text-slate-300">^S</kbd>{" "}
+              <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded font-mono text-slate-800 shadow-2xs">⌘S</kbd>{" "}
               Save Changes
             </div>
             <div>
-              <kbd className="px-1 py-0.5 bg-slate-800 rounded font-mono text-slate-300">[ / ]</kbd>{" "}
-              Prev / Next Img
+              <kbd className="px-1.5 py-0.5 bg-white border border-slate-300 rounded font-mono text-slate-800 shadow-2xs">[ / ]</kbd>{" "}
+              Prev / Next
             </div>
           </footer>
         </aside>
