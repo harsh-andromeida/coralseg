@@ -4,6 +4,8 @@ Test script for ReefVision FastAPI endpoints using FastAPI TestClient.
 """
 
 import sys
+import io
+import base64
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -246,6 +248,19 @@ def test_endpoints():
     assert "polygon" in prompt_res
     assert "area_px" in prompt_res
     print(f"  Interactive SAM prompt segmentation verified: area_px={prompt_res['area_px']}, vertices={len(prompt_res['polygon'])}")
+
+    # 2b. Test SAM interactive segmentation on un-cached image with image_data dataUrl
+    b64_buf = io.BytesIO()
+    pil_test.save(b64_buf, format="PNG")
+    raw_b64 = base64.b64encode(b64_buf.getvalue()).decode("utf-8")
+    data_url = f"data:image/png;base64,{raw_b64}"
+    resp_b64 = client.post("/api/analysis/segment-prompt", json={
+        "image_name": "custom_uncached_coral.png",
+        "points": [{"x": 50.0, "y": 50.0, "label": 1}],
+        "image_data": data_url,
+    })
+    assert resp_b64.status_code == 200, f"SAM prompt with image_data failed: {resp_b64.text}"
+    print("  SAM prompt segmentation with raw image_data verified.")
 
     # 3. Test Save Annotations with Ground Truth
     sample_polygon = [[40.0, 40.0], [120.0, 40.0], [120.0, 120.0], [40.0, 120.0], [40.0, 40.0]]

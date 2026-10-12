@@ -38,6 +38,9 @@ from core.models import (
     unload_all_models_from_ram,
     are_models_loaded_in_ram,
     FOUNDATION_MODEL_SPECS,
+    get_cached_model_path,
+    HF_SAM_ENCODER_FILE,
+    HF_SAM_DECODER_FILE,
 )
 from core.segmentation import run_segmentation
 from core.taxonomy import enrich_masks_with_taxonomy_and_bleaching
@@ -692,22 +695,28 @@ def run_interactive_prompt_segmentation(req: SegmentPromptRequest):
     Executes interactive SAM point prompt segmentation.
     Given click coordinates and positive/negative labels, generates a crisp mask polygon in ~15-25ms.
     """
-    all_ready, _ = check_models_download_status()
-    if not all_ready:
+    sam_enc = get_cached_model_path(HF_SAM_ENCODER_FILE)
+    sam_dec = get_cached_model_path(HF_SAM_DECODER_FILE)
+    if not sam_enc or not sam_dec:
         raise HTTPException(
             status_code=428,
-            detail="Foundation models are not downloaded. Please download all models before interactive segmentation.",
+            detail="SAM segmentation foundation models (encoder/decoder) are not downloaded. Please download models first.",
         )
 
     img_name = req.image_name
     if img_name not in _IMAGE_STORE:
-        # Check demo images
-        dirs = _resolve_demo_dirs()
-        for sdir in dirs:
-            target = os.path.join(sdir, img_name)
-            if os.path.isfile(target):
-                _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
-                break
+        if req.image_data and req.image_data.startswith("data:"):
+            header, b64_str = req.image_data.split(",", 1)
+            raw_bytes = base64.b64decode(b64_str)
+            _IMAGE_STORE[img_name] = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        else:
+            # Check demo images
+            dirs = _resolve_demo_dirs()
+            for sdir in dirs:
+                target = os.path.join(sdir, img_name)
+                if os.path.isfile(target):
+                    _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
+                    break
         if img_name not in _IMAGE_STORE:
             raise HTTPException(status_code=404, detail=f"Image '{img_name}' not loaded in session")
 
@@ -740,13 +749,18 @@ def save_manual_annotations(req: SaveAnnotationsRequest):
     """
     img_name = req.image_name
     if img_name not in _IMAGE_STORE:
-        # Check demo images
-        dirs = _resolve_demo_dirs()
-        for sdir in dirs:
-            target = os.path.join(sdir, img_name)
-            if os.path.isfile(target):
-                _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
-                break
+        if req.image_data and req.image_data.startswith("data:"):
+            header, b64_str = req.image_data.split(",", 1)
+            raw_bytes = base64.b64decode(b64_str)
+            _IMAGE_STORE[img_name] = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        else:
+            # Check demo images
+            dirs = _resolve_demo_dirs()
+            for sdir in dirs:
+                target = os.path.join(sdir, img_name)
+                if os.path.isfile(target):
+                    _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
+                    break
         if img_name not in _IMAGE_STORE:
             raise HTTPException(status_code=404, detail=f"Image '{img_name}' not loaded in session")
 

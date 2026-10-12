@@ -415,12 +415,17 @@ export async function getSegmentPolygons(
 
 export async function promptSegment(
   imageName: string,
-  points: PromptPoint[]
+  points: PromptPoint[],
+  imageData?: string
 ): Promise<PromptSegmentResponse> {
   const res = await fetch(`${API_BASE}/analysis/segment-prompt`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image_name: imageName, points }),
+    body: JSON.stringify({
+      image_name: imageName,
+      points,
+      image_data: imageData && imageData.startsWith("data:") ? imageData : undefined,
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -438,12 +443,17 @@ export async function saveAnnotations(
     condition: string;
     color_hex?: string;
     polygon: [number, number][];
-  }[]
+  }[],
+  imageData?: string
 ): Promise<SaveAnnotationsResponse> {
   const res = await fetch(`${API_BASE}/analysis/save-annotations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image_name: imageName, segments }),
+    body: JSON.stringify({
+      image_name: imageName,
+      segments,
+      image_data: imageData && imageData.startsWith("data:") ? imageData : undefined,
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -451,5 +461,6 @@ export async function saveAnnotations(
   }
   return res.json();
 }
+
 
 

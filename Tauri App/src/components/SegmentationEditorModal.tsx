@@ -280,7 +280,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             color_hex: s.color_hex,
             polygon: s.polygon,
           }));
-          const res = await saveAnnotations(imageName, payload);
+          const res = await saveAnnotations(imageName, payload, imageSrc);
           setHasUnsavedChanges(false);
           setSaveStatus("saved");
           setLastSavedTime(new Date().toLocaleTimeString());
@@ -298,7 +298,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         }
       }, 750);
     },
-    [imageName, onSaveSuccess]
+    [imageName, imageSrc, onSaveSuccess]
   );
 
   // Explicit Save Annotations Button (Ctrl + S / Cmd + S)
@@ -318,7 +318,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         color_hex: s.color_hex,
         polygon: s.polygon,
       }));
-      const res = await saveAnnotations(imageName, payload);
+      const res = await saveAnnotations(imageName, payload, imageSrc);
       setHasUnsavedChanges(false);
       setSaveStatus("saved");
       setLastSavedTime(new Date().toLocaleTimeString());
@@ -336,7 +336,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     } finally {
       setIsSaving(false);
     }
-  }, [imageName, onSaveSuccess]);
+  }, [imageName, imageSrc, onSaveSuccess]);
 
   // Undo (Ctrl+Z or Cmd+Z)
   const handleUndo = useCallback(() => {
@@ -524,7 +524,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   }, [imgDimensions]);
 
   // Canvas Stage Click Handling
-  const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
+  const handleStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
     // If clicking on background with select tool, deselect
     if (toolMode === "select") {
       if (e.target === e.target.getStage() || e.target.name() === "bg-image") {
@@ -539,7 +539,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
     // SAM Smart Click Tool (W): Place point without immediately calling model
     if (toolMode === "sam") {
-      const isNegativeModifier = e.evt.button === 2 || e.evt.altKey || e.evt.shiftKey;
+      const mouseEvt = e.evt as MouseEvent;
+      const isNegativeModifier = mouseEvt.button === 2 || mouseEvt.altKey || mouseEvt.shiftKey;
       const pointLabel = isNegativeModifier ? 0 : samPointType;
 
       const newPrompt: PromptPoint = {
@@ -579,7 +580,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     if (samPoints.length === 0 || isSamLoading) return;
     setIsSamLoading(true);
     try {
-      const res = await promptSegment(imageName, samPoints);
+      const res = await promptSegment(imageName, samPoints, imageSrc);
       if (res && res.polygon && res.polygon.length >= 3) {
         setSamPendingPolygon(res.polygon);
       } else {
@@ -591,7 +592,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     } finally {
       setIsSamLoading(false);
     }
-  }, [imageName, samPoints, isSamLoading]);
+  }, [imageName, samPoints, isSamLoading, imageSrc]);
 
   // Commit SAM mask as coral instance
   const handleCommitSamMask = () => {
@@ -1157,6 +1158,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
               }}
               onWheel={handleWheel}
               onClick={handleStageClick}
+              onTap={handleStageClick}
               onMouseMove={handleStageMouseMove}
               style={{ cursor: toolMode === "select" ? "default" : "crosshair" }}
             >
@@ -1167,11 +1169,13 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                   image={htmlImage}
                   width={imgDimensions.w}
                   height={imgDimensions.h}
+                  onClick={handleStageClick}
+                  onTap={handleStageClick}
                 />
               </Layer>
 
-              {/* Polygons & Annotations Layer */}
-              <Layer>
+              {/* Polygons & Annotations Layer - only interactive in select mode */}
+              <Layer listening={toolMode === "select"}>
                 {segments.map((seg) => {
                   if (!seg.visible || seg.polygon.length < 3) return null;
                   const isSelected = seg.id === selectedId;
@@ -1415,43 +1419,34 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
           {/* Enhanced Multi-Point SAM Flow Top Banner */}
           {toolMode === "sam" && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex flex-col sm:flex-row items-center gap-2.5 bg-white/95 text-slate-900 backdrop-blur-md px-4 py-2.5 rounded-xl border border-slate-200 shadow-xl animate-in fade-in slide-in-from-top-3">
-              {/* Left: Mode Title & Info */}
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-md bg-teal-50 text-teal-700">
-                  <Wand2 size={16} />
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-white/95 text-slate-900 backdrop-blur-md px-3.5 py-2 rounded-xl border border-slate-200 shadow-xl animate-in fade-in slide-in-from-top-2 whitespace-nowrap select-none max-w-[95vw] overflow-x-auto">
+              {/* Left: Mode Title & Badge */}
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="size-7 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center shrink-0">
+                  <Wand2 size={15} />
                 </div>
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-bold text-slate-800">SAM Smart Click</span>
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-teal-50 text-teal-700 border-teal-200">
-                      Interactive
-                    </Badge>
-                  </div>
-                  <span className="text-[11px] text-slate-500">
-                    {samPendingPolygon
-                      ? "Colony mask generated. Accept or add points to refine."
-                      : samPoints.length === 0
-                      ? "Click coral to place points, then run model."
-                      : `${samPoints.length} point${samPoints.length > 1 ? "s" : ""} placed (${samPoints.filter((p) => p.label === 1).length} +, ${samPoints.filter((p) => p.label === 0).length} −)`}
-                  </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-xs font-bold text-slate-900 tracking-tight">SAM Smart Click</span>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-teal-50 text-teal-700 border-teal-200 font-medium">
+                    Interactive
+                  </Badge>
                 </div>
               </div>
 
-              <div className="h-6 w-px bg-slate-200 hidden sm:block" />
+              <div className="h-4 w-px bg-slate-200 shrink-0" />
 
-              {/* Point Type Selector (+ / −) */}
+              {/* Point Type Toggle (+ Coral / − Background) */}
               {!samPendingPolygon && (
-                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200 shrink-0">
                   <button
                     type="button"
                     onClick={() => setSamPointType(1)}
                     className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
                       samPointType === 1
                         ? "bg-emerald-600 text-white shadow-xs"
-                        : "text-slate-600 hover:text-slate-900"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-white/80"
                     }`}
-                    title="Add Positive Foreground Points"
+                    title="Add Positive Foreground Points (+)"
                   >
                     <span className="font-bold">+</span>
                     <span>Coral</span>
@@ -1462,9 +1457,9 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-all ${
                       samPointType === 0
                         ? "bg-red-600 text-white shadow-xs"
-                        : "text-slate-600 hover:text-slate-900"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-white/80"
                     }`}
-                    title="Add Negative Background Points (or hold Alt/Shift)"
+                    title="Add Negative Background Points (−, or hold Alt/Shift)"
                   >
                     <span className="font-bold">−</span>
                     <span>Background</span>
@@ -1472,8 +1467,31 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                 </div>
               )}
 
+              {/* Points Count / Guidance Text */}
+              <div className="text-xs text-slate-600 shrink-0">
+                {samPendingPolygon ? (
+                  <span className="text-teal-700 font-semibold">
+                    Mask ready ({calculatePolygonArea(samPendingPolygon).area_pct}% cover)
+                  </span>
+                ) : samPoints.length === 0 ? (
+                  <span className="text-slate-500">
+                    Click coral to drop pin
+                  </span>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <span className="font-semibold text-slate-800">{samPoints.length} pt{samPoints.length > 1 ? "s" : ""}</span>
+                    <span className="text-emerald-700 font-bold">({samPoints.filter((p) => p.label === 1).length}+)</span>
+                    {samPoints.filter((p) => p.label === 0).length > 0 && (
+                      <span className="text-red-700 font-bold">({samPoints.filter((p) => p.label === 0).length}−)</span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="h-4 w-px bg-slate-200 shrink-0" />
+
               {/* Action Buttons */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 shrink-0">
                 {samPendingPolygon ? (
                   <>
                     <Button
@@ -1485,7 +1503,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     >
                       <Check size={13} />
                       <span>Accept Mask</span>
-                      <kbd className="ml-1 text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono">↵ Enter</kbd>
+                      <kbd className="ml-1 text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono">↵</kbd>
                     </Button>
 
                     <Button
@@ -1497,7 +1515,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                       className="h-7 px-2.5 text-xs text-slate-700 hover:text-slate-900 border-slate-300 hover:bg-slate-50 cursor-pointer gap-1"
                     >
                       {isSamLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                      <span>Re-run SAM</span>
+                      <span>Re-run</span>
                       <kbd className="ml-1 text-[10px] bg-slate-200 px-1 py-0.2 rounded font-mono">Space</kbd>
                     </Button>
 
@@ -1520,9 +1538,19 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                       type="button"
                       variant="default"
                       size="sm"
-                      disabled={samPoints.length === 0 || isSamLoading}
-                      onClick={handleRunSam}
-                      className="h-7 px-3 text-xs font-bold bg-[#0d7c85] hover:bg-[#0b6b73] text-white shadow-xs cursor-pointer gap-1.5"
+                      disabled={isSamLoading}
+                      onClick={() => {
+                        if (samPoints.length === 0) {
+                          alert("Please click on the coral to place at least one foreground (+) pin before running the SAM model.");
+                          return;
+                        }
+                        handleRunSam();
+                      }}
+                      className={`h-7 px-3 text-xs font-bold text-white shadow-xs cursor-pointer gap-1.5 transition-all ${
+                        samPoints.length > 0
+                          ? "bg-[#0d7c85] hover:bg-[#0b6b73]"
+                          : "bg-[#0d7c85]/70 hover:bg-[#0d7c85]"
+                      }`}
                     >
                       {isSamLoading ? (
                         <>
@@ -1533,7 +1561,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                         <>
                           <Sparkles size={13} />
                           <span>Run SAM Model</span>
-                          <kbd className="ml-1 text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono">↵ Enter</kbd>
+                          <kbd className="ml-1 text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono">↵</kbd>
                         </>
                       )}
                     </Button>
@@ -1545,7 +1573,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                         size="sm"
                         onClick={() => setSamPoints((prev) => prev.slice(0, -1))}
                         className="h-7 px-2 text-xs text-slate-600 hover:text-slate-900 border-slate-300"
-                        title="Undo last point (Backspace)"
+                        title="Undo last point (Backspace / ⌘Z)"
                       >
                         <Undo2 size={12} />
                       </Button>
@@ -1564,6 +1592,21 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                     )}
                   </>
                 )}
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    setToolMode("select");
+                    setSamPoints([]);
+                    setSamPendingPolygon(null);
+                  }}
+                  className="h-7 w-7 text-slate-400 hover:text-slate-700 ml-1"
+                  title="Exit SAM Tool (V)"
+                >
+                  <X size={14} />
+                </Button>
               </div>
             </div>
           )}

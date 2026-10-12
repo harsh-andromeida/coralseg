@@ -147,6 +147,7 @@ class PromptPoint(BaseModel):
 class SegmentPromptRequest(BaseModel):
     image_name: str
     points: List[PromptPoint]
+    image_data: Optional[str] = Field(default=None, description="Optional base64 dataUrl of image")
 
 
 class EditedSegmentItem(BaseModel):
@@ -161,5 +162,6 @@ class EditedSegmentItem(BaseModel):
 class SaveAnnotationsRequest(BaseModel):
     image_name: str
     segments: List[EditedSegmentItem]
+    image_data: Optional[str] = Field(default=None, description="Optional base64 dataUrl of image")
 
 
