@@ -6,10 +6,9 @@ import {
   Image as ImageIcon,
   CheckCircle2,
   Loader2,
-  FolderArchive,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { exportCocoJson, exportCsvData } from "../services/api";
+import { exportCsvData } from "../services/api";
 import { ExportDatasetModal } from "./ExportDatasetModal";
 import { Button } from "@/components/ui/button";
 import {
@@ -138,28 +137,14 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
       </CardHeader>
 
       <CardContent className="p-6 flex flex-col gap-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Button
             variant="outline"
             disabled={isExporting}
-            onClick={() =>
-              handleExport(async () => {
-                const data = await exportCocoJson(imageName, minAreaPx);
-                return {
-                  name: `${stem}_coco.json`,
-                  filter: "COCO JSON",
-                  ext: ["json"],
-                  content: JSON.stringify(data, null, 2),
-                };
-              })
-            }
-            className="h-10 text-xs font-semibold gap-2 border-border/80 hover:border-primary/50 hover:bg-primary/5 hover:text-primary transition-colors"
+            onClick={() => setIsExportModalOpen(true)}
+            className="h-10 text-xs font-semibold gap-2 border-border/80 hover:border-primary/50 hover:bg-primary/5 hover:text-primary transition-colors cursor-pointer"
           >
-            {isExporting ? (
-              <Loader2 className="size-4 animate-spin text-primary" />
-            ) : (
-              <FileCode className="size-4 text-primary" />
-            )}
+            <FileCode className="size-4 text-primary" />
             <span>Export COCO JSON</span>
           </Button>
 
@@ -207,16 +192,6 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({
               <FileSpreadsheet className="size-4 text-primary" />
             )}
             <span>Export Segments CSV</span>
-          </Button>
-
-          <Button
-            variant="default"
-            disabled={isExporting}
-            onClick={() => setIsExportModalOpen(true)}
-            className="h-10 text-xs font-bold gap-2 text-white bg-gradient-to-r from-[#0f1e4a] via-[#163e80] to-[#0d7c85] hover:opacity-95 shadow-2xs transition-all cursor-pointer"
-          >
-            <FolderArchive className="size-4" />
-            <span>Export Dataset</span>
           </Button>
         </div>
 
