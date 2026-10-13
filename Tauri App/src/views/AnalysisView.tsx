@@ -476,7 +476,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
               size="sm"
               onClick={() => setIsExportDatasetModalOpen(true)}
               className="h-6 px-2.5 text-[10px] font-bold gap-1 text-teal-300 bg-teal-950/80 border-teal-700/80 hover:bg-teal-900 hover:text-white rounded-md cursor-pointer"
-              title="Export all processed images or current image to custom folder or .zip archive"
+              title="Export complete dataset across all processed images to custom folder or .zip archive"
             >
               <FolderArchive size={11} className="text-teal-300" />
               <span>Export Dataset</span>
@@ -616,7 +616,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
       <ExportDatasetModal
         open={isExportDatasetModalOpen}
         onOpenChange={setIsExportDatasetModalOpen}
-        imageName={currentImage?.name}
+        totalImagesCount={images.length}
       />
 
       <SegmentationEditorModal
