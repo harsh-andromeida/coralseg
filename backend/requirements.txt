@@ -1,0 +1,19 @@
+# --- Fast Web Framework & ASGI Server ---
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.0.0
+
+# --- Vision & ONNX Inference Runtime (Zero PyTorch) ---
+onnxruntime>=1.17.0
+pillow>=9.5.0
+numpy>=1.24.0
+pycocotools>=2.0.6
+pandas>=2.0.0
+huggingface_hub>=0.20.0
+
+# --- Visualization & Utilities ---
+matplotlib>=3.7.0
+tqdm>=4.66.0
+
+# --- Testing ---
+httpx>=0.27.0

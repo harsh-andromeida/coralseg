@@ -15,10 +15,12 @@ On completion of every development step, task, bug fix, or milestone:
   ```
   *(or the active working branch).*
 
-### 2. Workspace Monorepo Structure
-- `Streamlit App/`: Streamlit web/local application for coral segmentation and reef analysis.
-- `Tauri App/`: Next-generation Tauri v2 desktop application with React UI and FastAPI backend.
-- `AGENTS.md`: Workspace rules and conventions.
+### 2. Workspace Structure
+- Standalone Tauri v2 Desktop Application pairing a React 19 / Vite UI with a high-performance local FastAPI backend in `backend/`.
+- `backend/`: FastAPI inference engine, ONNX models management, dataset export, and hardware acceleration logic.
+- `src-tauri/`: Rust desktop shell, process lifecycle management, and native integration.
+- `src/`: Modern React 19 UI with Tailwind CSS and Canvas annotation tools.
+- `docs/`: Architecture documentation and legacy reference guides.
 - `.agents/skills/`: Workspace-specific agent skills.
 
 ### 3. Binary & Weight Handling

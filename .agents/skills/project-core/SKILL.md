@@ -17,8 +17,7 @@ description: Core project workflow and development standards for ReefVision / co
    *(or the current feature branch).*
 
 ## 2. Project Architecture
-- **Streamlit App/**: Streamlit application providing ONNX-accelerated segmentation, taxonomic classification, health assessment, and report generation.
-- **Tauri App/**: Tauri v2 desktop application pairing a React/Vite UI with a high-performance local FastAPI backend in `Tauri App/backend`.
+- **Desktop Application**: Tauri v2 desktop application pairing a React/Vite UI with a high-performance local FastAPI inference engine in `backend/`.
 - **Remote Repository**: `https://github.com/Andromeida-Tech/Andromeida-ReefVision.git`
 
 ## 3. Clean Repository Standards
