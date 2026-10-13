@@ -594,9 +594,13 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     if (!pointer) return null;
     const transform = stage.getAbsoluteTransform().copy().invert();
     const pos = transform.point(pointer);
+    // Ignore clicks outside the actual image boundary
+    if (pos.x < 0 || pos.x > imgDimensions.w || pos.y < 0 || pos.y > imgDimensions.h) {
+      return null;
+    }
     return [
-      Math.max(0, Math.min(Math.round(pos.x), imgDimensions.w)),
-      Math.max(0, Math.min(Math.round(pos.y), imgDimensions.h)),
+      Math.round(pos.x),
+      Math.round(pos.y),
     ];
   }, [imgDimensions]);
 
@@ -619,6 +623,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       const mouseEvt = e.evt as MouseEvent;
       const isNegativeModifier = mouseEvt.button === 2 || mouseEvt.altKey || mouseEvt.shiftKey;
       const pointLabel = isNegativeModifier ? 0 : samPointType;
+
+      // Prevent duplicate points at the same location
+      const isDuplicate = samPoints.some(
+        (p) => Math.hypot(p.x - clickX, p.y - clickY) < 3
+      );
+      if (isDuplicate) return;
 
       const newPrompt: PromptPoint = {
         x: clickX,
@@ -1301,8 +1311,6 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                   image={htmlImage}
                   width={imgDimensions.w}
                   height={imgDimensions.h}
-                  onClick={handleStageClick}
-                  onTap={handleStageClick}
                 />
               </Layer>
 
