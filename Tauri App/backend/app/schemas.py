@@ -150,6 +150,12 @@ class SegmentPromptRequest(BaseModel):
     image_data: Optional[str] = Field(default=None, description="Optional base64 dataUrl of image")
 
 
+class SegmentPromptWarmupRequest(BaseModel):
+    image_name: str
+    image_data: Optional[str] = Field(default=None, description="Optional base64 dataUrl of image")
+
+
+
 class EditedSegmentItem(BaseModel):
     id: int
     genus: str = "Coral"

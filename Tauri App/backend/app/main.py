@@ -72,6 +72,7 @@ from app.schemas import (
     ExportFolderResponse,
     PromptPoint,
     SegmentPromptRequest,
+    SegmentPromptWarmupRequest,
     EditedSegmentItem,
     SaveAnnotationsRequest,
 )
@@ -738,6 +739,40 @@ def run_interactive_prompt_segmentation(req: SegmentPromptRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Interactive segmentation failed: {str(e)}")
+
+
+@app.post("/api/analysis/segment-prompt/warmup")
+def warmup_interactive_sam(req: SegmentPromptWarmupRequest):
+    """
+    Precomputes SAM image embeddings for an image ahead of time,
+    so that subsequent prompt segment queries execute in ~15-30ms without delay.
+    """
+    sam_enc = get_cached_model_path(HF_SAM_ENCODER_FILE)
+    sam_dec = get_cached_model_path(HF_SAM_DECODER_FILE)
+    if not sam_enc or not sam_dec:
+        return {"status": "skipped", "reason": "models_not_downloaded"}
+
+    img_name = req.image_name
+    if img_name not in _IMAGE_STORE:
+        if req.image_data and req.image_data.startswith("data:"):
+            header, b64_str = req.image_data.split(",", 1)
+            raw_bytes = base64.b64decode(b64_str)
+            _IMAGE_STORE[img_name] = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        else:
+            dirs = _resolve_demo_dirs()
+            for sdir in dirs:
+                target = os.path.join(sdir, img_name)
+                if os.path.isfile(target):
+                    _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
+                    break
+
+    if img_name not in _IMAGE_STORE:
+        return {"status": "skipped", "reason": "image_not_found"}
+
+    pil_img = _IMAGE_STORE[img_name]
+    sam_bundle = load_coralscop_model(device=_ACTIVE_DEVICE_PREF)
+    SAM_SESSION.get_or_compute_embeddings(sam_bundle, img_name, pil_img)
+    return {"status": "warmed_up", "image_name": img_name}
 
 
 @app.post("/api/analysis/save-annotations")

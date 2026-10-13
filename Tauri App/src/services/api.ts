@@ -434,6 +434,26 @@ export async function promptSegment(
   return res.json();
 }
 
+export async function warmupSamPrompt(
+  imageName: string,
+  imageData?: string
+): Promise<{ status: string; image_name?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/analysis/segment-prompt/warmup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_name: imageName,
+        image_data: imageData && imageData.startsWith("data:") ? imageData : undefined,
+      }),
+    });
+    if (!res.ok) return { status: "error" };
+    return res.json();
+  } catch {
+    return { status: "error" };
+  }
+}
+
 export async function saveAnnotations(
   imageName: string,
   segments: {

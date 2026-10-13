@@ -32,6 +32,7 @@ import {
   Sliders,
   CheckCircle2,
   Loader2,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +40,7 @@ import { CoralSegment, PromptPoint, SummaryStats, HealthSummary } from "../types
 import {
   getSegmentPolygons,
   promptSegment,
+  warmupSamPrompt,
   saveAnnotations,
 } from "../services/api";
 
@@ -140,6 +142,63 @@ const cloneSegments = (items: EditableSegment[]): EditableSegment[] => {
   }));
 };
 
+// Extract unique vertices (omitting duplicate closing loop vertex if present)
+export const getUniquePolygonPoints = (poly: [number, number][]): [number, number][] => {
+  if (!poly || poly.length === 0) return [];
+  if (
+    poly.length >= 2 &&
+    poly[0][0] === poly[poly.length - 1][0] &&
+    poly[0][1] === poly[poly.length - 1][1]
+  ) {
+    return poly.slice(0, -1);
+  }
+  return poly;
+};
+
+// Ensure polygon ends with the first point to close the ring
+export const ensureClosedPolygon = (pts: [number, number][]): [number, number][] => {
+  if (!pts || pts.length < 3) return pts;
+  if (
+    pts[0][0] !== pts[pts.length - 1][0] ||
+    pts[0][1] !== pts[pts.length - 1][1]
+  ) {
+    return [...pts, pts[0]];
+  }
+  return pts;
+};
+
+// Find the closest edge in polygon to a given point and compute perpendicular projection
+export const findClosestEdge = (
+  point: [number, number],
+  vertices: [number, number][]
+): { edgeIdx: number; projected: [number, number]; distance: number } | null => {
+  if (!vertices || vertices.length < 2) return null;
+  let minDistance = Infinity;
+  let bestEdgeIdx = 0;
+  let bestProjected: [number, number] = vertices[0];
+
+  for (let i = 0; i < vertices.length; i++) {
+    const p1 = vertices[i];
+    const p2 = vertices[(i + 1) % vertices.length];
+    const dx = p2[0] - p1[0];
+    const dy = p2[1] - p1[1];
+    const lenSq = dx * dx + dy * dy;
+    let t = 0;
+    if (lenSq > 0) {
+      t = Math.max(0, Math.min(1, ((point[0] - p1[0]) * dx + (point[1] - p1[1]) * dy) / lenSq));
+    }
+    const projX = p1[0] + t * dx;
+    const projY = p1[1] + t * dy;
+    const dist = Math.hypot(point[0] - projX, point[1] - projY);
+    if (dist < minDistance) {
+      minDistance = dist;
+      bestEdgeIdx = i;
+      bestProjected = [Math.round(projX), Math.round(projY)];
+    }
+  }
+  return { edgeIdx: bestEdgeIdx, projected: bestProjected, distance: minDistance };
+};
+
 export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = ({
   isOpen,
   onClose,
@@ -177,17 +236,24 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   const [drawPoints, setDrawPoints] = useState<[number, number][]>([]);
   const [mouseCanvasPos, setMouseCanvasPos] = useState<[number, number] | null>(null);
 
-  // Save / Dirty status
+  // Save / Dirty status (autosave on every 20 seconds)
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveStatus, setSaveStatus] = useState<"saved" | "unsaved" | "saving">("saved");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
+  // Selected vertex handle index for fine polygon point editing
+  const [selectedVertexIdx, setSelectedVertexIdx] = useState<number | null>(null);
+  const [editorNotice, setEditorNotice] = useState<string | null>(null);
+
   // History stack for Undo / Redo (Ref-backed for zero stale closure bugs)
   const historyRef = useRef<EditableSegment[][]>([]);
   const historyIdxRef = useRef<number>(-1);
   const segmentsRef = useRef<EditableSegment[]>([]);
-  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasUnsavedRef = useRef<boolean>(false);
+  const isSavingRef = useRef<boolean>(false);
+  const initialSegmentsRef = useRef<CoralSegment[]>(initialSegments);
+  const loadedImageRef = useRef<string | null>(null);
 
   const [historyIdx, setHistoryIdx] = useState<number>(-1);
   const [historyLength, setHistoryLength] = useState<number>(0);
@@ -256,87 +322,73 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     historyIdxRef.current = nextIdx;
     setHistoryIdx(nextIdx);
     setHistoryLength(nextHistory.length);
+    hasUnsavedRef.current = true;
     setHasUnsavedChanges(true);
     setSaveStatus("unsaved");
   }, []);
 
-  // Debounced Autosave (750ms after user stops making edits)
-  const triggerDebouncedAutoSave = useCallback(
-    (itemsToSave: EditableSegment[]) => {
-      if (autoSaveTimeoutRef.current) {
-        clearTimeout(autoSaveTimeoutRef.current);
-      }
-      setHasUnsavedChanges(true);
-      setSaveStatus("unsaved");
+  // Save Annotations function (Unified for manual Cmd+S and periodic 20s auto-save)
+  const executeSave = useCallback(
+    async (isManual: boolean = false) => {
+      if (isSavingRef.current) return;
+      if (!hasUnsavedRef.current && !isManual) return;
 
-      autoSaveTimeoutRef.current = setTimeout(async () => {
-        try {
-          setSaveStatus("saving");
-          const payload = itemsToSave.map((s) => ({
-            id: s.id,
-            genus: s.genus,
-            growth_form: s.growth_form,
-            condition: s.condition,
-            color_hex: s.color_hex,
-            polygon: s.polygon,
-          }));
-          const res = await saveAnnotations(imageName, payload, imageSrc);
-          setHasUnsavedChanges(false);
-          setSaveStatus("saved");
-          setLastSavedTime(new Date().toLocaleTimeString());
-          if (onSaveSuccess && res) {
-            onSaveSuccess({
-              summary: res.summary,
-              segments: res.segments,
-              health_summary: res.health_summary,
-              overlay_base64: res.overlay_base64,
-            });
-          }
-        } catch (e) {
-          console.warn("Autosave warning:", e);
-          setSaveStatus("unsaved");
+      isSavingRef.current = true;
+      setIsSaving(true);
+      setSaveStatus("saving");
+
+      try {
+        const current = segmentsRef.current;
+        const payload = current.map((s) => ({
+          id: s.id,
+          genus: s.genus,
+          growth_form: s.growth_form,
+          condition: s.condition,
+          color_hex: s.color_hex,
+          polygon: s.polygon,
+        }));
+
+        const res = await saveAnnotations(imageName, payload, imageSrc);
+        hasUnsavedRef.current = false;
+        setHasUnsavedChanges(false);
+        setSaveStatus("saved");
+        setLastSavedTime(new Date().toLocaleTimeString());
+
+        // Update background summary & overlay in AnalysisView without interrupting canvas
+        if (onSaveSuccess && res) {
+          onSaveSuccess({
+            summary: res.summary,
+            segments: res.segments,
+            health_summary: res.health_summary,
+            overlay_base64: res.overlay_base64,
+          });
         }
-      }, 750);
+      } catch (err: any) {
+        console.warn("Save warning:", err);
+        setSaveStatus("unsaved");
+        if (isManual) {
+          alert(`Save failed: ${err?.message || err}`);
+        }
+      } finally {
+        isSavingRef.current = false;
+        setIsSaving(false);
+      }
     },
     [imageName, imageSrc, onSaveSuccess]
   );
 
-  // Explicit Save Annotations Button (Ctrl + S / Cmd + S)
-  const handleExplicitSave = useCallback(async () => {
-    if (autoSaveTimeoutRef.current) {
-      clearTimeout(autoSaveTimeoutRef.current);
-    }
-    setIsSaving(true);
-    setSaveStatus("saving");
-    try {
-      const current = segmentsRef.current;
-      const payload = current.map((s) => ({
-        id: s.id,
-        genus: s.genus,
-        growth_form: s.growth_form,
-        condition: s.condition,
-        color_hex: s.color_hex,
-        polygon: s.polygon,
-      }));
-      const res = await saveAnnotations(imageName, payload, imageSrc);
-      setHasUnsavedChanges(false);
-      setSaveStatus("saved");
-      setLastSavedTime(new Date().toLocaleTimeString());
-      if (onSaveSuccess && res) {
-        onSaveSuccess({
-          summary: res.summary,
-          segments: res.segments,
-          health_summary: res.health_summary,
-          overlay_base64: res.overlay_base64,
-        });
+  // Periodic Auto-save every 20 seconds
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const interval = setInterval(() => {
+      if (hasUnsavedRef.current && !isSavingRef.current) {
+        executeSave(false);
       }
-    } catch (err: any) {
-      setSaveStatus("unsaved");
-      alert(`Save failed: ${err?.message || err}`);
-    } finally {
-      setIsSaving(false);
-    }
-  }, [imageName, imageSrc, onSaveSuccess]);
+    }, 20000); // exactly every 20 seconds
+
+    return () => clearInterval(interval);
+  }, [isOpen, executeSave]);
 
   // Undo (Ctrl+Z or Cmd+Z)
   const handleUndo = useCallback(() => {
@@ -352,9 +404,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       const restored = cloneSegments(historyRef.current[prevIdx]);
       setSegments(restored);
       segmentsRef.current = restored;
-      triggerDebouncedAutoSave(restored);
+      hasUnsavedRef.current = true;
+      setHasUnsavedChanges(true);
+      setSaveStatus("unsaved");
+      setSelectedVertexIdx(null);
     }
-  }, [toolMode, samPoints.length, samPendingPolygon, triggerDebouncedAutoSave]);
+  }, [toolMode, samPoints.length, samPendingPolygon]);
 
   // Redo (Ctrl+Y, Cmd+Shift+Z, Ctrl+Shift+Z)
   const handleRedo = useCallback(() => {
@@ -365,9 +420,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       const restored = cloneSegments(historyRef.current[nextIdx]);
       setSegments(restored);
       segmentsRef.current = restored;
-      triggerDebouncedAutoSave(restored);
+      hasUnsavedRef.current = true;
+      setHasUnsavedChanges(true);
+      setSaveStatus("unsaved");
+      setSelectedVertexIdx(null);
     }
-  }, [triggerDebouncedAutoSave]);
+  }, []);
 
   // Fit image to canvas container
   const handleFitToScreen = useCallback(() => {
@@ -411,8 +469,10 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         historyIdxRef.current = 0;
         setHistoryIdx(0);
         setHistoryLength(1);
+        hasUnsavedRef.current = false;
         setHasUnsavedChanges(false);
         setSaveStatus("saved");
+        setSelectedVertexIdx(null);
         if (cloned.length > 0) {
           setSelectedId(cloned[0].id);
         }
@@ -422,8 +482,9 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       // Fallback to initialSegments if available
     }
 
-    if (initialSegments.length > 0) {
-      const fallback: EditableSegment[] = initialSegments.map((s, idx) => ({
+    const fallbackSource = initialSegmentsRef.current || [];
+    if (fallbackSource.length > 0) {
+      const fallback: EditableSegment[] = fallbackSource.map((s, idx) => ({
         id: s.id,
         id_str: s.id_str || `#${s.id}`,
         genus: s.genus || "Coral",
@@ -443,8 +504,10 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       historyIdxRef.current = 0;
       setHistoryIdx(0);
       setHistoryLength(1);
+      hasUnsavedRef.current = false;
       setHasUnsavedChanges(false);
       setSaveStatus("saved");
+      setSelectedVertexIdx(null);
       if (cloned.length > 0) {
         setSelectedId(cloned[0].id);
       }
@@ -455,22 +518,36 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       historyIdxRef.current = 0;
       setHistoryIdx(0);
       setHistoryLength(1);
+      hasUnsavedRef.current = false;
       setHasUnsavedChanges(false);
       setSaveStatus("saved");
       setSelectedId(null);
+      setSelectedVertexIdx(null);
     }
-  }, [imageName, initialSegments]);
+  }, [imageName]);
 
   useEffect(() => {
     if (isOpen) {
-      loadPolygons();
-      setToolMode("select");
-      setSamPoints([]);
-      setSamPendingPolygon(null);
-      setDrawPoints([]);
-      handleFitToScreen();
+      if (loadedImageRef.current !== imageName) {
+        loadedImageRef.current = imageName;
+        loadPolygons();
+        setToolMode("select");
+        setSamPoints([]);
+        setSamPendingPolygon(null);
+        setDrawPoints([]);
+        setSelectedVertexIdx(null);
+        handleFitToScreen();
+      }
+      // Pre-warm SAM embeddings in background for near-instant point clicks
+      warmupSamPrompt(imageName, imageSrc);
+    } else {
+      if (hasUnsavedRef.current && !isSavingRef.current) {
+        executeSave(false);
+      }
+      loadedImageRef.current = null;
+      setSelectedVertexIdx(null);
     }
-  }, [isOpen, imageName, loadPolygons, handleFitToScreen]);
+  }, [isOpen, imageName, loadPolygons, handleFitToScreen, imageSrc, executeSave]);
 
   // Synchronize form inputs when selected coral changes
   useEffect(() => {
@@ -584,11 +661,11 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       if (res && res.polygon && res.polygon.length >= 3) {
         setSamPendingPolygon(res.polygon);
       } else {
-        alert("SAM was unable to trace a confident coral boundary. Try placing additional positive points inside the coral colony.");
+        setEditorNotice("SAM was unable to trace a confident boundary. Place additional positive (+) points inside the coral.");
       }
     } catch (err: any) {
       console.error("SAM Prompt segmentation error:", err);
-      alert(`SAM segmentation error: ${err?.message || err}`);
+      setEditorNotice(`SAM error: ${err?.message || err}`);
     } finally {
       setIsSamLoading(false);
     }
@@ -597,7 +674,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   // Commit SAM mask as coral instance
   const handleCommitSamMask = () => {
     if (!samPendingPolygon || samPendingPolygon.length < 3) return;
-    const metrics = calculatePolygonArea(samPendingPolygon);
+    const closed = ensureClosedPolygon(samPendingPolygon);
+    const metrics = calculatePolygonArea(closed);
 
     const nextId =
       segments.length > 0 ? Math.max(...segments.map((s) => s.id)) + 1 : 1;
@@ -610,7 +688,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       growth_form: formGrowthForm,
       condition: formCondition,
       color_hex: colorHex,
-      polygon: samPendingPolygon,
+      polygon: closed,
       area_px: metrics.area_px,
       area_pct: metrics.area_pct,
       visible: true,
@@ -622,14 +700,13 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     segmentsRef.current = nextList;
     pushHistory(nextList);
     setSelectedId(nextId);
+    setSelectedVertexIdx(null);
 
     // Reset SAM state
     setSamPoints([]);
     setSamPendingPolygon(null);
     setToolMode("select");
-
-    // Autosave immediately
-    triggerDebouncedAutoSave(nextList);
+    setEditorNotice(`Added coral instance #${nextId}.`);
   };
 
   // Finish manual polygon
@@ -640,7 +717,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       return;
     }
 
-    const closedPoly: [number, number][] = [...drawPoints, drawPoints[0]];
+    const closedPoly = ensureClosedPolygon(drawPoints);
     const metrics = calculatePolygonArea(closedPoly);
 
     const nextId =
@@ -666,12 +743,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     segmentsRef.current = nextList;
     pushHistory(nextList);
     setSelectedId(nextId);
+    setSelectedVertexIdx(null);
 
     setDrawPoints([]);
     setMouseCanvasPos(null);
     setToolMode("select");
-
-    triggerDebouncedAutoSave(nextList);
+    setEditorNotice(`Created coral polygon #${nextId}.`);
   };
 
   // Vertex Drag handler for Selected Polygon
@@ -680,24 +757,25 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     vertexIdx: number,
     newPos: { x: number; y: number }
   ) => {
-    const updated = segments.map((s) => {
+    const target = segmentsRef.current.find((s) => s.id === segId);
+    if (!target) return;
+
+    const uniquePts = getUniquePolygonPoints(target.polygon);
+    if (vertexIdx < 0 || vertexIdx >= uniquePts.length) return;
+
+    const boundedX = Math.max(0, Math.min(Math.round(newPos.x), imgDimensions.w));
+    const boundedY = Math.max(0, Math.min(Math.round(newPos.y), imgDimensions.h));
+
+    const updatedPts = [...uniquePts];
+    updatedPts[vertexIdx] = [boundedX, boundedY];
+    const closed = ensureClosedPolygon(updatedPts);
+    const metrics = calculatePolygonArea(closed);
+
+    const updated = segmentsRef.current.map((s) => {
       if (s.id !== segId) return s;
-      const poly = [...s.polygon];
-      const boundedX = Math.max(0, Math.min(Math.round(newPos.x), imgDimensions.w));
-      const boundedY = Math.max(0, Math.min(Math.round(newPos.y), imgDimensions.h));
-      poly[vertexIdx] = [boundedX, boundedY];
-
-      // If dragging start or end of closed loop, keep both synced
-      if (vertexIdx === 0 && poly.length > 1) {
-        poly[poly.length - 1] = [boundedX, boundedY];
-      } else if (vertexIdx === poly.length - 1 && poly.length > 1) {
-        poly[0] = [boundedX, boundedY];
-      }
-
-      const metrics = calculatePolygonArea(poly);
       return {
         ...s,
-        polygon: poly as [number, number][],
+        polygon: closed,
         area_px: metrics.area_px,
         area_pct: metrics.area_pct,
         is_human_annotated: true,
@@ -710,59 +788,80 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
   const handleVertexDragEnd = () => {
     pushHistory(segmentsRef.current);
-    triggerDebouncedAutoSave(segmentsRef.current);
   };
 
-  // Add vertex on line segment double click
+  // Add vertex on line segment / midpoint handle click
   const handleAddVertexOnEdge = (
     segId: number,
-    insertIdx: number,
+    edgeIdx: number,
     clickPt: [number, number]
   ) => {
-    const updated = segments.map((s) => {
+    const target = segmentsRef.current.find((s) => s.id === segId);
+    if (!target) return;
+
+    const uniquePts = getUniquePolygonPoints(target.polygon);
+    if (edgeIdx < 0 || edgeIdx >= uniquePts.length) return;
+
+    const boundedX = Math.max(0, Math.min(Math.round(clickPt[0]), imgDimensions.w));
+    const boundedY = Math.max(0, Math.min(Math.round(clickPt[1]), imgDimensions.h));
+
+    const updatedPts = [...uniquePts];
+    // Insert new point between edgeIdx and (edgeIdx + 1)
+    updatedPts.splice(edgeIdx + 1, 0, [boundedX, boundedY]);
+    const closed = ensureClosedPolygon(updatedPts);
+    const metrics = calculatePolygonArea(closed);
+
+    const updated = segmentsRef.current.map((s) => {
       if (s.id !== segId) return s;
-      const poly = [...s.polygon];
-      poly.splice(insertIdx + 1, 0, clickPt);
-      const metrics = calculatePolygonArea(poly);
       return {
         ...s,
-        polygon: poly as [number, number][],
+        polygon: closed,
         area_px: metrics.area_px,
         area_pct: metrics.area_pct,
         is_human_annotated: true,
       };
     });
+
     setSegments(updated);
     segmentsRef.current = updated;
     pushHistory(updated);
-    triggerDebouncedAutoSave(updated);
+    setSelectedVertexIdx(edgeIdx + 1);
+    setEditorNotice("Point added to polygon edge.");
   };
 
-  // Delete vertex (double-click vertex anchor)
+  // Delete vertex (Right-click, Alt-click, Delete key, or double-click)
   const handleDeleteVertex = (segId: number, vertexIdx: number) => {
-    const target = segments.find((s) => s.id === segId);
-    if (!target || target.polygon.length <= 4) return; // Keep at least a triangle
+    const target = segmentsRef.current.find((s) => s.id === segId);
+    if (!target) return;
 
-    const updated = segments.map((s) => {
+    const uniquePts = getUniquePolygonPoints(target.polygon);
+    if (uniquePts.length <= 3) {
+      setEditorNotice("Cannot delete point: a coral polygon must have at least 3 vertices.");
+      return;
+    }
+    if (vertexIdx < 0 || vertexIdx >= uniquePts.length) return;
+
+    const updatedPts = [...uniquePts];
+    updatedPts.splice(vertexIdx, 1);
+    const closed = ensureClosedPolygon(updatedPts);
+    const metrics = calculatePolygonArea(closed);
+
+    const updated = segmentsRef.current.map((s) => {
       if (s.id !== segId) return s;
-      const poly = [...s.polygon];
-      poly.splice(vertexIdx, 1);
-      if (poly[0] !== poly[poly.length - 1]) {
-        poly[poly.length - 1] = poly[0];
-      }
-      const metrics = calculatePolygonArea(poly);
       return {
         ...s,
-        polygon: poly as [number, number][],
+        polygon: closed,
         area_px: metrics.area_px,
         area_pct: metrics.area_pct,
         is_human_annotated: true,
       };
     });
+
     setSegments(updated);
     segmentsRef.current = updated;
     pushHistory(updated);
-    triggerDebouncedAutoSave(updated);
+    setSelectedVertexIdx(null);
+    setEditorNotice("Point removed from polygon.");
   };
 
   // Delete whole selected coral mask
@@ -773,7 +872,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     segmentsRef.current = nextList;
     pushHistory(nextList);
     setSelectedId(nextList.length > 0 ? nextList[0].id : null);
-    triggerDebouncedAutoSave(nextList);
+    setSelectedVertexIdx(null);
+    setEditorNotice("Deleted selected coral annotation.");
   };
 
   // Update genus, growth form, condition of selected coral
@@ -790,7 +890,6 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     setSegments(updated);
     segmentsRef.current = updated;
     pushHistory(updated);
-    triggerDebouncedAutoSave(updated);
   };
 
   // Toggle coral visibility
@@ -805,6 +904,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Pause all keyboard interaction while SAM model is running
+      if (isSamLoading) {
+        e.preventDefault();
+        return;
+      }
+
       const activeEl = document.activeElement as HTMLElement;
       const isInput =
         activeEl && ["INPUT", "TEXTAREA", "SELECT"].includes(activeEl.tagName);
@@ -815,7 +920,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       // Allow Ctrl+S / Cmd+S even inside input fields
       if (isModifier && key === "s") {
         e.preventDefault();
-        handleExplicitSave();
+        executeSave(true);
         return;
       }
 
@@ -881,18 +986,35 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         setSamPoints([]);
         setSamPendingPolygon(null);
         setDrawPoints([]);
+        setSelectedVertexIdx(null);
       } else if (key === "w") {
         setToolMode("sam");
         setDrawPoints([]);
+        setSelectedVertexIdx(null);
       } else if (key === "p") {
         setToolMode("polygon");
         setSamPoints([]);
         setSamPendingPolygon(null);
+        setSelectedVertexIdx(null);
       } else if (key === "delete" || key === "backspace") {
+        // If an individual vertex is selected, delete only that vertex
+        if (selectedVertexIdx !== null && selectedId !== null) {
+          e.preventDefault();
+          handleDeleteVertex(selectedId, selectedVertexIdx);
+          return;
+        }
+        // Otherwise, delete the entire selected coral annotation
         if (selectedId !== null) {
+          e.preventDefault();
           handleDeleteSelected();
+          return;
         }
       } else if (e.key === "Escape") {
+        if (selectedVertexIdx !== null) {
+          e.preventDefault();
+          setSelectedVertexIdx(null);
+          return;
+        }
         if (toolMode === "polygon" && drawPoints.length > 0) {
           setDrawPoints([]);
           setMouseCanvasPos(null);
@@ -918,15 +1040,19 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     isOpen,
+    isSamLoading,
     toolMode,
     samPoints,
     samPendingPolygon,
     drawPoints,
     selectedId,
-    handleExplicitSave,
+    selectedVertexIdx,
+    executeSave,
     handleUndo,
     handleRedo,
     handleRunSam,
+    handleDeleteVertex,
+    handleDeleteSelected,
     handleFitToScreen,
     hasPrev,
     hasNext,
@@ -971,15 +1097,21 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                 <span>Autosaving...</span>
               </div>
             ) : hasUnsavedChanges || saveStatus === "unsaved" ? (
-              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-amber-50 border-amber-200 text-amber-800">
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-amber-50 border-amber-200 text-amber-800"
+                title="Edits made — will auto-save in 20s or press Cmd+S"
+              >
                 <span className="size-2 rounded-full bg-amber-500 animate-pulse" />
-                <span>Unsaved changes</span>
+                <span>Unsaved (auto-saves in 20s)</span>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-emerald-50 border-emerald-200 text-emerald-800">
+              <div
+                className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium border bg-emerald-50 border-emerald-200 text-emerald-800"
+                title="Autosaves every 20 seconds"
+              >
                 <CheckCircle2 size={12} className="text-emerald-600" />
                 <span>
-                  {lastSavedTime ? `Saved at ${lastSavedTime}` : "Saved"}
+                  {lastSavedTime ? `Auto-saved at ${lastSavedTime}` : "Auto-save active (20s)"}
                 </span>
               </div>
             )}
@@ -1109,7 +1241,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             variant="default"
             size="sm"
             disabled={isSaving}
-            onClick={handleExplicitSave}
+            onClick={() => executeSave(true)}
             className="h-8 px-3 text-xs font-semibold gap-1.5 bg-[#0d7c85] hover:bg-[#0b6b73] text-white shadow-xs cursor-pointer"
             title="Save Annotations (Ctrl+S / Cmd+S)"
           >
@@ -1184,94 +1316,204 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
 
                   return (
                     <Group key={seg.id}>
-                      {/* Polygon fill & stroke */}
-                      <Line
-                        points={flatPoints}
-                        closed={true}
-                        fill={seg.color_hex}
-                        opacity={isSelected ? Math.min(maskOpacity + 0.2, 0.85) : maskOpacity}
-                        stroke={isSelected ? "#ffffff" : seg.color_hex}
-                        strokeWidth={isSelected ? 3 / stageScale : 2 / stageScale}
-                        shadowColor={isSelected ? "#000000" : undefined}
-                        shadowBlur={isSelected ? 6 : 0}
-                        onClick={(e) => {
-                          e.cancelBubble = true;
-                          setSelectedId(seg.id);
-                        }}
-                        onDblClick={(e) => {
-                          if (isSelected && toolMode === "select") {
+                        {/* Polygon fill & stroke */}
+                        <Line
+                          points={flatPoints}
+                          closed={true}
+                          fill={seg.color_hex}
+                          opacity={isSelected ? Math.min(maskOpacity + 0.2, 0.85) : maskOpacity}
+                          stroke={isSelected ? "#ffffff" : seg.color_hex}
+                          strokeWidth={isSelected ? 3 / stageScale : 2 / stageScale}
+                          shadowColor={isSelected ? "#000000" : undefined}
+                          shadowBlur={isSelected ? 6 : 0}
+                          onClick={(e) => {
                             e.cancelBubble = true;
+                            if (seg.id !== selectedId) {
+                              setSelectedId(seg.id);
+                              setSelectedVertexIdx(null);
+                              return;
+                            }
+                            // If already selected, check if user clicked on/near edge to insert a vertex
                             const stage = stageRef.current;
-                            if (stage) {
+                            if (stage && toolMode === "select") {
                               const transform = stage.getAbsoluteTransform().copy().invert();
                               const pointer = stage.getPointerPosition();
                               if (pointer) {
                                 const pt = transform.point(pointer);
-                                handleAddVertexOnEdge(seg.id, 0, [Math.round(pt.x), Math.round(pt.y)]);
+                                const uniquePts = getUniquePolygonPoints(seg.polygon);
+                                const closest = findClosestEdge([pt.x, pt.y], uniquePts);
+                                if (closest && closest.distance <= 12 / stageScale) {
+                                  handleAddVertexOnEdge(seg.id, closest.edgeIdx, closest.projected);
+                                }
                               }
                             }
-                          }
-                        }}
-                      />
+                          }}
+                          onDblClick={(e) => {
+                            if (isSelected && toolMode === "select") {
+                              e.cancelBubble = true;
+                              const stage = stageRef.current;
+                              if (stage) {
+                                const transform = stage.getAbsoluteTransform().copy().invert();
+                                const pointer = stage.getPointerPosition();
+                                if (pointer) {
+                                  const pt = transform.point(pointer);
+                                  const uniquePts = getUniquePolygonPoints(seg.polygon);
+                                  const closest = findClosestEdge([pt.x, pt.y], uniquePts);
+                                  if (closest) {
+                                    handleAddVertexOnEdge(seg.id, closest.edgeIdx, closest.projected);
+                                  }
+                                }
+                              }
+                            }
+                          }}
+                        />
 
-                      {/* Floating ID badge */}
-                      <Group x={cx} y={cy}>
-                        <Rect
-                          x={-24 / stageScale}
-                          y={-14 / stageScale}
-                          width={48 / stageScale}
-                          height={16 / stageScale}
-                          fill={isSelected ? "#0d7c85" : "#0f172a"}
-                          stroke={isSelected ? "#ffffff" : seg.color_hex}
-                          strokeWidth={1 / stageScale}
-                          cornerRadius={3 / stageScale}
-                        />
-                        <KonvaText
-                          x={-24 / stageScale}
-                          y={-12 / stageScale}
-                          width={48 / stageScale}
-                          text={seg.id_str}
-                          fontSize={10 / stageScale}
-                          fontStyle="bold"
-                          fontFamily="monospace"
-                          fill="#ffffff"
-                          align="center"
-                        />
+                        {/* Floating ID badge */}
+                        <Group x={cx} y={cy}>
+                          <Rect
+                            x={-24 / stageScale}
+                            y={-14 / stageScale}
+                            width={48 / stageScale}
+                            height={16 / stageScale}
+                            fill={isSelected ? "#0d7c85" : "#0f172a"}
+                            stroke={isSelected ? "#ffffff" : seg.color_hex}
+                            strokeWidth={1 / stageScale}
+                            cornerRadius={3 / stageScale}
+                          />
+                          <KonvaText
+                            x={-24 / stageScale}
+                            y={-12 / stageScale}
+                            width={48 / stageScale}
+                            text={seg.id_str}
+                            fontSize={10 / stageScale}
+                            fontStyle="bold"
+                            fontFamily="monospace"
+                            fill="#ffffff"
+                            align="center"
+                          />
+                        </Group>
+
+                        {/* Interactive Vertex Handles & Midpoint (+) Handles when Selected */}
+                        {isSelected &&
+                          toolMode === "select" &&
+                          (() => {
+                            const uniquePts = getUniquePolygonPoints(seg.polygon);
+                            return (
+                              <>
+                                {/* Midpoint (+) handles on each edge between adjacent vertices */}
+                                {uniquePts.map((pt, vIdx) => {
+                                  const nextPt = uniquePts[(vIdx + 1) % uniquePts.length];
+                                  const midX = (pt[0] + nextPt[0]) / 2;
+                                  const midY = (pt[1] + nextPt[1]) / 2;
+                                  const edgeDist = Math.hypot(nextPt[0] - pt[0], nextPt[1] - pt[1]);
+
+                                  // Only show if the segment is reasonably visible on screen
+                                  if (edgeDist * stageScale < 14) return null;
+
+                                  return (
+                                    <Group key={`mid-${vIdx}`} x={midX} y={midY}>
+                                      <Circle
+                                        radius={4.5 / stageScale}
+                                        fill="#ffffff"
+                                        stroke="#0d7c85"
+                                        strokeWidth={1.5 / stageScale}
+                                        opacity={0.85}
+                                        onClick={(e) => {
+                                          e.cancelBubble = true;
+                                          handleAddVertexOnEdge(seg.id, vIdx, [
+                                            Math.round(midX),
+                                            Math.round(midY),
+                                          ]);
+                                        }}
+                                        onMouseEnter={(e) => {
+                                          e.target.to({
+                                            scaleX: 1.35,
+                                            scaleY: 1.35,
+                                            opacity: 1,
+                                            duration: 0.1,
+                                          });
+                                          const container = stageRef.current?.container();
+                                          if (container) container.style.cursor = "copy";
+                                        }}
+                                        onMouseLeave={(e) => {
+                                          e.target.to({
+                                            scaleX: 1,
+                                            scaleY: 1,
+                                            opacity: 0.85,
+                                            duration: 0.1,
+                                          });
+                                          const container = stageRef.current?.container();
+                                          if (container) container.style.cursor = "default";
+                                        }}
+                                      />
+                                    </Group>
+                                  );
+                                })}
+
+                                {/* Main Draggable Vertex Anchors */}
+                                {uniquePts.map((pt, vIdx) => {
+                                  const isVertexActive = selectedVertexIdx === vIdx;
+                                  return (
+                                    <Circle
+                                      key={`vert-${vIdx}`}
+                                      x={pt[0]}
+                                      y={pt[1]}
+                                      radius={(isVertexActive ? 7.5 : 5.5) / stageScale}
+                                      fill={isVertexActive ? "#00e5ff" : "#ffffff"}
+                                      stroke={isVertexActive ? "#000000" : "#0f172a"}
+                                      strokeWidth={(isVertexActive ? 2.5 : 1.5) / stageScale}
+                                      shadowColor="#000000"
+                                      shadowBlur={isVertexActive ? 6 : 2}
+                                      draggable
+                                      onDragStart={() => {
+                                        setSelectedVertexIdx(vIdx);
+                                      }}
+                                      onDragMove={(e) => {
+                                        handleVertexDrag(seg.id, vIdx, {
+                                          x: e.target.x(),
+                                          y: e.target.y(),
+                                        });
+                                      }}
+                                      onDragEnd={() => {
+                                        handleVertexDragEnd();
+                                      }}
+                                      onClick={(e) => {
+                                        e.cancelBubble = true;
+                                        if (e.evt.altKey) {
+                                          handleDeleteVertex(seg.id, vIdx);
+                                        } else {
+                                          setSelectedVertexIdx(vIdx);
+                                        }
+                                      }}
+                                      onContextMenu={(e) => {
+                                        e.evt.preventDefault();
+                                        e.cancelBubble = true;
+                                        handleDeleteVertex(seg.id, vIdx);
+                                      }}
+                                      onDblClick={(e) => {
+                                        e.cancelBubble = true;
+                                        handleDeleteVertex(seg.id, vIdx);
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        const container = stageRef.current?.container();
+                                        if (container) {
+                                          container.style.cursor = e.evt.altKey ? "not-allowed" : "grab";
+                                        }
+                                      }}
+                                      onMouseLeave={() => {
+                                        const container = stageRef.current?.container();
+                                        if (container) {
+                                          container.style.cursor = "default";
+                                        }
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </>
+                            );
+                          })()}
                       </Group>
-
-                      {/* Interactive Vertex Handles when Selected */}
-                      {isSelected &&
-                        toolMode === "select" &&
-                        seg.polygon.map((pt, vIdx) => {
-                          if (vIdx === seg.polygon.length - 1) return null;
-                          return (
-                            <Circle
-                              key={vIdx}
-                              x={pt[0]}
-                              y={pt[1]}
-                              radius={5.5 / stageScale}
-                              fill="#ffffff"
-                              stroke="#0f172a"
-                              strokeWidth={1.5 / stageScale}
-                              draggable
-                              onDragMove={(e) => {
-                                handleVertexDrag(seg.id, vIdx, {
-                                  x: e.target.x(),
-                                  y: e.target.y(),
-                                });
-                              }}
-                              onDragEnd={() => {
-                                handleVertexDragEnd();
-                              }}
-                              onDblClick={(e) => {
-                                e.cancelBubble = true;
-                                handleDeleteVertex(seg.id, vIdx);
-                              }}
-                            />
-                          );
-                        })}
-                    </Group>
-                  );
+                    );
                 })}
 
                 {/* SAM Prompt Points Pins (Green + for Coral, Red - for Background) */}
@@ -1417,6 +1659,25 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             </div>
           </div>
 
+          {/* Floating Polygon Editing UX Guide Pill */}
+          {selectedId !== null && toolMode === "select" && (
+            <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-lg border border-teal-500/40 shadow-lg text-[11px] text-slate-200">
+              <div className="w-2 h-2 rounded-full bg-[#00e5ff] animate-pulse shrink-0" />
+              <span className="font-semibold text-white">Edit Coral #{selectedId}:</span>
+              <span className="text-slate-300">
+                Drag points to move • Click edge or (+) handle to add point • Right-click (or Alt+click / Del) to remove point
+              </span>
+            </div>
+          )}
+
+          {/* Floating Notice Banner */}
+          {editorNotice && (
+            <div className="absolute top-14 left-4 z-20 flex items-center gap-2 bg-slate-900/95 text-teal-200 border border-teal-500/50 px-3 py-1.5 rounded-md shadow-xl text-xs animate-in fade-in duration-150">
+              <Info size={13} className="text-teal-400 shrink-0" />
+              <span>{editorNotice}</span>
+            </div>
+          )}
+
           {/* Enhanced Multi-Point SAM Flow Top Banner */}
           {toolMode === "sam" && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-white/95 text-slate-900 backdrop-blur-md px-3.5 py-2 rounded-xl border border-slate-200 shadow-xl animate-in fade-in slide-in-from-top-2 whitespace-nowrap select-none max-w-[95vw] overflow-x-auto">
@@ -1541,7 +1802,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                       disabled={isSamLoading}
                       onClick={() => {
                         if (samPoints.length === 0) {
-                          alert("Please click on the coral to place at least one foreground (+) pin before running the SAM model.");
+                          setEditorNotice("Please click on the coral to place at least one foreground (+) pin before running the SAM model.");
                           return;
                         }
                         handleRunSam();
@@ -1947,6 +2208,41 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
           </footer>
         </aside>
       </div>
+
+      {/* 4. Fullscreen Blocking Overlay when SAM Inference is Running */}
+      {isSamLoading && (
+        <div
+          className="fixed inset-0 z-[100] bg-slate-950/70 backdrop-blur-xs flex flex-col items-center justify-center text-white select-none cursor-wait pointer-events-auto animate-in fade-in duration-200"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
+          onContextMenu={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
+        >
+          <div className="bg-slate-900/95 border border-teal-500/40 rounded-2xl p-7 shadow-2xl flex flex-col items-center max-w-sm text-center mx-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="relative mb-5 flex items-center justify-center">
+              <div className="w-16 h-16 rounded-full border-4 border-teal-500/20 border-t-teal-400 animate-spin" />
+              <Sparkles className="w-7 h-7 text-teal-300 absolute inset-0 m-auto animate-pulse" />
+            </div>
+            <h3 className="text-base font-bold text-white mb-1.5 tracking-tight">
+              Running SAM Model...
+            </h3>
+            <p className="text-xs text-slate-300 mb-4 leading-relaxed">
+              Neural foundation inference is computing segmentation mask on CPU. All interactions are paused.
+            </p>
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-teal-500/10 border border-teal-500/30 text-xs font-medium text-teal-300">
+              <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" />
+              <span>
+                Processing {samPoints.length} prompt {samPoints.length === 1 ? "point" : "points"}...
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
