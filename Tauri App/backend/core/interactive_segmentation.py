@@ -220,9 +220,15 @@ class InteractiveSAMSession:
         """
         Executes interactive point prompt segmentation.
         Points have label 1 (positive foreground) or 0 (negative background).
+        Supports multi-point prompting via iterative mask refinement conforming to
+        the ONNX decoder input shape constraints: point_coords (1, 1, 2) and point_labels (1, 1).
         """
         if not points:
             raise ValueError("No prompt points provided")
+
+        pos_points = [p for p in points if p.get("label", 1) == 1]
+        if not pos_points:
+            raise ValueError("At least one foreground (+) prompt pin is required to segment an object.")
 
         cached = self.get_or_compute_embeddings(sam_bundle, image_name, pil_image)
         orig_h, orig_w = cached["orig_h"], cached["orig_w"]
@@ -232,42 +238,51 @@ class InteractiveSAMSession:
         scale_x = new_w / orig_w
         scale_y = new_h / orig_h
 
-        coords = []
-        labels = []
-        for pt in points:
-            px = float(pt["x"]) * scale_x
-            py = float(pt["y"]) * scale_y
-            coords.append([px, py])
-            labels.append(float(pt.get("label", 1)))
+        # Sort points: positive foreground pins (label 1) first to establish the initial
+        # instance mask, followed by negative background pins (label 0) for boundary refinement.
+        sorted_points = sorted(points, key=lambda p: (0 if p.get("label", 1) == 1 else 1))
 
-        coords_arr = np.array([coords], dtype=np.float32)  # (1, N, 2)
-        labels_arr = np.array([labels], dtype=np.float32)  # (1, N)
-
-        mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
+        low_res_mask = np.zeros((1, 1, 256, 256), dtype=np.float32)
         has_mask_input = np.array([0.0], dtype=np.float32)
         orig_im_size = np.array([float(orig_h), float(orig_w)], dtype=np.float32)
 
         dec_sess = sam_bundle["decoder"]
+        final_bin_mask = None
+        final_iou = 0.0
+
         with _INFERENCE_LOCK:
-            dec_out = dec_sess.run(None, {
-                "image_embeddings": image_embeddings,
-                "point_coords": coords_arr,
-                "point_labels": labels_arr,
-                "mask_input": mask_input,
-                "has_mask_input": has_mask_input,
-                "orig_im_size": orig_im_size,
-            })
+            for pt in sorted_points:
+                px = float(pt["x"]) * scale_x
+                py = float(pt["y"]) * scale_y
+                coords_arr = np.array([[[px, py]]], dtype=np.float32)  # (1, 1, 2)
+                labels_arr = np.array([[float(pt.get("label", 1))]], dtype=np.float32)  # (1, 1)
 
-        raw_masks = dec_out[0][0]  # (K, orig_h, orig_w)
-        iou_preds = dec_out[1][0]  # (K,)
+                dec_out = dec_sess.run(None, {
+                    "image_embeddings": image_embeddings,
+                    "point_coords": coords_arr,
+                    "point_labels": labels_arr,
+                    "mask_input": low_res_mask,
+                    "has_mask_input": has_mask_input,
+                    "orig_im_size": orig_im_size,
+                })
 
-        # Pick mask with highest predicted IoU
-        best_k = int(np.argmax(iou_preds))
-        bin_mask = raw_masks[best_k] > 0.0
-        predicted_iou = float(iou_preds[best_k])
+                raw_masks = dec_out[0][0]  # (K, orig_h, orig_w) or (orig_h, orig_w)
+                iou_preds = dec_out[1][0]  # (K,) or scalar
+                if raw_masks.ndim == 3:
+                    best_k = int(np.argmax(iou_preds))
+                    raw_mask = raw_masks[best_k]
+                    final_iou = float(iou_preds[best_k])
+                    low_res_mask = dec_out[3][:, best_k:best_k+1]
+                else:
+                    raw_mask = raw_masks
+                    final_iou = float(iou_preds[0]) if hasattr(iou_preds, "__getitem__") else float(iou_preds)
+                    low_res_mask = dec_out[3]
+
+                has_mask_input = np.array([1.0], dtype=np.float32)
+                final_bin_mask = raw_mask > 0.0
 
         # Convert binary mask to clean polygon vertices
-        polygon = mask_to_polygon(bin_mask, tolerance=1.8, max_points=100)
+        polygon = mask_to_polygon(final_bin_mask, tolerance=1.8, max_points=100)
         metrics = calculate_polygon_metrics(polygon, orig_h, orig_w)
 
         return {
@@ -276,7 +291,7 @@ class InteractiveSAMSession:
             "area_pct": metrics["area_pct"],
             "bbox": metrics["bbox"],
             "centroid": metrics["centroid"],
-            "predicted_iou": round(predicted_iou, 4),
+            "predicted_iou": round(final_iou, 4),
         }
 
     def clear(self):
