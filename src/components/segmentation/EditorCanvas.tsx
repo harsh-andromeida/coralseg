@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import {
   Stage,
   Layer,
@@ -69,8 +69,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
   onVertexDragEnd,
   onDeleteVertex,
 }) => {
-  const [isSpaceDown, setIsSpaceDown] = useState<boolean>(false);
-  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const isSpaceDownRef = useRef<boolean>(false);
   const isPanningRef = useRef<boolean>(false);
   const didDragRef = useRef<boolean>(false);
   const panStartRef = useRef<{ clientX: number; clientY: number; stageX: number; stageY: number }>({
@@ -79,22 +78,28 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
     stageX: 0,
     stageY: 0,
   });
-  const panRafRef = useRef<number | null>(null);
 
-  // Track Space key for Hand Tool pan mode
+  // Track Space key for Hand Tool pan mode without causing React re-renders
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement as HTMLElement;
       const isInput = activeEl && ["INPUT", "TEXTAREA", "SELECT"].includes(activeEl.tagName);
       if (isInput) return;
       if (e.code === "Space" && !e.repeat) {
-        setIsSpaceDown(true);
+        isSpaceDownRef.current = true;
+        if (!isPanningRef.current && containerRef.current) {
+          containerRef.current.style.cursor = "grab";
+        }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === "Space") {
-        setIsSpaceDown(false);
+        isSpaceDownRef.current = false;
+        if (!isPanningRef.current && containerRef.current) {
+          containerRef.current.style.cursor =
+            toolMode === "select" ? "default" : "crosshair";
+        }
       }
     };
 
@@ -104,9 +109,9 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, []);
+  }, [toolMode, containerRef]);
 
-  // Window mousemove & mouseup listeners for buttery smooth, zero-latency canvas panning
+  // Direct, zero-latency window mousemove & mouseup listeners (1:1 lockstep with cursor)
   useEffect(() => {
     const handleWindowMouseMove = (e: MouseEvent) => {
       if (!isPanningRef.current || !stageRef.current) return;
@@ -121,25 +126,22 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
       const nextX = panStartRef.current.stageX + dx;
       const nextY = panStartRef.current.stageY + dy;
 
-      if (panRafRef.current === null) {
-        panRafRef.current = requestAnimationFrame(() => {
-          if (stageRef.current) {
-            stageRef.current.position({ x: nextX, y: nextY });
-            stageRef.current.batchDraw();
-          }
-          panRafRef.current = null;
-        });
-      }
+      const stage = stageRef.current;
+      stage.position({ x: nextX, y: nextY });
+      stage.batchDraw();
     };
 
     const handleWindowMouseUp = () => {
       if (isPanningRef.current) {
         isPanningRef.current = false;
-        setIsPanning(false);
+        document.body.style.cursor = "";
 
-        if (panRafRef.current !== null) {
-          cancelAnimationFrame(panRafRef.current);
-          panRafRef.current = null;
+        if (containerRef.current) {
+          containerRef.current.style.cursor = isSpaceDownRef.current
+            ? "grab"
+            : toolMode === "select"
+            ? "default"
+            : "crosshair";
         }
 
         if (stageRef.current) {
@@ -150,7 +152,6 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
           });
         }
 
-        // Brief delay before resetting drag flag to prevent trailing click events
         setTimeout(() => {
           didDragRef.current = false;
         }, 60);
@@ -162,12 +163,8 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
     return () => {
       window.removeEventListener("mousemove", handleWindowMouseMove);
       window.removeEventListener("mouseup", handleWindowMouseUp);
-      if (panRafRef.current !== null) {
-        cancelAnimationFrame(panRafRef.current);
-        panRafRef.current = null;
-      }
     };
-  }, [onStagePosChange, stageRef]);
+  }, [onStagePosChange, stageRef, toolMode, containerRef]);
 
   if (!htmlImage) return null;
 
@@ -175,7 +172,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
   const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
     const isMiddleClick = e.evt.button === 1;
     const isLeftClick = e.evt.button === 0;
-    const isSpacePan = isSpaceDown && isLeftClick;
+    const isSpacePan = isSpaceDownRef.current && isLeftClick;
     const isBgOrStage = e.target === stageRef.current || e.target.name() === "bg-image";
     const isCanvasPan = toolMode === "select" && isLeftClick && isBgOrStage;
 
@@ -183,7 +180,11 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
       e.evt.preventDefault();
       isPanningRef.current = true;
       didDragRef.current = false;
-      setIsPanning(true);
+
+      if (containerRef.current) {
+        containerRef.current.style.cursor = "grabbing";
+      }
+      document.body.style.cursor = "grabbing";
 
       const stage = stageRef.current;
       const currentX = stage ? stage.x() : stagePos.x;
@@ -205,13 +206,6 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
     onStageClick(e);
   };
 
-  const getCursor = () => {
-    if (isPanning) return "grabbing";
-    if (isSpaceDown) return "grab";
-    if (toolMode === "select") return "default";
-    return "crosshair";
-  };
-
   return (
     <Stage
       ref={stageRef}
@@ -226,7 +220,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
       onClick={handleSafeStageClick}
       onTap={handleSafeStageClick}
       onMouseMove={onStageMouseMove}
-      style={{ cursor: getCursor() }}
+      style={{ cursor: toolMode === "select" ? "default" : "crosshair" }}
     >
       {/* Background Reef Image - hit testing disabled for maximum render performance */}
       <Layer listening={false}>
@@ -238,11 +232,8 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
         />
       </Layer>
 
-      {/* Polygons & Annotations Layer - disabled during pan/spacebar for smooth 120fps motion */}
-      <Layer
-        listening={!isSpaceDown && !isPanning && toolMode === "select"}
-        perfectDrawEnabled={false}
-      >
+      {/* Polygons & Annotations Layer */}
+      <Layer listening={toolMode === "select"} perfectDrawEnabled={false}>
         {segments.map((seg) => {
           if (!seg.visible || seg.polygon.length < 3) return null;
           const isSelected = seg.id === selectedId;
@@ -259,11 +250,9 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
                 opacity={isSelected ? Math.min(maskOpacity + 0.2, 0.85) : maskOpacity}
                 stroke={isSelected ? "#ffffff" : seg.color_hex}
                 strokeWidth={isSelected ? 3 / stageScale : 2 / stageScale}
-                shadowColor={isSelected ? "#000000" : undefined}
-                shadowBlur={isSelected ? 6 : 0}
                 perfectDrawEnabled={false}
                 onClick={(e) => {
-                  if (didDragRef.current || isPanningRef.current || isSpaceDown) {
+                  if (didDragRef.current || isPanningRef.current || isSpaceDownRef.current) {
                     e.cancelBubble = true;
                     return;
                   }
@@ -401,8 +390,6 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
                             fill={isVertexActive ? "#00e5ff" : "#ffffff"}
                             stroke={isVertexActive ? "#000000" : "#0f172a"}
                             strokeWidth={(isVertexActive ? 2.5 : 1.5) / stageScale}
-                            shadowColor="#000000"
-                            shadowBlur={isVertexActive ? 6 : 2}
                             draggable
                             onDragStart={() => {
                               onSelectVertex(vIdx);
@@ -471,8 +458,6 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
                 fill={pinColor}
                 stroke="#ffffff"
                 strokeWidth={1.5 / stageScale}
-                shadowColor="#000000"
-                shadowBlur={4}
               />
               <KonvaText
                 x={-6 / stageScale}

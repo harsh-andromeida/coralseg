@@ -261,11 +261,11 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     return () => ro.disconnect();
   }, [isOpen]);
 
-  // Cleanup pending wheel animation frame on unmount
+  // Cleanup pending wheel debounce timeout on unmount
   useEffect(() => {
     return () => {
       if (wheelRafRef.current !== null) {
-        cancelAnimationFrame(wheelRafRef.current);
+        clearTimeout(wheelRafRef.current);
       }
     };
   }, []);
@@ -344,15 +344,21 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     stage.position(newPos);
     stage.batchDraw();
 
-    // Batched React state synchronization via rAF to prevent 120Hz React re-rendering
-    if (wheelRafRef.current !== null) {
-      cancelAnimationFrame(wheelRafRef.current);
+    // Direct DOM text update for instant 120fps indicator feedback with zero React re-render lag
+    const zoomIndicator = document.getElementById("stage-zoom-indicator");
+    if (zoomIndicator) {
+      zoomIndicator.textContent = `${Math.round(newScale * 100)}%`;
     }
-    wheelRafRef.current = requestAnimationFrame(() => {
+
+    // Debounce React state synchronization until zooming finishes to eliminate re-rendering lag
+    if (wheelRafRef.current !== null) {
+      clearTimeout(wheelRafRef.current);
+    }
+    wheelRafRef.current = window.setTimeout(() => {
       setStageScale(newScale);
       setStagePos(newPos);
       wheelRafRef.current = null;
-    });
+    }, 120);
   }, []);
 
   // Convert Stage pointer coordinates to natural image space

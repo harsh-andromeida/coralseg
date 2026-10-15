@@ -43,7 +43,10 @@ export const EditorCanvasControls: React.FC<EditorCanvasControlsProps> = ({
           <ZoomOut size={13} />
         </Button>
 
-        <span className="font-mono text-[11px] text-slate-700 px-1 min-w-[42px] text-center font-semibold">
+        <span
+          id="stage-zoom-indicator"
+          className="font-mono text-[11px] text-slate-700 px-1 min-w-[42px] text-center font-semibold"
+        >
           {Math.round(stageScale * 100)}%
         </span>
 
