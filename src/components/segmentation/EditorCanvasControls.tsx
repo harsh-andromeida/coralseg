@@ -1,5 +1,5 @@
 import React from "react";
-import { ZoomIn, ZoomOut, RotateCcw, Sliders, Info } from "lucide-react";
+import { ZoomIn, ZoomOut, RotateCcw, Sliders, Info, HelpCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ToolMode } from "./types";
 
@@ -13,6 +13,7 @@ interface EditorCanvasControlsProps {
   onZoomOut: () => void;
   onFitToScreen: () => void;
   onOpacityChange: (opacity: number) => void;
+  onOpenShortcuts?: () => void;
 }
 
 export const EditorCanvasControls: React.FC<EditorCanvasControlsProps> = ({
@@ -25,6 +26,7 @@ export const EditorCanvasControls: React.FC<EditorCanvasControlsProps> = ({
   onZoomOut,
   onFitToScreen,
   onOpacityChange,
+  onOpenShortcuts,
 }) => {
   return (
     <>
@@ -86,6 +88,23 @@ export const EditorCanvasControls: React.FC<EditorCanvasControlsProps> = ({
             title="Mask Opacity"
           />
         </div>
+
+        {/* Shortcuts & Controls Help Button */}
+        {onOpenShortcuts && (
+          <>
+            <div className="h-4 w-px bg-slate-200 mx-1" />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onOpenShortcuts}
+              className="h-7 w-7 text-slate-600 hover:text-slate-900"
+              title="Controls & Shortcuts (? / /)"
+            >
+              <HelpCircle size={13} />
+            </Button>
+          </>
+        )}
       </div>
 
       {/* Floating Polygon Editing UX Guide Pill */}

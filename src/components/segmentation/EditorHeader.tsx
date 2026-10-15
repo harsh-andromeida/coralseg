@@ -11,6 +11,7 @@ import {
   ChevronRight,
   CheckCircle2,
   Loader2,
+  HelpCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,7 @@ interface EditorHeaderProps {
   hasPrev?: boolean;
   hasNext?: boolean;
   isSaving: boolean;
+  onOpenShortcuts?: () => void;
   onSelectTool: (mode: ToolMode) => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -53,6 +55,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
   hasPrev = false,
   hasNext = false,
   isSaving,
+  onOpenShortcuts,
   onSelectTool,
   onUndo,
   onRedo,
@@ -233,6 +236,20 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
             ⌘S
           </kbd>
         </Button>
+
+        {/* Shortcuts / Controls Help (?) */}
+        {onOpenShortcuts && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onOpenShortcuts}
+            className="h-8 w-8 text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+            title="Controls & Shortcuts (? / /)"
+          >
+            <HelpCircle size={16} />
+          </Button>
+        )}
 
         {/* Close */}
         <Button

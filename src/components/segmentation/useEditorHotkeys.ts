@@ -30,6 +30,7 @@ interface UseEditorHotkeysProps {
   onClearSelectedVertex: () => void;
   onDeselectCoral: () => void;
   onFitToScreen: () => void;
+  onToggleShortcuts?: () => void;
   onNavigatePrev?: () => void;
   onNavigateNext?: () => void;
   onClose: () => void;
@@ -63,6 +64,7 @@ export function useEditorHotkeys({
   onClearSelectedVertex,
   onDeselectCoral,
   onFitToScreen,
+  onToggleShortcuts,
   onNavigatePrev,
   onNavigateNext,
   onClose,
@@ -186,6 +188,9 @@ export function useEditorHotkeys({
         }
       } else if (key === "0" || key === "f") {
         onFitToScreen();
+      } else if ((e.key === "?" || e.key === "/") && onToggleShortcuts) {
+        e.preventDefault();
+        onToggleShortcuts();
       } else if (key === "[" && hasPrev && onNavigatePrev) {
         onNavigatePrev();
       } else if (key === "]" && hasNext && onNavigateNext) {
@@ -223,6 +228,7 @@ export function useEditorHotkeys({
     onClearSelectedVertex,
     onDeselectCoral,
     onFitToScreen,
+    onToggleShortcuts,
     onNavigatePrev,
     onNavigateNext,
     onClose,

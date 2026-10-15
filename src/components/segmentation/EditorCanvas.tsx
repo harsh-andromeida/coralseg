@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Stage,
   Layer,
@@ -69,7 +69,148 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
   onVertexDragEnd,
   onDeleteVertex,
 }) => {
+  const [isSpaceDown, setIsSpaceDown] = useState<boolean>(false);
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const isPanningRef = useRef<boolean>(false);
+  const didDragRef = useRef<boolean>(false);
+  const panStartRef = useRef<{ clientX: number; clientY: number; stageX: number; stageY: number }>({
+    clientX: 0,
+    clientY: 0,
+    stageX: 0,
+    stageY: 0,
+  });
+  const panRafRef = useRef<number | null>(null);
+
+  // Track Space key for Hand Tool pan mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement as HTMLElement;
+      const isInput = activeEl && ["INPUT", "TEXTAREA", "SELECT"].includes(activeEl.tagName);
+      if (isInput) return;
+      if (e.code === "Space" && !e.repeat) {
+        setIsSpaceDown(true);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        setIsSpaceDown(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
+
+  // Window mousemove & mouseup listeners for buttery smooth, zero-latency canvas panning
+  useEffect(() => {
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      if (!isPanningRef.current || !stageRef.current) return;
+
+      const dx = e.clientX - panStartRef.current.clientX;
+      const dy = e.clientY - panStartRef.current.clientY;
+
+      if (Math.hypot(dx, dy) > 3) {
+        didDragRef.current = true;
+      }
+
+      const nextX = panStartRef.current.stageX + dx;
+      const nextY = panStartRef.current.stageY + dy;
+
+      if (panRafRef.current === null) {
+        panRafRef.current = requestAnimationFrame(() => {
+          if (stageRef.current) {
+            stageRef.current.position({ x: nextX, y: nextY });
+            stageRef.current.batchDraw();
+          }
+          panRafRef.current = null;
+        });
+      }
+    };
+
+    const handleWindowMouseUp = () => {
+      if (isPanningRef.current) {
+        isPanningRef.current = false;
+        setIsPanning(false);
+
+        if (panRafRef.current !== null) {
+          cancelAnimationFrame(panRafRef.current);
+          panRafRef.current = null;
+        }
+
+        if (stageRef.current) {
+          const finalPos = stageRef.current.position();
+          onStagePosChange({
+            x: Math.round(finalPos.x),
+            y: Math.round(finalPos.y),
+          });
+        }
+
+        // Brief delay before resetting drag flag to prevent trailing click events
+        setTimeout(() => {
+          didDragRef.current = false;
+        }, 60);
+      }
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove, { passive: true });
+    window.addEventListener("mouseup", handleWindowMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+      if (panRafRef.current !== null) {
+        cancelAnimationFrame(panRafRef.current);
+        panRafRef.current = null;
+      }
+    };
+  }, [onStagePosChange, stageRef]);
+
   if (!htmlImage) return null;
+
+  // Determine when mouse down should initiate canvas panning
+  const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    const isMiddleClick = e.evt.button === 1;
+    const isLeftClick = e.evt.button === 0;
+    const isSpacePan = isSpaceDown && isLeftClick;
+    const isBgOrStage = e.target === stageRef.current || e.target.name() === "bg-image";
+    const isCanvasPan = toolMode === "select" && isLeftClick && isBgOrStage;
+
+    if (isMiddleClick || isSpacePan || isCanvasPan) {
+      e.evt.preventDefault();
+      isPanningRef.current = true;
+      didDragRef.current = false;
+      setIsPanning(true);
+
+      const stage = stageRef.current;
+      const currentX = stage ? stage.x() : stagePos.x;
+      const currentY = stage ? stage.y() : stagePos.y;
+
+      panStartRef.current = {
+        clientX: e.evt.clientX,
+        clientY: e.evt.clientY,
+        stageX: currentX,
+        stageY: currentY,
+      };
+    }
+  };
+
+  const handleSafeStageClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    if (didDragRef.current || isPanningRef.current) {
+      return;
+    }
+    onStageClick(e);
+  };
+
+  const getCursor = () => {
+    if (isPanning) return "grabbing";
+    if (isSpaceDown) return "grab";
+    if (toolMode === "select") return "default";
+    return "crosshair";
+  };
 
   return (
     <Stage
@@ -80,20 +221,15 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
       scaleY={stageScale}
       x={stagePos.x}
       y={stagePos.y}
-      draggable={toolMode === "select" && !selectedId}
-      onDragEnd={(e) => {
-        if (e.target === stageRef.current) {
-          onStagePosChange({ x: e.target.x(), y: e.target.y() });
-        }
-      }}
+      onMouseDown={handleStageMouseDown}
       onWheel={onWheel}
-      onClick={onStageClick}
-      onTap={onStageClick}
+      onClick={handleSafeStageClick}
+      onTap={handleSafeStageClick}
       onMouseMove={onStageMouseMove}
-      style={{ cursor: toolMode === "select" ? "default" : "crosshair" }}
+      style={{ cursor: getCursor() }}
     >
-      {/* Background Reef Image */}
-      <Layer>
+      {/* Background Reef Image - hit testing disabled for maximum render performance */}
+      <Layer listening={false}>
         <KonvaImage
           name="bg-image"
           image={htmlImage}
@@ -102,8 +238,11 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
         />
       </Layer>
 
-      {/* Polygons & Annotations Layer - only interactive in select mode */}
-      <Layer listening={toolMode === "select"}>
+      {/* Polygons & Annotations Layer - disabled during pan/spacebar for smooth 120fps motion */}
+      <Layer
+        listening={!isSpaceDown && !isPanning && toolMode === "select"}
+        perfectDrawEnabled={false}
+      >
         {segments.map((seg) => {
           if (!seg.visible || seg.polygon.length < 3) return null;
           const isSelected = seg.id === selectedId;
@@ -122,7 +261,12 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
                 strokeWidth={isSelected ? 3 / stageScale : 2 / stageScale}
                 shadowColor={isSelected ? "#000000" : undefined}
                 shadowBlur={isSelected ? 6 : 0}
+                perfectDrawEnabled={false}
                 onClick={(e) => {
+                  if (didDragRef.current || isPanningRef.current || isSpaceDown) {
+                    e.cancelBubble = true;
+                    return;
+                  }
                   e.cancelBubble = true;
                   if (seg.id !== selectedId) {
                     onSelectCoral(seg.id);
@@ -355,6 +499,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
             stroke="#ffffff"
             strokeWidth={2.5 / stageScale}
             dash={[4 / stageScale, 4 / stageScale]}
+            perfectDrawEnabled={false}
           />
         )}
 
@@ -370,6 +515,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
               stroke="#00e5ff"
               strokeWidth={2 / stageScale}
               dash={[3 / stageScale, 3 / stageScale]}
+              perfectDrawEnabled={false}
             />
             {drawPoints.map((p, idx) => (
               <Circle

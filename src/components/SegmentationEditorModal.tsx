@@ -29,6 +29,7 @@ import { SamHudBanner } from "./segmentation/SamHudBanner";
 import { PolygonHudBanner } from "./segmentation/PolygonHudBanner";
 import { EditorSidebar } from "./segmentation/EditorSidebar";
 import { SamLoadingOverlay } from "./segmentation/SamLoadingOverlay";
+import { EditorShortcutsDialog } from "./segmentation/EditorShortcutsDialog";
 
 // Re-export for external consumers
 export {
@@ -83,10 +84,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   const [stageScale, setStageScale] = useState<number>(1);
   const [stagePos, setStagePos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [maskOpacity, setMaskOpacity] = useState<number>(0.45);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
 
   const stageRef = useRef<Konva.Stage | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const loadedImageRef = useRef<string | null>(null);
+  const wheelRafRef = useRef<number | null>(null);
 
   // History stack management
   const handleStateRestored = useCallback((restored: EditableSegment[]) => {
@@ -189,9 +192,83 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     const posX = (clientWidth - imgDimensions.w * fitScale) / 2;
     const posY = (clientHeight - imgDimensions.h * fitScale) / 2;
 
-    setStageScale(Number(fitScale.toFixed(3)));
-    setStagePos({ x: Math.round(posX), y: Math.round(posY) });
+    const finalScale = Number(fitScale.toFixed(3));
+    const finalPos = { x: Math.round(posX), y: Math.round(posY) };
+
+    const stage = stageRef.current;
+    if (stage) {
+      stage.scale({ x: finalScale, y: finalScale });
+      stage.position(finalPos);
+      stage.batchDraw();
+    }
+
+    setStageScale(finalScale);
+    setStagePos(finalPos);
   }, [imgDimensions]);
+
+  // Center-anchored zoom for toolbar +/- controls
+  const handleZoomCenter = useCallback((factor: number) => {
+    const stage = stageRef.current;
+    const container = containerRef.current;
+    if (!stage || !container) return;
+
+    const oldScale = stage.scaleX();
+    const newScale = Math.min(Math.max(Number((oldScale * factor).toFixed(3)), 0.2), 8.0);
+    if (Math.abs(newScale - oldScale) < 0.001) return;
+
+    const centerX = container.clientWidth / 2;
+    const centerY = container.clientHeight / 2;
+
+    const centerPointTo = {
+      x: (centerX - stage.x()) / oldScale,
+      y: (centerY - stage.y()) / oldScale,
+    };
+
+    const newPos = {
+      x: Math.round(centerX - centerPointTo.x * newScale),
+      y: Math.round(centerY - centerPointTo.y * newScale),
+    };
+
+    stage.scale({ x: newScale, y: newScale });
+    stage.position(newPos);
+    stage.batchDraw();
+
+    setStageScale(newScale);
+    setStagePos(newPos);
+  }, []);
+
+  // Auto-resize stage when container dimensions change
+  useEffect(() => {
+    if (!isOpen) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          const stage = stageRef.current;
+          if (stage && (stage.width() !== width || stage.height() !== height)) {
+            stage.width(width);
+            stage.height(height);
+            stage.batchDraw();
+          }
+        }
+      }
+    });
+
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [isOpen]);
+
+  // Cleanup pending wheel animation frame on unmount
+  useEffect(() => {
+    return () => {
+      if (wheelRafRef.current !== null) {
+        cancelAnimationFrame(wheelRafRef.current);
+      }
+    };
+  }, []);
 
   // Initialize and clean up modal image state
   useEffect(() => {
@@ -226,30 +303,57 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     }
   }, [selectedId, segments]);
 
-  // Mouse wheel zoom anchored to cursor
-  const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
+  // Mouse wheel zoom anchored to cursor with physics calibration & direct transform
+  const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
     const stage = stageRef.current;
     if (!stage) return;
 
+    // Proportional exponential factor: smooth on trackpads, responsive on scroll wheels
+    let factor = 1;
+    if (e.evt.ctrlKey) {
+      // macOS pinch gesture
+      factor = Math.exp(-e.evt.deltaY * 0.015);
+    } else if (Math.abs(e.evt.deltaY) < 40) {
+      // macOS trackpad smooth scroll
+      factor = Math.exp(-e.evt.deltaY * 0.0035);
+    } else {
+      // Discrete mouse wheel notch
+      factor = e.evt.deltaY < 0 ? 1.15 : 0.87;
+    }
+
     const oldScale = stage.scaleX();
     const pointer = stage.getPointerPosition();
     if (!pointer) return;
+
+    const newScale = Math.min(Math.max(Number((oldScale * factor).toFixed(3)), 0.2), 8.0);
+    if (Math.abs(newScale - oldScale) < 0.001) return;
 
     const mousePointTo = {
       x: (pointer.x - stage.x()) / oldScale,
       y: (pointer.y - stage.y()) / oldScale,
     };
 
-    const factor = e.evt.deltaY < 0 ? 1.15 : 0.88;
-    const newScale = Math.min(Math.max(Number((oldScale * factor).toFixed(3)), 0.2), 8.0);
+    const newPos = {
+      x: Math.round(pointer.x - mousePointTo.x * newScale),
+      y: Math.round(pointer.y - mousePointTo.y * newScale),
+    };
 
-    setStageScale(newScale);
-    setStagePos({
-      x: pointer.x - mousePointTo.x * newScale,
-      y: pointer.y - mousePointTo.y * newScale,
+    // Direct GPU/Canvas matrix update for immediate 60/120fps feedback
+    stage.scale({ x: newScale, y: newScale });
+    stage.position(newPos);
+    stage.batchDraw();
+
+    // Batched React state synchronization via rAF to prevent 120Hz React re-rendering
+    if (wheelRafRef.current !== null) {
+      cancelAnimationFrame(wheelRafRef.current);
+    }
+    wheelRafRef.current = requestAnimationFrame(() => {
+      setStageScale(newScale);
+      setStagePos(newPos);
+      wheelRafRef.current = null;
     });
-  };
+  }, []);
 
   // Convert Stage pointer coordinates to natural image space
   const getStageRelativePos = useCallback((): [number, number] | null => {
@@ -454,6 +558,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     onClearSelectedVertex: () => setSelectedVertexIdx(null),
     onDeselectCoral: () => setSelectedId(null),
     onFitToScreen: handleFitToScreen,
+    onToggleShortcuts: () => setIsShortcutsOpen((prev) => !prev),
     onNavigatePrev,
     onNavigateNext,
     onClose,
@@ -478,6 +583,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         hasPrev={hasPrev}
         hasNext={hasNext}
         isSaving={isSaving}
+        onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onSelectTool={handleSelectTool}
         onUndo={handleUndo}
         onRedo={redo}
@@ -532,16 +638,11 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             selectedId={selectedId}
             toolMode={toolMode}
             editorNotice={editorNotice}
-            onZoomIn={() => {
-              const newScale = Math.min(8.0, Number((stageScale * 1.18).toFixed(2)));
-              setStageScale(newScale);
-            }}
-            onZoomOut={() => {
-              const newScale = Math.max(0.2, Number((stageScale * 0.85).toFixed(2)));
-              setStageScale(newScale);
-            }}
+            onZoomIn={() => handleZoomCenter(1.2)}
+            onZoomOut={() => handleZoomCenter(0.83)}
             onFitToScreen={handleFitToScreen}
             onOpacityChange={setMaskOpacity}
+            onOpenShortcuts={() => setIsShortcutsOpen(true)}
           />
 
           {/* Enhanced Multi-Point SAM Flow Top Banner */}
@@ -617,6 +718,12 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       <SamLoadingOverlay
         isLoading={isSamLoading}
         pointsCount={samPoints.length}
+      />
+
+      {/* 5. Keyboard Shortcuts & Controls Reference Dialog (? / /) */}
+      <EditorShortcutsDialog
+        isOpen={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
       />
     </div>
   );
