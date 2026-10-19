@@ -416,11 +416,13 @@ export async function getSegmentPolygons(
 export async function promptSegment(
   imageName: string,
   points: PromptPoint[],
-  imageData?: string
+  imageData?: string,
+  signal?: AbortSignal
 ): Promise<PromptSegmentResponse> {
   const res = await fetch(`${API_BASE}/analysis/segment-prompt`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal,
     body: JSON.stringify({
       image_name: imageName,
       points,

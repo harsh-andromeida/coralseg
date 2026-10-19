@@ -353,6 +353,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
   // Global arrow navigation between images
   useEffect(() => {
     const handleKeyNav = (e: KeyboardEvent) => {
+      if (isEditorOpen || isExportDatasetModalOpen) return;
       if (["INPUT", "TEXTAREA", "SELECT"].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
@@ -364,7 +365,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
     };
     window.addEventListener("keydown", handleKeyNav);
     return () => window.removeEventListener("keydown", handleKeyNav);
-  }, [images.length]);
+  }, [images.length, isEditorOpen, isExportDatasetModalOpen]);
 
   return (
     <div className="flex flex-col h-screen w-full overflow-hidden bg-background">

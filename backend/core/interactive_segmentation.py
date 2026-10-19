@@ -171,6 +171,14 @@ class InteractiveSAMSession:
     def __init__(self):
         self._cache: Dict[str, Dict[str, Any]] = {}
 
+    def has_embeddings(self, image_name: str) -> bool:
+        """Returns True if embeddings for image_name are already cached."""
+        return image_name in self._cache
+
+    def set_embeddings(self, image_name: str, entry: Dict[str, Any]) -> None:
+        """Stores precomputed SAM embeddings for image_name."""
+        self._cache[image_name] = entry
+
     def get_or_compute_embeddings(
         self,
         sam_bundle: Dict[str, ort.InferenceSession],
@@ -181,34 +189,38 @@ class InteractiveSAMSession:
         if image_name in self._cache:
             return self._cache[image_name]
 
-        orig_w, orig_h = pil_image.width, pil_image.height
-        image_np = np.array(pil_image.convert("RGB"))
-
-        scale = 1024.0 / max(orig_h, orig_w)
-        new_h, new_w = int(orig_h * scale + 0.5), int(orig_w * scale + 0.5)
-
-        resized_img = Image.fromarray(image_np).resize((new_w, new_h), Image.Resampling.BILINEAR)
-        pixel_mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
-        pixel_std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
-        norm_img = (np.array(resized_img, dtype=np.float32) - pixel_mean) / pixel_std
-
-        in_enc = np.zeros((1, 3, 1024, 1024), dtype=np.float32)
-        in_enc[0, :, :new_h, :new_w] = norm_img.transpose(2, 0, 1)
-
-        sess_enc = sam_bundle["encoder"]
+        # Double-checked locking to avoid duplicate encoder runs during concurrent requests
         with _INFERENCE_LOCK:
+            if image_name in self._cache:
+                return self._cache[image_name]
+
+            orig_w, orig_h = pil_image.width, pil_image.height
+            scale = 1024.0 / max(orig_h, orig_w)
+            new_h, new_w = int(orig_h * scale + 0.5), int(orig_w * scale + 0.5)
+
+            # Direct PIL resize without redundant numpy-to-PIL conversion
+            pil_rgb = pil_image.convert("RGB")
+            resized_img = pil_rgb.resize((new_w, new_h), Image.Resampling.BILINEAR)
+            pixel_mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+            pixel_std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+            norm_img = (np.asarray(resized_img, dtype=np.float32) - pixel_mean) / pixel_std
+
+            in_enc = np.zeros((1, 3, 1024, 1024), dtype=np.float32)
+            in_enc[0, :, :new_h, :new_w] = norm_img.transpose(2, 0, 1)
+
+            sess_enc = sam_bundle["encoder"]
             image_embeddings = sess_enc.run(None, {"image": in_enc})[0]
 
-        entry = {
-            "image_embeddings": image_embeddings,
-            "orig_h": orig_h,
-            "orig_w": orig_w,
-            "new_h": new_h,
-            "new_w": new_w,
-            "scale": scale,
-        }
-        self._cache[image_name] = entry
-        return entry
+            entry = {
+                "image_embeddings": image_embeddings,
+                "orig_h": orig_h,
+                "orig_w": orig_w,
+                "new_h": new_h,
+                "new_w": new_w,
+                "scale": scale,
+            }
+            self._cache[image_name] = entry
+            return entry
 
     def prompt_segment(
         self,

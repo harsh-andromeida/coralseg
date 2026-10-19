@@ -2,7 +2,7 @@
 SAM ViT-B prompt generation, ONNX inference execution, domain filtering, and NMS.
 """
 
-from typing import Dict, List, Tuple, Any, Union
+from typing import Dict, List, Tuple, Any, Union, Optional
 import numpy as np
 from PIL import Image
 import onnxruntime as ort
@@ -84,11 +84,13 @@ def run_segmentation(
     min_mask_region_area: int = 100,
     crop_n_layers: int = 0,
     box_nms_thresh: float = 0.70,
+    image_name: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Executes CoralSCOP SAM dense instance segmentation using pure ONNX Runtime & NumPy.
     Implements standard ResizeLongestSide aspect-ratio preservation and prompt scaling.
     Applies CoralSCOP category classification head to reject background, fish, and open water.
+    Shares image embeddings with SAM_SESSION for instant manual annotation response.
     """
     from core.visualization import generate_distinct_colors
 
@@ -111,16 +113,42 @@ def run_segmentation(
     scale = 1024.0 / max(orig_h, orig_w)
     new_h, new_w = int(orig_h * scale + 0.5), int(orig_w * scale + 0.5)
 
-    resized_img = Image.fromarray(image_np).resize((new_w, new_h), Image.Resampling.BILINEAR)
-    pixel_mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
-    pixel_std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
-    norm_img = (np.array(resized_img, dtype=np.float32) - pixel_mean) / pixel_std
+    image_embeddings = None
+    if image_name:
+        try:
+            from core.interactive_segmentation import SAM_SESSION
+            if SAM_SESSION.has_embeddings(image_name):
+                cached = SAM_SESSION._cache.get(image_name)
+                if cached:
+                    image_embeddings = cached["image_embeddings"]
+        except Exception:
+            pass
 
-    in_enc = np.zeros((1, 3, 1024, 1024), dtype=np.float32)
-    in_enc[0, :, :new_h, :new_w] = norm_img.transpose(2, 0, 1)
+    if image_embeddings is None:
+        resized_img = Image.fromarray(image_np).resize((new_w, new_h), Image.Resampling.BILINEAR)
+        pixel_mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+        pixel_std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+        norm_img = (np.array(resized_img, dtype=np.float32) - pixel_mean) / pixel_std
 
-    with _INFERENCE_LOCK:
-        image_embeddings = sess_enc.run(None, {"image": in_enc})[0]  # (1, 256, 64, 64)
+        in_enc = np.zeros((1, 3, 1024, 1024), dtype=np.float32)
+        in_enc[0, :, :new_h, :new_w] = norm_img.transpose(2, 0, 1)
+
+        with _INFERENCE_LOCK:
+            image_embeddings = sess_enc.run(None, {"image": in_enc})[0]  # (1, 256, 64, 64)
+
+        if image_name:
+            try:
+                from core.interactive_segmentation import SAM_SESSION
+                SAM_SESSION.set_embeddings(image_name, {
+                    "image_embeddings": image_embeddings,
+                    "orig_h": orig_h,
+                    "orig_w": orig_w,
+                    "new_h": new_h,
+                    "new_w": new_w,
+                    "scale": scale,
+                })
+            except Exception:
+                pass
 
     # 2. Generate regular grid of prompt points in original coordinates
     offset = 1.0 / (2 * points_per_side)

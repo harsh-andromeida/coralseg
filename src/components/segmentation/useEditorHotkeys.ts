@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ToolMode } from "./types";
 import { PromptPoint } from "../../types";
 
@@ -34,6 +34,7 @@ interface UseEditorHotkeysProps {
   onNavigatePrev?: () => void;
   onNavigateNext?: () => void;
   onClose: () => void;
+  onCancelSam?: () => void;
 }
 
 export function useEditorHotkeys({
@@ -68,14 +69,25 @@ export function useEditorHotkeys({
   onNavigatePrev,
   onNavigateNext,
   onClose,
+  onCancelSam,
 }: UseEditorHotkeysProps) {
+  const isSamLoadingRef = useRef(isSamLoading);
+  useEffect(() => {
+    isSamLoadingRef.current = isSamLoading;
+  }, [isSamLoading]);
+
   useEffect(() => {
     if (!isOpen) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Pause all keyboard interaction while SAM model is running
-      if (isSamLoading) {
+      // Pause all keyboard interaction while SAM model is running (allow Escape to cancel)
+      if (isSamLoadingRef.current || isSamLoading) {
         e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        if (e.key === "Escape" && onCancelSam) {
+          onCancelSam();
+        }
         return;
       }
 
@@ -198,8 +210,20 @@ export function useEditorHotkeys({
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    const handleBlock = (e: KeyboardEvent) => {
+      if (isSamLoadingRef.current || isSamLoading) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleBlock, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleBlock, true);
+    };
   }, [
     isOpen,
     isSamLoading,
@@ -232,5 +256,6 @@ export function useEditorHotkeys({
     onNavigatePrev,
     onNavigateNext,
     onClose,
+    onCancelSam,
   ]);
 }

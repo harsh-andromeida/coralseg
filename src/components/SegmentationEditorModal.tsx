@@ -90,6 +90,8 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
   const containerRef = useRef<HTMLDivElement | null>(null);
   const loadedImageRef = useRef<string | null>(null);
   const wheelRafRef = useRef<number | null>(null);
+  const samAbortControllerRef = useRef<AbortController | null>(null);
+  const samTimeoutRef = useRef<number | null>(null);
 
   // History stack management
   const handleStateRestored = useCallback((restored: EditableSegment[]) => {
@@ -261,11 +263,17 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     return () => ro.disconnect();
   }, [isOpen]);
 
-  // Cleanup pending wheel debounce timeout on unmount
+  // Cleanup pending wheel and SAM timers on unmount
   useEffect(() => {
     return () => {
       if (wheelRafRef.current !== null) {
         clearTimeout(wheelRafRef.current);
+      }
+      if (samTimeoutRef.current !== null) {
+        window.clearTimeout(samTimeoutRef.current);
+      }
+      if (samAbortControllerRef.current) {
+        samAbortControllerRef.current.abort("unmount");
       }
     };
   }, []);
@@ -281,9 +289,19 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
         setSamPendingPolygon(null);
         setDrawPoints([]);
         handleFitToScreen();
+        warmupSamPrompt(imageName, imageSrc);
       }
-      warmupSamPrompt(imageName, imageSrc);
     } else {
+      if (samTimeoutRef.current !== null) {
+        window.clearTimeout(samTimeoutRef.current);
+        samTimeoutRef.current = null;
+      }
+      if (samAbortControllerRef.current) {
+        samAbortControllerRef.current.abort("close");
+        samAbortControllerRef.current = null;
+      }
+      setIsSamLoading(false);
+
       if (hasUnsavedRef.current && !isSavingRef.current) {
         executeSave(false);
       }
@@ -464,21 +482,70 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     }
   };
 
-  // Run SAM Model on currently placed points
+  // Cancel running SAM segmentation
+  const handleCancelSam = useCallback(() => {
+    if (samTimeoutRef.current !== null) {
+      window.clearTimeout(samTimeoutRef.current);
+      samTimeoutRef.current = null;
+    }
+    if (samAbortControllerRef.current) {
+      samAbortControllerRef.current.abort("user_cancel");
+      samAbortControllerRef.current = null;
+    }
+    setIsSamLoading(false);
+    setEditorNotice("SAM boundary detection cancelled.");
+  }, [setEditorNotice]);
+
+  // Run SAM Model on currently placed points with timeout and abort controller
   const handleRunSam = useCallback(async () => {
     if (samPoints.length === 0 || isSamLoading) return;
+
+    if (samTimeoutRef.current !== null) {
+      window.clearTimeout(samTimeoutRef.current);
+      samTimeoutRef.current = null;
+    }
+    if (samAbortControllerRef.current) {
+      samAbortControllerRef.current.abort("restart");
+    }
+
+    const controller = new AbortController();
+    samAbortControllerRef.current = controller;
     setIsSamLoading(true);
+
+    // 20-second timeout guard
+    samTimeoutRef.current = window.setTimeout(() => {
+      if (samAbortControllerRef.current === controller) {
+        controller.abort("timeout");
+      }
+    }, 20000);
+
     try {
-      const res = await promptSegment(imageName, samPoints, imageSrc);
+      const res = await promptSegment(imageName, samPoints, imageSrc, controller.signal);
       if (res && res.polygon && res.polygon.length >= 3) {
         setSamPendingPolygon(res.polygon);
       } else {
         setEditorNotice("SAM was unable to trace a confident boundary. Place additional positive (+) points inside the coral.");
       }
     } catch (err: any) {
-      console.error("SAM Prompt segmentation error:", err);
-      setEditorNotice(`SAM error: ${err?.message || err}`);
+      if (controller.signal.aborted || err?.name === "AbortError") {
+        const reason = (controller.signal as any).reason;
+        if (reason === "timeout") {
+          setEditorNotice("SAM boundary detection timed out (20s). Please retry with fewer points or draw manually.");
+        } else {
+          setEditorNotice("SAM boundary detection cancelled.");
+        }
+      } else {
+        console.error("SAM Prompt segmentation error:", err);
+        setEditorNotice(`SAM error: ${err?.message || err}`);
+      }
     } finally {
+      if (samTimeoutRef.current !== null) {
+        window.clearTimeout(samTimeoutRef.current);
+        samTimeoutRef.current = null;
+      }
+      if (samAbortControllerRef.current === controller) {
+        samAbortControllerRef.current = null;
+      }
       setIsSamLoading(false);
     }
   }, [imageName, samPoints, isSamLoading, imageSrc, setEditorNotice]);
@@ -568,6 +635,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
     onNavigatePrev,
     onNavigateNext,
     onClose,
+    onCancelSam: handleCancelSam,
   });
 
   if (!isOpen) return null;
@@ -635,6 +703,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
             onVertexDrag={handleVertexDrag}
             onVertexDragEnd={handleVertexDragEnd}
             onDeleteVertex={handleDeleteVertex}
+            isSamLoading={isSamLoading}
           />
 
           {/* Floating Canvas Controls (Zoom, Fit, Opacity) & Notices */}
@@ -682,6 +751,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
                   "Please click on the coral to place at least one foreground (+) pin before running the SAM model."
                 )
               }
+              onCancelSam={handleCancelSam}
             />
           )}
 
@@ -724,6 +794,7 @@ export const SegmentationEditorModal: React.FC<SegmentationEditorModalProps> = (
       <SamLoadingOverlay
         isLoading={isSamLoading}
         pointsCount={samPoints.length}
+        onCancel={handleCancelSam}
       />
 
       {/* 5. Keyboard Shortcuts & Controls Reference Dialog (? / /) */}

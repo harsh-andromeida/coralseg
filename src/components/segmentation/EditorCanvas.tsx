@@ -40,6 +40,7 @@ interface EditorCanvasProps {
   onVertexDrag: (segId: number, vIdx: number, pos: { x: number; y: number }) => void;
   onVertexDragEnd: () => void;
   onDeleteVertex: (segId: number, vIdx: number) => void;
+  isSamLoading?: boolean;
 }
 
 export const EditorCanvas: React.FC<EditorCanvasProps> = ({
@@ -68,6 +69,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
   onVertexDrag,
   onVertexDragEnd,
   onDeleteVertex,
+  isSamLoading = false,
 }) => {
   const isSpaceDownRef = useRef<boolean>(false);
   const isPanningRef = useRef<boolean>(false);
@@ -82,6 +84,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
   // Track Space key for Hand Tool pan mode without causing React re-renders
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isSamLoading) return;
       const activeEl = document.activeElement as HTMLElement;
       const isInput = activeEl && ["INPUT", "TEXTAREA", "SELECT"].includes(activeEl.tagName);
       if (isInput) return;
@@ -109,7 +112,7 @@ export const EditorCanvas: React.FC<EditorCanvasProps> = ({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [toolMode, containerRef]);
+  }, [toolMode, containerRef, isSamLoading]);
 
   // Direct, zero-latency window mousemove & mouseup listeners (1:1 lockstep with cursor)
   useEffect(() => {

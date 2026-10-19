@@ -342,6 +342,7 @@ class BatchProcessor:
                 pred_iou_thresh=iou_t,
                 stability_score_thresh=stab_t,
                 min_mask_region_area=0,
+                image_name=img_name,
             )
             self._base_seg_cache[base_cache_key] = masks_info
 

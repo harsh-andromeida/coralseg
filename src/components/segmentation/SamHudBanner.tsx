@@ -18,6 +18,7 @@ interface SamHudBannerProps {
   onClearSamPoints: () => void;
   onExitSam: () => void;
   onRequirePositivePinNotice: () => void;
+  onCancelSam?: () => void;
 }
 
 export const SamHudBanner: React.FC<SamHudBannerProps> = ({
@@ -34,6 +35,7 @@ export const SamHudBanner: React.FC<SamHudBannerProps> = ({
   onClearSamPoints,
   onExitSam,
   onRequirePositivePinNotice,
+  onCancelSam,
 }) => {
   return (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-white/95 text-slate-900 backdrop-blur-md px-3.5 py-2 rounded-xl border border-slate-200 shadow-xl animate-in fade-in slide-in-from-top-2 whitespace-nowrap select-none max-w-[95vw] overflow-x-auto">
@@ -175,7 +177,7 @@ export const SamHudBanner: React.FC<SamHudBannerProps> = ({
               {isSamLoading ? (
                 <>
                   <Loader2 size={13} className="animate-spin" />
-                  <span>Computing...</span>
+                  <span>Tracing...</span>
                 </>
               ) : (
                 <>
@@ -185,6 +187,20 @@ export const SamHudBanner: React.FC<SamHudBannerProps> = ({
                 </>
               )}
             </Button>
+
+            {isSamLoading && onCancelSam && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onCancelSam}
+                className="h-7 px-2 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 cursor-pointer gap-1"
+                title="Cancel segmentation (Esc)"
+              >
+                <X size={12} />
+                <span>Cancel</span>
+              </Button>
+            )}
 
             {samPoints.length > 0 && (
               <Button

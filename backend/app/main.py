@@ -433,6 +433,7 @@ def segment_image(req: SegmentRequest):
                     pred_iou_thresh=req.iou_thresh,
                     stability_score_thresh=req.stability_thresh,
                     min_mask_region_area=0,
+                    image_name=img_name,
                 )
                 _BASE_SEG_CACHE[cache_key] = masks_info
 
@@ -690,6 +691,37 @@ def get_image_polygons(image_name: str):
     }
 
 
+def _resolve_session_image(img_name: str, image_data: Optional[str] = None) -> Optional[Image.Image]:
+    """Helper to retrieve or decode an image into _IMAGE_STORE."""
+    if img_name in _IMAGE_STORE:
+        return _IMAGE_STORE[img_name]
+
+    if image_data:
+        data_str = image_data
+        if "," in data_str:
+            data_str = data_str.split(",", 1)[1]
+        try:
+            raw_bytes = base64.b64decode(data_str)
+            pil_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+            _IMAGE_STORE[img_name] = pil_img
+            return pil_img
+        except Exception:
+            pass
+
+    # Check demo images and unlabeled samples
+    dirs = _resolve_demo_dirs()
+    for sdir in dirs:
+        target = os.path.join(sdir, img_name)
+        if os.path.isfile(target):
+            try:
+                pil_img = Image.open(target).convert("RGB")
+                _IMAGE_STORE[img_name] = pil_img
+                return pil_img
+            except Exception:
+                pass
+    return None
+
+
 @app.post("/api/analysis/segment-prompt")
 def run_interactive_prompt_segmentation(req: SegmentPromptRequest):
     """
@@ -705,23 +737,10 @@ def run_interactive_prompt_segmentation(req: SegmentPromptRequest):
         )
 
     img_name = req.image_name
-    if img_name not in _IMAGE_STORE:
-        if req.image_data and req.image_data.startswith("data:"):
-            header, b64_str = req.image_data.split(",", 1)
-            raw_bytes = base64.b64decode(b64_str)
-            _IMAGE_STORE[img_name] = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-        else:
-            # Check demo images
-            dirs = _resolve_demo_dirs()
-            for sdir in dirs:
-                target = os.path.join(sdir, img_name)
-                if os.path.isfile(target):
-                    _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
-                    break
-        if img_name not in _IMAGE_STORE:
-            raise HTTPException(status_code=404, detail=f"Image '{img_name}' not loaded in session")
+    pil_img = _resolve_session_image(img_name, req.image_data)
+    if pil_img is None:
+        raise HTTPException(status_code=404, detail=f"Image '{img_name}' not loaded in session")
 
-    pil_img = _IMAGE_STORE[img_name]
     sam_bundle = load_coralscop_model(device=_ACTIVE_DEVICE_PREF)
 
     pts = [{"x": p.x, "y": p.y, "label": p.label} for p in req.points]
@@ -753,23 +772,10 @@ def warmup_interactive_sam(req: SegmentPromptWarmupRequest):
         return {"status": "skipped", "reason": "models_not_downloaded"}
 
     img_name = req.image_name
-    if img_name not in _IMAGE_STORE:
-        if req.image_data and req.image_data.startswith("data:"):
-            header, b64_str = req.image_data.split(",", 1)
-            raw_bytes = base64.b64decode(b64_str)
-            _IMAGE_STORE[img_name] = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-        else:
-            dirs = _resolve_demo_dirs()
-            for sdir in dirs:
-                target = os.path.join(sdir, img_name)
-                if os.path.isfile(target):
-                    _IMAGE_STORE[img_name] = Image.open(target).convert("RGB")
-                    break
-
-    if img_name not in _IMAGE_STORE:
+    pil_img = _resolve_session_image(img_name, req.image_data)
+    if pil_img is None:
         return {"status": "skipped", "reason": "image_not_found"}
 
-    pil_img = _IMAGE_STORE[img_name]
     sam_bundle = load_coralscop_model(device=_ACTIVE_DEVICE_PREF)
     SAM_SESSION.get_or_compute_embeddings(sam_bundle, img_name, pil_img)
     return {"status": "warmed_up", "image_name": img_name}
