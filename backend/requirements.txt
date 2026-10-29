@@ -12,6 +12,9 @@ pycocotools>=2.0.6
 pandas>=2.0.0
 huggingface_hub>=0.20.0
 
+# --- Video Object Tracking & Foundation Segmentation ---
+sam2>=1.1.0
+
 # --- Visualization & Utilities ---
 matplotlib>=3.7.0
 tqdm>=4.66.0

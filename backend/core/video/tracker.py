@@ -32,10 +32,12 @@ class CoralTrack:
         frame_idx: int,
         taxonomy: Optional[Dict[str, Any]] = None,
         bleaching: Optional[Dict[str, Any]] = None,
+        mask: Optional[np.ndarray] = None,
     ):
         self.track_id = int(track_id)
         self.bbox = list(bbox)  # [x, y, w, h]
         self.polygon = list(polygon)  # [[x, y], ...]
+        self.mask = mask
         self.area_px = int(area_px)
         self.area_pct = float(area_pct)
         self.predicted_iou = float(predicted_iou)
@@ -67,6 +69,7 @@ class CoralTrack:
         self.hits = 1
         self.misses = 0
         self.active = True
+        self.history = [(list(bbox), list(polygon))]
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes track state for API responses and video overlay rendering."""
@@ -283,6 +286,7 @@ class BenthicColonyTracker:
             # Update geometry from fresh keyframe segmentation
             track.bbox = det.get("bbox", track.bbox)
             track.polygon = det.get("polygon", track.polygon)
+            track.mask = det.get("segmentation", det.get("mask", track.mask))
             track.area_px = det.get("area_px", track.area_px)
             track.area_pct = det.get("area_pct", track.area_pct)
             track.predicted_iou = det.get("predicted_iou", track.predicted_iou)
@@ -336,6 +340,7 @@ class BenthicColonyTracker:
             frame_idx=frame_idx,
             taxonomy=det.get("taxonomy"),
             bleaching=det.get("bleaching"),
+            mask=det.get("segmentation", det.get("mask")),
         )
         self._tracks[track_id] = track
         return track

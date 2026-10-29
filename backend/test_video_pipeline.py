@@ -185,12 +185,13 @@ def test_video_api_endpoints():
         assert resp.status_code == 200, f"Video upload failed: {resp.text}"
         upload_data = resp.json()
         assert upload_data["status"] == "success"
-        assert upload_data["metadata"]["total_frames"] == 5
-        print("  POST /api/video/upload verified.")
+        assert upload_data["metadata"]["fps"] == 25.0
+        assert upload_data["metadata"]["total_frames"] > 0
+        print("  POST /api/video/upload verified (standardized to 25 FPS).")
 
         # 3. Process video
         resp = client.post("/api/video/process", json={
-            "video_name": "test_synthetic.mp4",
+            "video_name": upload_data["video_name"],
             "overlap_threshold": 0.75,
             "min_stride": 2,
             "max_stride": 5,
@@ -203,8 +204,8 @@ def test_video_api_endpoints():
         # 4. Status polling (wait for completion)
         import time
         completed = False
-        for _ in range(50):
-            time.sleep(0.3)
+        for _ in range(120):
+            time.sleep(0.4)
             s_resp = client.get(f"/api/video/status/{job_id}")
             assert s_resp.status_code == 200
             s_data = s_resp.json()
@@ -214,8 +215,8 @@ def test_video_api_endpoints():
 
         assert completed is True, f"Job did not finish in time: {s_data}"
         assert s_data["state"] == "completed", f"Job failed: {s_data.get('error')}"
-        assert s_data["current_frame"] == 5
-        print(f"  GET /api/video/status verified: completed {s_data['current_frame']} frames.")
+        assert s_data["current_frame"] == s_data["total_frames"]
+        print(f"  GET /api/video/status verified: completed {s_data['current_frame']} frames at 25 FPS.")
 
         # 5. Frame annotations
         f_resp = client.get(f"/api/video/frame/{job_id}/0")
@@ -249,6 +250,7 @@ def test_real_video_sample_pipeline():
     meta = sample_data["metadata"]
     print(f"  Loaded sample video '{video_name}': {meta['width']}x{meta['height']} @ {meta['fps']}fps, {meta['total_frames']} frames")
     assert meta["width"] == 972 and meta["height"] == 720
+    assert meta["fps"] == 25.0
     assert meta["total_frames"] > 0
 
     # 2. Launch processing job
@@ -265,11 +267,13 @@ def test_real_video_sample_pipeline():
 
     # 3. Poll until completion
     import time
-    for _ in range(120):
-        time.sleep(0.5)
+    for poll_idx in range(600):
+        time.sleep(1.0)
         s_resp = client.get(f"/api/video/status/{job_id}")
         assert s_resp.status_code == 200
         s_data = s_resp.json()
+        if poll_idx % 15 == 0:
+            print(f"    Progress: frame {s_data.get('current_frame', 0)}/{s_data.get('total_frames', 0)} ({s_data.get('progress_pct', 0.0):.1f}%) | state={s_data.get('state')}")
         if s_data["state"] in ("completed", "error"):
             break
 

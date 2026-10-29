@@ -62,6 +62,7 @@ from core.video import (
     export_transect_csv,
     export_coco_video,
 )
+from core.video.preprocessor import standardize_video_to_25fps
 
 from app.schemas import (
     DevicePreferenceRequest,
@@ -1459,36 +1460,54 @@ async def upload_video(file: UploadFile = File(...)):
         content = await file.read()
         buffer.write(content)
 
+    base, _ = os.path.splitext(clean_name)
+    std_name = f"{base}_25fps.mp4"
+    std_path = os.path.join(VIDEO_STORAGE_DIR, std_name)
+
     try:
-        metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+        metadata = standardize_video_to_25fps(dest_path, std_path)
+        final_name = std_name
+        final_path = std_path
     except Exception as e:
-        if os.path.exists(dest_path):
-            os.remove(dest_path)
-        raise HTTPException(status_code=400, detail=f"Failed to probe video: {str(e)}")
+        try:
+            metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+            final_name = clean_name
+            final_path = dest_path
+        except Exception as probe_err:
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+            raise HTTPException(status_code=400, detail=f"Failed to probe video: {str(probe_err)}")
 
     return {
         "status": "success",
-        "video_name": clean_name,
-        "video_path": dest_path,
+        "video_name": final_name,
+        "video_path": final_path,
         "metadata": metadata,
     }
 
 
 @app.get("/api/video/sample")
 def get_sample_video():
-    """Loads a pre-packaged underwater coral reef transect video."""
+    """Loads a pre-packaged underwater coral reef transect video standardized to 25 FPS."""
     sample_src = os.path.join(BACKEND_DIR.parent, "demo_images", "sample_reef_transect.mp4")
     if not os.path.isfile(sample_src):
         sample_src = os.path.join(BACKEND_DIR, "demo_images", "sample_reef_transect.mp4")
     if not os.path.isfile(sample_src):
         raise HTTPException(status_code=404, detail="Sample video not found on disk.")
 
-    clean_name = "sample_reef_transect.mp4"
+    clean_name = "sample_reef_transect_25fps.mp4"
     dest_path = os.path.join(VIDEO_STORAGE_DIR, clean_name)
-    import shutil
-    shutil.copyfile(sample_src, dest_path)
 
-    metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+    if not os.path.isfile(dest_path):
+        try:
+            metadata = standardize_video_to_25fps(sample_src, dest_path)
+        except Exception:
+            import shutil
+            shutil.copyfile(sample_src, dest_path)
+            metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+    else:
+        metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+
     return {
         "status": "success",
         "video_name": clean_name,
@@ -1539,6 +1558,7 @@ def process_video(req: VideoProcessRequest):
                 "iou_match_threshold": req.iou_match_threshold,
                 "pred_iou_thresh": req.pred_iou_thresh,
                 "stability_thresh": req.stability_thresh,
+                "device_pref": _ACTIVE_DEVICE_PREF,
             },
         )
         job = _VIDEO_PROCESSOR.get_job(job_id)
