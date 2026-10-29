@@ -190,4 +190,88 @@ export interface ExportToFolderResponse {
 
 export type ExportFolderResponse = ExportToFolderResponse;
 
+// --- Video Processing & Benthic Tracking Interfaces ---
+
+export interface VideoMetadata {
+  width: number;
+  height: number;
+  fps: number;
+  total_frames: number;
+  duration_sec: number;
+  filename: string;
+  file_size: number;
+}
+
+export interface VideoTrackItem {
+  track_id: number;
+  id: number;
+  id_str: string;
+  bbox: [number, number, number, number];
+  polygon: [number, number][];
+  centroid?: [number, number];
+  area_px: number;
+  area_pct: number;
+  predicted_iou: number;
+  genus: string;
+  primary_label: string;
+  growth_form: string;
+  taxon_conf: number;
+  condition: "Healthy" | "Bleached";
+  condition_conf: number;
+  is_bleached: boolean;
+  bleached_prob?: number;
+  color_rgb?: [number, number, number];
+  color_hex: string;
+  first_seen_frame: number;
+  last_seen_frame: number;
+  hits?: number;
+  active?: boolean;
+}
+
+export interface TransectMetricPoint {
+  frame_index: number;
+  timestamp_sec: number;
+  active_corals_count: number;
+  cumulative_unique_corals: number;
+  bleached_corals_count: number;
+  healthy_corals_count: number;
+  bleaching_prevalence_pct: number;
+  dominant_genus: string;
+  is_keyframe: boolean;
+  camera_motion_dx: number;
+  camera_motion_dy: number;
+}
+
+export interface VideoJobStatus {
+  job_id: string;
+  filename: string;
+  state: "idle" | "processing" | "paused" | "completed" | "cancelled" | "error";
+  current_frame: number;
+  total_frames: number;
+  progress_pct: number;
+  fps_realtime: number;
+  active_corals_count: number;
+  total_unique_corals: number;
+  bleaching_prevalence_pct: number;
+  keyframes_count: number;
+  metadata: VideoMetadata;
+  error?: string | null;
+  time_series?: TransectMetricPoint[];
+  export_paths?: {
+    annotated_mp4?: string | null;
+    transect_csv?: string | null;
+    coco_json?: string | null;
+  };
+}
+
+export interface UploadedVideoItem {
+  file: File;
+  video_name: string;
+  video_path?: string;
+  metadata: VideoMetadata;
+  previewUrl: string;
+  job_id?: string;
+}
+
+
 

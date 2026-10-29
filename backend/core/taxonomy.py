@@ -8,7 +8,13 @@ import numpy as np
 from PIL import Image
 import onnxruntime as ort
 
-from core.models import _INFERENCE_LOCK, load_bioclip_model, load_bleaching_model
+from core.models import _INFERENCE_LOCK, _BIOCLIP_LOCK, _BLEACHING_LOCK, load_bioclip_model, load_bleaching_model
+
+try:
+    import cv2
+    _HAS_CV2 = True
+except ImportError:
+    _HAS_CV2 = False
 
 
 GENUS_COLORS: Dict[str, Tuple[int, int, int]] = {
@@ -89,14 +95,19 @@ def classify_coral_taxonomy(
 
     batch_tensors = []
     for img in images:
-        resized = img.convert("RGB").resize((224, 224), Image.Resampling.BICUBIC)
-        arr = np.array(resized, dtype=np.float32) / 255.0
+        if _HAS_CV2:
+            img_arr = np.array(img.convert("RGB") if isinstance(img, Image.Image) else img)
+            resized = cv2.resize(img_arr, (224, 224), interpolation=cv2.INTER_CUBIC)
+            arr = resized.astype(np.float32) / 255.0
+        else:
+            resized = img.convert("RGB").resize((224, 224), Image.Resampling.BICUBIC)
+            arr = np.array(resized, dtype=np.float32) / 255.0
         norm = (arr - clip_mean) / clip_std
         batch_tensors.append(norm.transpose(2, 0, 1))
 
     batch_np = np.stack(batch_tensors, axis=0).astype(np.float32)
 
-    with _INFERENCE_LOCK:
+    with _BIOCLIP_LOCK:
         image_features = session.run(None, {"image": batch_np})[0]  # (B, 512)
 
     # Normalization
@@ -158,13 +169,18 @@ def detect_coral_bleaching(
 
     batch_tensors = []
     for img in images:
-        resized = img.convert("RGB").resize((224, 224), Image.Resampling.BILINEAR)
-        arr = (np.array(resized, dtype=np.float32) / 255.0).transpose(2, 0, 1)
+        if _HAS_CV2:
+            img_arr = np.array(img.convert("RGB") if isinstance(img, Image.Image) else img)
+            resized = cv2.resize(img_arr, (224, 224), interpolation=cv2.INTER_LINEAR)
+            arr = (resized.astype(np.float32) / 255.0).transpose(2, 0, 1)
+        else:
+            resized = img.convert("RGB").resize((224, 224), Image.Resampling.BILINEAR)
+            arr = (np.array(resized, dtype=np.float32) / 255.0).transpose(2, 0, 1)
         batch_tensors.append(arr)
 
     batch_np = np.stack(batch_tensors, axis=0).astype(np.float32)
 
-    with _INFERENCE_LOCK:
+    with _BLEACHING_LOCK:
         inp_name = bleaching_model.get_inputs()[0].name
         logits = bleaching_model.run(None, {inp_name: batch_np})[0]  # (B, 2)
 

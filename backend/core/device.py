@@ -37,11 +37,13 @@ def resolve_hardware_tier(preference: str = "auto") -> Dict[str, Any]:
         gpu_display_name = "Windows DirectML GPU"
     elif gpu_provider == "TensorrtExecutionProvider":
         gpu_display_name = "NVIDIA TensorRT GPU"
+    elif gpu_provider == "CoreMLExecutionProvider":
+        gpu_display_name = "Apple Silicon Neural Engine / GPU (CoreML)"
     else:
         gpu_display_name = "GPU Accelerator"
 
     # Explicit or automatic resolution
-    if pref in ("gpu", "cuda", "dml", "directml", "rocm", "tensorrt"):
+    if pref in ("gpu", "cuda", "dml", "directml", "rocm", "tensorrt", "coreml", "mps", "apple"):
         if gpu_available:
             tier = "gpu"
             provider = gpu_provider
@@ -175,11 +177,12 @@ def get_device_info(preference: str = "auto") -> Dict[str, Any]:
         "mode": info["tier"],
         "mode_label": info["mode_label"],
         "cuda_available": "CUDAExecutionProvider" in available,
-        "mps_available": False,
+        "mps_available": "CoreMLExecutionProvider" in available,
+        "coreml_available": "CoreMLExecutionProvider" in available,
         "dml_available": "DmlExecutionProvider" in available,
         "gpu_available": info["gpu_available"],
         "gpu_name": info["display_name"],
-        "chip_name": "CPU",
+        "chip_name": "Apple Silicon (ANE/GPU)" if provider == "CoreMLExecutionProvider" else "CPU",
         "active_provider": provider,
         "threads": info["threads"],
         "cpu_count": info["cpu_count"],

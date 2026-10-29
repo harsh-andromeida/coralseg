@@ -171,3 +171,49 @@ class SaveAnnotationsRequest(BaseModel):
     image_data: Optional[str] = Field(default=None, description="Optional base64 dataUrl of image")
 
 
+# --- Video Processing Schemas ---
+
+class VideoProcessRequest(BaseModel):
+    video_name: str = Field(description="Filename of registered video in uploads")
+    overlap_threshold: float = Field(default=0.75, ge=0.40, le=0.95, description="Scene overlap threshold triggering a keyframe")
+    min_stride: int = Field(default=5, ge=1, le=30, description="Minimum frame spacing between keyframes")
+    max_stride: int = Field(default=30, ge=5, le=120, description="Maximum frame spacing between keyframes")
+    points_per_side: int = Field(default=12, ge=8, le=32, description="SAM prompt grid density for keyframes")
+    iou_match_threshold: float = Field(default=0.30, ge=0.10, le=0.80, description="IoU threshold for tracking association")
+    pred_iou_thresh: float = Field(default=0.45, ge=0.20, le=0.90)
+    stability_thresh: float = Field(default=0.45, ge=0.20, le=0.90)
+
+
+class VideoTrackItem(BaseModel):
+    track_id: int
+    bbox: List[int]
+    polygon: List[List[float]]
+    genus: str = "Coral"
+    primary_label: str = "Coral"
+    growth_form: str = "-"
+    taxon_conf: float = 85.0
+    condition: str = "Healthy"
+    condition_conf: float = 90.0
+    is_bleached: bool = False
+    color_hex: str = "#00ffff"
+
+
+class VideoStatusResponse(BaseModel):
+    job_id: str
+    filename: str
+    state: str
+    current_frame: int
+    total_frames: int
+    progress_pct: float
+    fps_realtime: float
+    active_corals_count: int
+    total_unique_corals: int
+    bleaching_prevalence_pct: float
+    keyframes_count: int
+    metadata: Dict[str, Any]
+    error: Optional[str] = None
+    time_series: Optional[List[Dict[str, Any]]] = None
+    export_paths: Optional[Dict[str, Optional[str]]] = None
+
+
+

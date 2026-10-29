@@ -15,8 +15,11 @@ from huggingface_hub.file_download import repo_folder_name
 
 from core.device import get_optimal_device, get_device_mode, get_session_options
 
-# Global inference lock to serialize concurrent calls
-_INFERENCE_LOCK = threading.Lock()
+# Model-specific inference locks for high-throughput concurrency
+_SAM_LOCK = threading.Lock()
+_BIOCLIP_LOCK = threading.Lock()
+_BLEACHING_LOCK = threading.Lock()
+_INFERENCE_LOCK = _SAM_LOCK  # Backwards compatibility alias
 
 # Official Hugging Face ONNX repository
 HF_ONNX_REPO_ID = "harsh-awasthi/Andromeida-ReefVision-ONNX"
@@ -535,13 +538,9 @@ def load_bleaching_model(
         return _BLEACHING_SESSION
 
     _BLEACHING_CACHE_KEY = cache_key
-    providers = []
-
-    if active_provider == "CUDAExecutionProvider":
-        providers.append("CUDAExecutionProvider")
-    elif active_provider == "DmlExecutionProvider":
-        providers.append("DmlExecutionProvider")
-    providers.append("CPUExecutionProvider")
+    providers = [active_provider]
+    if "CPUExecutionProvider" not in providers:
+        providers.append("CPUExecutionProvider")
 
     pt_path = find_or_download_onnx_model(HF_BLEACHING_FILE, progress_callback=progress_callback)
     _BLEACHING_SESSION = ort.InferenceSession(pt_path, sess_options=sess_options, providers=providers)

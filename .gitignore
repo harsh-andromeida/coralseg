@@ -68,10 +68,17 @@ Thumbs.db
 !.vscode/extensions.json
 .idea/
 
-# Datasets
+# Datasets & Video Artifacts
 coralscapes/
 coralscapes_test_sample/
 datasets/
 data/
 demo_images/unlabeled_samples/
 **/demo_images/unlabeled_samples/
+backend/uploads/videos/
+backend/exports/video/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm

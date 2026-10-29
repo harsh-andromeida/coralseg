@@ -54,6 +54,15 @@ from core.interactive_segmentation import (
     calculate_polygon_metrics,
 )
 
+from core.video import (
+    VideoProcessor,
+    VideoJobState,
+    render_video_overlay,
+    export_annotated_video,
+    export_transect_csv,
+    export_coco_video,
+)
+
 from app.schemas import (
     DevicePreferenceRequest,
     ModelStatusResponse,
@@ -75,6 +84,9 @@ from app.schemas import (
     SegmentPromptWarmupRequest,
     EditedSegmentItem,
     SaveAnnotationsRequest,
+    VideoProcessRequest,
+    VideoStatusResponse,
+    VideoTrackItem,
 )
 
 app = FastAPI(
@@ -122,6 +134,19 @@ _BATCH_PROCESSOR = BatchProcessor(
     get_active_device=lambda: _ACTIVE_DEVICE_PREF,
     model_unloader=unload_all_models_from_ram,
     models_loaded_checker=are_models_loaded_in_ram,
+)
+
+# Video storage directories and VideoProcessor
+VIDEO_STORAGE_DIR = os.path.join(BACKEND_DIR, "uploads", "videos")
+VIDEO_EXPORTS_DIR = os.path.join(BACKEND_DIR, "exports", "video")
+os.makedirs(VIDEO_STORAGE_DIR, exist_ok=True)
+os.makedirs(VIDEO_EXPORTS_DIR, exist_ok=True)
+
+_VIDEO_PROCESSOR = VideoProcessor(
+    sam_loader=lambda: load_coralscop_model(device=_ACTIVE_DEVICE_PREF),
+    bioclip_loader=lambda: load_bioclip_model(device=_ACTIVE_DEVICE_PREF),
+    bleaching_loader=lambda: load_bleaching_model(device=_ACTIVE_DEVICE_PREF),
+    cache_dir=VIDEO_EXPORTS_DIR,
 )
 
 _DOWNLOAD_PROGRESS: Dict[str, Any] = {
@@ -1409,5 +1434,211 @@ def export_dataset_to_custom_folder(req: ExportFolderRequest):
         written_files_count=res.get("written_files_count", 0),
         zip_file=res.get("zip_file"),
     )
+
+
+# --- Video Processing Endpoints ---
+
+@app.post("/api/video/upload")
+async def upload_video(file: UploadFile = File(...)):
+    """Uploads an underwater video (.mp4, .mov, .avi) and probes its metadata."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No video file provided.")
+
+    allowed_exts = (".mp4", ".mov", ".avi", ".mkv", ".webm")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported video format '{ext}'. Allowed: {', '.join(allowed_exts)}"
+        )
+
+    clean_name = os.path.basename(file.filename)
+    dest_path = os.path.join(VIDEO_STORAGE_DIR, clean_name)
+
+    with open(dest_path, "wb") as buffer:
+        content = await file.read()
+        buffer.write(content)
+
+    try:
+        metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+    except Exception as e:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        raise HTTPException(status_code=400, detail=f"Failed to probe video: {str(e)}")
+
+    return {
+        "status": "success",
+        "video_name": clean_name,
+        "video_path": dest_path,
+        "metadata": metadata,
+    }
+
+
+@app.get("/api/video/sample")
+def get_sample_video():
+    """Loads a pre-packaged underwater coral reef transect video."""
+    sample_src = os.path.join(BACKEND_DIR.parent, "demo_images", "sample_reef_transect.mp4")
+    if not os.path.isfile(sample_src):
+        sample_src = os.path.join(BACKEND_DIR, "demo_images", "sample_reef_transect.mp4")
+    if not os.path.isfile(sample_src):
+        raise HTTPException(status_code=404, detail="Sample video not found on disk.")
+
+    clean_name = "sample_reef_transect.mp4"
+    dest_path = os.path.join(VIDEO_STORAGE_DIR, clean_name)
+    import shutil
+    shutil.copyfile(sample_src, dest_path)
+
+    metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+    return {
+        "status": "success",
+        "video_name": clean_name,
+        "video_path": dest_path,
+        "metadata": metadata,
+    }
+
+
+@app.get("/api/video/stream-file/{video_name}")
+def stream_video_file(video_name: str):
+    """Streams raw video file for HTML5 video player playback."""
+    from fastapi.responses import FileResponse
+    target = os.path.join(VIDEO_STORAGE_DIR, os.path.basename(video_name))
+    if not os.path.isfile(target):
+        demo_target = os.path.join(BACKEND_DIR.parent, "demo_images", os.path.basename(video_name))
+        if os.path.isfile(demo_target):
+            target = demo_target
+        else:
+            raise HTTPException(status_code=404, detail=f"Video file '{video_name}' not found.")
+    return FileResponse(target, media_type="video/mp4")
+
+
+@app.post("/api/video/process")
+def process_video(req: VideoProcessRequest):
+    """Starts asynchronous high-FPS benthic tracking and keyframe analysis on a video."""
+    all_ready, _ = check_models_download_status()
+    if not all_ready:
+        raise HTTPException(
+            status_code=428,
+            detail="Foundation models are not downloaded. Please download all models before running video processing."
+        )
+
+    candidate_path = os.path.join(VIDEO_STORAGE_DIR, req.video_name)
+    if not os.path.isfile(candidate_path):
+        if os.path.isfile(req.video_name):
+            candidate_path = req.video_name
+        else:
+            raise HTTPException(status_code=404, detail=f"Video file '{req.video_name}' not found.")
+
+    try:
+        job_id = _VIDEO_PROCESSOR.start_job(
+            video_path=candidate_path,
+            params={
+                "overlap_threshold": req.overlap_threshold,
+                "min_stride": req.min_stride,
+                "max_stride": req.max_stride,
+                "points_per_side": req.points_per_side,
+                "iou_match_threshold": req.iou_match_threshold,
+                "pred_iou_thresh": req.pred_iou_thresh,
+                "stability_thresh": req.stability_thresh,
+            },
+        )
+        job = _VIDEO_PROCESSOR.get_job(job_id)
+        return {
+            "status": "started",
+            "job_id": job_id,
+            "filename": job["filename"],
+            "metadata": job["metadata"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start video processing: {str(e)}")
+
+
+@app.get("/api/video/status/{job_id}", response_model=VideoStatusResponse)
+def get_video_status(job_id: str):
+    """Retrieves real-time processing status, FPS, and time-series survey telemetry."""
+    job = _VIDEO_PROCESSOR.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Video job '{job_id}' not found.")
+
+    return VideoStatusResponse(
+        job_id=job["job_id"],
+        filename=job["filename"],
+        state=job["state"],
+        current_frame=job["current_frame"],
+        total_frames=job["total_frames"],
+        progress_pct=job["progress_pct"],
+        fps_realtime=job["fps_realtime"],
+        active_corals_count=job["active_corals_count"],
+        total_unique_corals=job["total_unique_corals"],
+        bleaching_prevalence_pct=job["bleaching_prevalence_pct"],
+        keyframes_count=job["keyframes_count"],
+        metadata=job["metadata"],
+        error=job["error"],
+        time_series=job["time_series"],
+        export_paths=job.get("export_paths"),
+    )
+
+
+@app.post("/api/video/pause/{job_id}")
+def pause_video_job(job_id: str):
+    success = _VIDEO_PROCESSOR.pause_job(job_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Could not pause job or job not running.")
+    return {"status": "paused", "job_id": job_id}
+
+
+@app.post("/api/video/resume/{job_id}")
+def resume_video_job(job_id: str):
+    success = _VIDEO_PROCESSOR.resume_job(job_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Could not resume job or job not paused.")
+    return {"status": "resumed", "job_id": job_id}
+
+
+@app.post("/api/video/cancel/{job_id}")
+def cancel_video_job(job_id: str):
+    success = _VIDEO_PROCESSOR.cancel_job(job_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return {"status": "cancelled", "job_id": job_id}
+
+
+@app.get("/api/video/frame/{job_id}/{frame_idx}")
+def get_video_frame_annotations(job_id: str, frame_idx: int):
+    """Returns tracking detections and polygon boundaries for a specific frame."""
+    data = _VIDEO_PROCESSOR.get_frame_annotation(job_id, frame_idx)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Frame data not available.")
+    return data
+
+
+@app.get("/api/video/export/{job_id}")
+def export_video_result(job_id: str, format: str = "mp4"):
+    """Downloads annotated MP4, Transect CSV, or MOT/COCO JSON."""
+    from fastapi.responses import FileResponse
+    job = _VIDEO_PROCESSOR.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found.")
+
+    export_paths = job.get("export_paths", {})
+    fmt = format.lower().strip()
+
+    if fmt == "mp4":
+        p = export_paths.get("annotated_mp4")
+        if not p or not os.path.isfile(p):
+            raise HTTPException(status_code=404, detail="Annotated MP4 export not ready.")
+        return FileResponse(p, media_type="video/mp4", filename=os.path.basename(p))
+    elif fmt == "csv":
+        p = export_paths.get("transect_csv")
+        if not p or not os.path.isfile(p):
+            raise HTTPException(status_code=404, detail="Transect CSV export not ready.")
+        return FileResponse(p, media_type="text/csv", filename=os.path.basename(p))
+    elif fmt in ("json", "coco", "mot"):
+        p = export_paths.get("coco_json")
+        if not p or not os.path.isfile(p):
+            raise HTTPException(status_code=404, detail="COCO JSON export not ready.")
+        return FileResponse(p, media_type="application/json", filename=os.path.basename(p))
+    else:
+        raise HTTPException(status_code=400, detail="Invalid format. Supported: mp4, csv, json")
+
 
 

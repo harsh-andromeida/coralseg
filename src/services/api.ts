@@ -484,5 +484,111 @@ export async function saveAnnotations(
   return res.json();
 }
 
+// --- Video Processing API Services ---
+
+export async function uploadVideo(file: File): Promise<{
+  status: string;
+  video_name: string;
+  video_path: string;
+  metadata: import("../types").VideoMetadata;
+}> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await fetch(`${API_BASE}/video/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to upload video");
+  }
+  return res.json();
+}
+
+export async function processVideo(req: {
+  video_name: string;
+  overlap_threshold?: number;
+  min_stride?: number;
+  max_stride?: number;
+  points_per_side?: number;
+  iou_match_threshold?: number;
+}): Promise<{
+  status: string;
+  job_id: string;
+  filename: string;
+  metadata: import("../types").VideoMetadata;
+}> {
+  const res = await fetch(`${API_BASE}/video/process`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to start video processing");
+  }
+  return res.json();
+}
+
+export async function getVideoStatus(jobId: string): Promise<import("../types").VideoJobStatus> {
+  const res = await fetch(`${API_BASE}/video/status/${jobId}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to fetch video status");
+  }
+  return res.json();
+}
+
+export async function pauseVideoJob(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/video/pause/${jobId}`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to pause video processing");
+}
+
+export async function resumeVideoJob(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/video/resume/${jobId}`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to resume video processing");
+}
+
+export async function cancelVideoJob(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/video/cancel/${jobId}`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to cancel video processing");
+}
+
+export async function getVideoFrameAnnotations(
+  jobId: string,
+  frameIdx: number
+): Promise<{
+  job_id: string;
+  frame_idx: number;
+  is_keyframe: boolean;
+  tracks: import("../types").VideoTrackItem[];
+  active_count: number;
+}> {
+  const res = await fetch(`${API_BASE}/video/frame/${jobId}/${frameIdx}`);
+  if (!res.ok) throw new Error("Failed to fetch frame annotations");
+  return res.json();
+}
+
+export function getVideoExportUrl(jobId: string, format: "mp4" | "csv" | "coco"): string {
+  return `${API_BASE}/video/export/${jobId}?format=${format}`;
+}
+
+export async function loadSampleVideo(): Promise<{
+  status: string;
+  video_name: string;
+  video_path: string;
+  metadata: import("../types").VideoMetadata;
+}> {
+  const res = await fetch(`${API_BASE}/video/sample`);
+  if (!res.ok) throw new Error("Failed to load sample video");
+  return res.json();
+}
+
+export function getVideoStreamUrl(videoName: string): string {
+  return `${API_BASE}/video/stream-file/${encodeURIComponent(videoName)}`;
+}
+
+
 
 

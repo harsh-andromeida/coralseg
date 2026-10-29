@@ -17,6 +17,9 @@ import {
   FolderArchive,
   ArrowRight,
   Loader2,
+  Film,
+  Video,
+  Sparkles,
 } from "lucide-react";
 import JSZip from "jszip";
 import { BrandLogo } from "../components/BrandLogo";
@@ -37,6 +40,7 @@ import {
   ModelSpec,
   SampleItem,
   LoadedImage,
+  UploadedVideoItem,
   DownloadProgress,
   BatchStatusResponse,
 } from "../types";
@@ -56,6 +60,10 @@ import {
   pauseBatch,
   resumeBatch,
   cancelBatch,
+  uploadVideo,
+  processVideo,
+  loadSampleVideo,
+  getVideoStreamUrl,
 } from "../services/api";
 
 interface ModelGroupDef {
@@ -96,10 +104,14 @@ const MODEL_GROUPS: ModelGroupDef[] = [
 
 interface UploadViewProps {
   onLaunchStudio: (images: LoadedImage[]) => void;
+  onLaunchVideoStudio?: (videoItem: UploadedVideoItem, jobId?: string) => void;
 }
 
-export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
-  const [activeTab, setActiveTab] = useState<"upload" | "samples">("samples");
+export const UploadView: React.FC<UploadViewProps> = ({
+  onLaunchStudio,
+  onLaunchVideoStudio,
+}) => {
+  const [activeTab, setActiveTab] = useState<"samples" | "upload" | "video">("samples");
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
   const [isCheckingBackend, setIsCheckingBackend] = useState<boolean>(true);
   const [allDownloaded, setAllDownloaded] = useState<boolean>(true);
@@ -107,6 +119,15 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [devicePref, setDevicePref] = useState<string>("auto");
   const [concurrency, setConcurrency] = useState<number>(1);
+
+  // Video State
+  const [uploadedVideo, setUploadedVideo] = useState<UploadedVideoItem | null>(null);
+  const [videoDragActive, setVideoDragActive] = useState<boolean>(false);
+  const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
+  const [isStartingVideoJob, setIsStartingVideoJob] = useState<boolean>(false);
+  const [videoPreset, setVideoPreset] = useState<"balanced" | "high_fps" | "accuracy">("balanced");
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
 
   // Batch Background Processing State
   const [batchStatus, setBatchStatus] = useState<BatchStatusResponse | null>(null);
@@ -511,6 +532,78 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
       alert(`Error cancelling batch: ${e?.message || e}`);
     } finally {
       setIsCancellingBatch(false);
+    }
+  };
+
+  // Video Handlers
+  const handleVideoFileSelect = async (file: File) => {
+    setIsUploadingVideo(true);
+    setVideoError(null);
+    try {
+      const uploadRes = await uploadVideo(file);
+      const previewUrl = URL.createObjectURL(file);
+      setUploadedVideo({
+        file,
+        video_name: uploadRes.video_name,
+        video_path: uploadRes.video_path,
+        metadata: uploadRes.metadata,
+        previewUrl,
+      });
+    } catch (err: any) {
+      setVideoError(`Video upload failed: ${err?.message || err}`);
+    } finally {
+      setIsUploadingVideo(false);
+    }
+  };
+
+  const handleLoadSampleVideo = async () => {
+    setIsUploadingVideo(true);
+    setVideoError(null);
+    try {
+      const sampleRes = await loadSampleVideo();
+      const previewUrl = getVideoStreamUrl(sampleRes.video_name);
+      setUploadedVideo({
+        file: new File([], sampleRes.video_name),
+        video_name: sampleRes.video_name,
+        video_path: sampleRes.video_path,
+        metadata: sampleRes.metadata,
+        previewUrl,
+      });
+    } catch (err: any) {
+      setVideoError(`Failed to load sample video: ${err?.message || err}`);
+    } finally {
+      setIsUploadingVideo(false);
+    }
+  };
+
+  const handleStartVideoAnalysis = async () => {
+    if (!uploadedVideo) return;
+    setIsStartingVideoJob(true);
+    setVideoError(null);
+
+    const presetConfigs = {
+      high_fps: { max_stride: 60, min_stride: 10, points_per_side: 8, overlap_threshold: 0.80 },
+      balanced: { max_stride: 30, min_stride: 5, points_per_side: 12, overlap_threshold: 0.75 },
+      accuracy: { max_stride: 15, min_stride: 3, points_per_side: 16, overlap_threshold: 0.70 },
+    };
+    const cfg = presetConfigs[videoPreset];
+
+    try {
+      const procRes = await processVideo({
+        video_name: uploadedVideo.video_name,
+        overlap_threshold: cfg.overlap_threshold,
+        min_stride: cfg.min_stride,
+        max_stride: cfg.max_stride,
+        points_per_side: cfg.points_per_side,
+      });
+
+      if (onLaunchVideoStudio) {
+        onLaunchVideoStudio(uploadedVideo, procRes.job_id);
+      }
+    } catch (err: any) {
+      setVideoError(`Failed to start video processing: ${err?.message || err}`);
+    } finally {
+      setIsStartingVideoJob(false);
     }
   };
 
@@ -1129,6 +1222,21 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
                       {availableSamples.length || 24}
                     </span>
                   </button>
+                  <button
+                    type="button"
+                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      activeTab === "video"
+                        ? "bg-white text-slate-900 shadow-xs"
+                        : "text-slate-500 hover:text-slate-800"
+                    }`}
+                    onClick={() => setActiveTab("video")}
+                  >
+                    <Film size={14} className={activeTab === "video" ? "text-cyan-600" : ""} />
+                    <span>Video Transect</span>
+                    <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[9px] bg-cyan-100 text-cyan-800 font-bold uppercase tracking-wider">
+                      Live
+                    </span>
+                  </button>
                 </div>
               </div>
 
@@ -1351,6 +1459,180 @@ export const UploadView: React.FC<UploadViewProps> = ({ onLaunchStudio }) => {
 
                   {/* Fixed Bottom Launch Bar - Go Button ALWAYS visible */}
                   {renderBatchControlPanel(sampleSubset.length, handleStartBatchSamples, isStartingBatch)}
+                </div>
+              )}
+
+              {/* Tab 3: Video Transect Studio */}
+              {activeTab === "video" && (
+                <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                  <div className="shrink-0 mb-2 flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-[#0f1e4a] tracking-tight">
+                        Video Transect Studio
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Autonomous benthic colony tracking across underwater ROV, AUV, and diver videos
+                      </p>
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleLoadSampleVideo}
+                      disabled={isUploadingVideo || isStartingVideoJob}
+                      className="h-7 px-2.5 text-xs font-semibold gap-1.5 border-cyan-300 text-cyan-800 bg-cyan-50/60 hover:bg-cyan-100"
+                    >
+                      <Sparkles size={12} className="text-cyan-600" />
+                      <span>Load Sample Video</span>
+                    </Button>
+                  </div>
+
+                  {videoError && (
+                    <div className="mb-2 p-2 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+                      <AlertCircle size={14} className="shrink-0" />
+                      <span>{videoError}</span>
+                    </div>
+                  )}
+
+                  <div className="portal-scroll-area flex-1 min-h-0 space-y-3">
+                    {/* Hidden video input */}
+                    <input
+                      ref={videoInputRef}
+                      type="file"
+                      accept=".mp4,.mov,.avi,.mkv,.webm"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleVideoFileSelect(file);
+                      }}
+                    />
+
+                    {/* Drag and Drop Box */}
+                    <div
+                      className={`dropzone cursor-pointer ${videoDragActive ? "drag-active" : ""}`}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setVideoDragActive(true);
+                      }}
+                      onDragLeave={() => setVideoDragActive(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setVideoDragActive(false);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) handleVideoFileSelect(file);
+                      }}
+                      onClick={() => videoInputRef.current?.click()}
+                    >
+                      <Film size={32} className="dropzone-icon text-cyan-600 mb-1.5" />
+                      <div className="dropzone-text text-xs font-semibold text-slate-700">
+                        Select or drag & drop underwater video (.mp4, .mov, .avi)
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">
+                        High-FPS tracking with ego-motion compensation & persistent colony IDs
+                      </div>
+                    </div>
+
+                    {/* Selected Video Card Preview */}
+                    {uploadedVideo && (
+                      <div className="rounded-xl border border-cyan-200 bg-cyan-50/30 p-3.5 space-y-3 shadow-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-700">
+                              <Video size={18} />
+                            </div>
+                            <div>
+                              <div className="text-xs font-bold text-slate-800 truncate max-w-[280px]">
+                                {uploadedVideo.video_name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 font-mono">
+                                {uploadedVideo.metadata.width}x{uploadedVideo.metadata.height} •{" "}
+                                {uploadedVideo.metadata.fps} FPS •{" "}
+                                {uploadedVideo.metadata.duration_sec}s ({uploadedVideo.metadata.total_frames} frames)
+                              </div>
+                            </div>
+                          </div>
+
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setUploadedVideo(null)}
+                            className="h-7 w-7 p-0 text-slate-400 hover:text-red-600"
+                          >
+                            <X size={14} />
+                          </Button>
+                        </div>
+
+                        {/* Preset Selection */}
+                        <div className="space-y-1.5 pt-1 border-t border-cyan-100">
+                          <span className="text-[11px] font-semibold text-slate-700 block">
+                            Tracking Sensitivity & Speed Preset
+                          </span>
+                          <div className="grid grid-cols-3 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setVideoPreset("balanced")}
+                              className={`p-2 rounded-lg border text-left transition-all ${
+                                videoPreset === "balanced"
+                                  ? "bg-white border-cyan-500 shadow-xs"
+                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-slate-800">Balanced</div>
+                              <div className="text-[10px] text-slate-500">30-60 FPS live (25% area trigger)</div>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setVideoPreset("high_fps")}
+                              className={`p-2 rounded-lg border text-left transition-all ${
+                                videoPreset === "high_fps"
+                                  ? "bg-white border-cyan-500 shadow-xs"
+                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-slate-800">Ultra High FPS</div>
+                              <div className="text-[10px] text-slate-500">60-120 FPS (Fast AUV transit)</div>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setVideoPreset("accuracy")}
+                              className={`p-2 rounded-lg border text-left transition-all ${
+                                videoPreset === "accuracy"
+                                  ? "bg-white border-cyan-500 shadow-xs"
+                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-slate-800">High Accuracy</div>
+                              <div className="text-[10px] text-slate-500">Dense census (15-frame cadence)</div>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Fixed Bottom Launch Bar */}
+                  <div className="shrink-0 pt-2.5 mt-auto border-t border-slate-100 bg-white">
+                    <Button
+                      type="button"
+                      className="w-full h-10 text-xs font-bold tracking-wider uppercase text-white rounded-xl shadow-xs hover:shadow-md transition-all gap-2 bg-gradient-to-r from-[#0f1e4a] via-[#163e80] to-[#0d7c85] hover:opacity-95"
+                      onClick={handleStartVideoAnalysis}
+                      disabled={!uploadedVideo || isStartingVideoJob || isUploadingVideo || !isBackendConnected}
+                    >
+                      <Rocket size={14} className={isStartingVideoJob ? "animate-bounce" : ""} />
+                      <span>
+                        {isUploadingVideo
+                          ? "Uploading Video..."
+                          : isStartingVideoJob
+                          ? "Starting Video Tracker..."
+                          : uploadedVideo
+                          ? "Launch Video Tracking & Transect Studio"
+                          : "Select or Drag Video Above to Begin"}
+                      </span>
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>

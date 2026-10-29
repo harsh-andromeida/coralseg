@@ -7,7 +7,13 @@ import numpy as np
 from PIL import Image
 import onnxruntime as ort
 
-from core.models import _INFERENCE_LOCK
+from core.models import _INFERENCE_LOCK, _SAM_LOCK
+
+try:
+    import cv2
+    _HAS_CV2 = True
+except ImportError:
+    _HAS_CV2 = False
 
 
 def calculate_stability_score(masks: np.ndarray, mask_threshold: float = 0.0, threshold_offset: float = 1.0) -> np.ndarray:
@@ -85,6 +91,7 @@ def run_segmentation(
     crop_n_layers: int = 0,
     box_nms_thresh: float = 0.70,
     image_name: Optional[str] = None,
+    custom_prompt_points: Optional[np.ndarray] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Executes CoralSCOP SAM dense instance segmentation using pure ONNX Runtime & NumPy.
@@ -125,15 +132,19 @@ def run_segmentation(
             pass
 
     if image_embeddings is None:
-        resized_img = Image.fromarray(image_np).resize((new_w, new_h), Image.Resampling.BILINEAR)
+        if _HAS_CV2:
+            resized_arr = cv2.resize(image_np, (new_w, new_h), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        else:
+            resized_img = Image.fromarray(image_np).resize((new_w, new_h), Image.Resampling.BILINEAR)
+            resized_arr = np.array(resized_img, dtype=np.float32)
         pixel_mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
         pixel_std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
-        norm_img = (np.array(resized_img, dtype=np.float32) - pixel_mean) / pixel_std
+        norm_img = (resized_arr - pixel_mean) / pixel_std
 
         in_enc = np.zeros((1, 3, 1024, 1024), dtype=np.float32)
         in_enc[0, :, :new_h, :new_w] = norm_img.transpose(2, 0, 1)
 
-        with _INFERENCE_LOCK:
+        with _SAM_LOCK:
             image_embeddings = sess_enc.run(None, {"image": in_enc})[0]  # (1, 256, 64, 64)
 
         if image_name:
@@ -156,6 +167,11 @@ def run_segmentation(
     points_x, points_y = np.meshgrid(points_1d, points_1d)
     raw_grid_x = points_x.flatten() * orig_w
     raw_grid_y = points_y.flatten() * orig_h
+
+    if custom_prompt_points is not None and len(custom_prompt_points) > 0:
+        c_pts = np.asarray(custom_prompt_points, dtype=np.float32)
+        raw_grid_x = np.concatenate([c_pts[:, 0], raw_grid_x])
+        raw_grid_y = np.concatenate([c_pts[:, 1], raw_grid_y])
 
     # Scale prompt points to the prepadded coordinate frame for SAM prompt encoder
     scale_x = new_w / orig_w
@@ -183,7 +199,7 @@ def run_segmentation(
         coords = batch_pts[:, np.newaxis, :].astype(np.float32)  # (B, 1, 2)
         labels = np.ones((n_pts, 1), dtype=np.float32)          # (B, 1)
 
-        with _INFERENCE_LOCK:
+        with _SAM_LOCK:
             dec_out = dec_sess.run(None, {
                 "image_embeddings": image_embeddings,
                 "point_coords": coords,
