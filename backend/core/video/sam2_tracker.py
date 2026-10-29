@@ -69,6 +69,13 @@ class SAM2BenthicTracker:
         if mask_np.ndim == 3:
             mask_np = mask_np[:, :, 0]
 
+        # Resample mask to match SAM 2 video state resolution if proxy downscaling was used
+        state_h = self._inference_state.get("video_height", mask_np.shape[0])
+        state_w = self._inference_state.get("video_width", mask_np.shape[1])
+        if (mask_np.shape[0] != state_h or mask_np.shape[1] != state_w) and state_h > 0 and state_w > 0:
+            mask_resized = cv2.resize(mask_np.astype(np.uint8), (state_w, state_h), interpolation=cv2.INTER_NEAREST)
+            mask_np = mask_resized.astype(bool)
+
         # Add mask prompt to SAM 2
         self._predictor.add_new_mask(
             inference_state=self._inference_state,
@@ -91,19 +98,20 @@ class SAM2BenthicTracker:
             "predicted_iou": round(float(predicted_iou), 3),
         }
 
-    def propagate_window(
+    def propagate_stream(
         self,
         start_frame_idx: int,
         num_frames: int,
-    ) -> Dict[int, List[Dict[str, Any]]]:
+        scale_x: float = 1.0,
+        scale_y: float = 1.0,
+    ):
         """
-        Propagates SAM 2 tracker from start_frame_idx for num_frames frames.
-        Returns a dict: frame_idx -> List of active track detection dicts.
+        Streaming generator that yields (out_frame_idx, frame_tracks) immediately as SAM 2
+        computes each frame's memory-attention propagation.
+        Applies affine scaling (scale_x, scale_y) to remap coordinates back to raw video pixels.
         """
         if not self.initialized or not self._tracks_meta:
-            return {}
-
-        results: Dict[int, List[Dict[str, Any]]] = {}
+            return
 
         for out_frame_idx, out_obj_ids, out_mask_logits in self._predictor.propagate_in_video(
             self._inference_state,
@@ -122,11 +130,10 @@ class SAM2BenthicTracker:
                     mask_bool = mask_bool[0]
 
                 area_px = int(np.sum(mask_bool))
-                if area_px < 20:
-                    # Colony exited frame or too small to resolve
+                if area_px < 15:
                     continue
 
-                # Extract contour polygons & bounding box
+                # Extract contour polygons
                 contours, _ = cv2.findContours(
                     mask_bool.astype(np.uint8),
                     cv2.RETR_EXTERNAL,
@@ -150,6 +157,19 @@ class SAM2BenthicTracker:
                     bbox = [0, 0, 0, 0]
                     cx, cy = 0, 0
 
+                # Remap proxy coordinates back to raw video display coordinates
+                if scale_x != 1.0 or scale_y != 1.0:
+                    poly = [[int(round(pt[0] * scale_x)), int(round(pt[1] * scale_y))] for pt in poly]
+                    bbox = [
+                        int(round(bbox[0] * scale_x)),
+                        int(round(bbox[1] * scale_y)),
+                        max(1, int(round(bbox[2] * scale_x))),
+                        max(1, int(round(bbox[3] * scale_y))),
+                    ]
+                    cx = int(round(cx * scale_x))
+                    cy = int(round(cy * scale_y))
+                    area_px = int(round(area_px * scale_x * scale_y))
+
                 frame_tracks.append({
                     "track_id": obj_id,
                     "id": obj_id,
@@ -170,8 +190,27 @@ class SAM2BenthicTracker:
                     "mask": mask_bool,
                 })
 
-            results[out_frame_idx] = frame_tracks
+            yield out_frame_idx, frame_tracks
 
+    def propagate_window(
+        self,
+        start_frame_idx: int,
+        num_frames: int,
+        scale_x: float = 1.0,
+        scale_y: float = 1.0,
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Propagates SAM 2 tracker from start_frame_idx for num_frames frames.
+        Returns a dict: frame_idx -> List of active track detection dicts.
+        """
+        results: Dict[int, List[Dict[str, Any]]] = {}
+        for f_idx, f_tracks in self.propagate_stream(
+            start_frame_idx=start_frame_idx,
+            num_frames=num_frames,
+            scale_x=scale_x,
+            scale_y=scale_y,
+        ):
+            results[f_idx] = f_tracks
         return results
 
     def get_track_metadata(self, track_id: int) -> Optional[Dict[str, Any]]:

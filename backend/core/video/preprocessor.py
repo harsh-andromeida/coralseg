@@ -1,6 +1,6 @@
 import os
 import cv2
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 
 def standardize_video_to_25fps(input_path: str, output_path: str) -> Dict[str, Any]:
@@ -74,13 +74,33 @@ def standardize_video_to_25fps(input_path: str, output_path: str) -> Dict[str, A
     }
 
 
-def extract_video_frames_to_disk(video_path: str, frames_dir: str) -> List[str]:
+def extract_video_frames_to_disk(
+    video_path: str,
+    frames_dir: str,
+    max_dim: int = 720,
+    jpeg_quality: int = 85,
+) -> Tuple[List[str], Dict[str, Any]]:
     """
-    Extracts video frames to JPEG images in frames_dir (00000.jpg, 00001.jpg, ...)
+    Extracts video frames to dual-resolution JPEG images in frames_dir (00000.jpg, 00001.jpg, ...)
     for SAM 2 video predictor initialization.
+    Downscales to inference proxy resolution (e.g. max_dim=720) for 5-10x faster inference,
+    while returning affine scaling factors (scale_x, scale_y) to map back to raw display coordinates.
     """
     os.makedirs(frames_dir, exist_ok=True)
     cap = cv2.VideoCapture(video_path)
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    scale = 1.0
+    if orig_w > 0 and orig_h > 0 and (orig_w > max_dim or orig_h > max_dim):
+        scale = min(max_dim / orig_w, max_dim / orig_h)
+
+    proxy_w = max(16, int(round(orig_w * scale)))
+    proxy_h = max(16, int(round(orig_h * scale)))
+
+    scale_x = orig_w / proxy_w if proxy_w > 0 else 1.0
+    scale_y = orig_h / proxy_h if proxy_h > 0 else 1.0
+
     frame_paths = []
     idx = 0
 
@@ -88,12 +108,22 @@ def extract_video_frames_to_disk(video_path: str, frames_dir: str) -> List[str]:
         ret, frame = cap.read()
         if not ret:
             break
+        if scale < 0.999:
+            frame = cv2.resize(frame, (proxy_w, proxy_h), interpolation=cv2.INTER_AREA)
         frame_name = f"{idx:05d}.jpg"
         frame_path = os.path.join(frames_dir, frame_name)
-        # Write high quality JPEG
-        cv2.imwrite(frame_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        # Write optimized JPEG for fast I/O
+        cv2.imwrite(frame_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
         frame_paths.append(frame_path)
         idx += 1
 
     cap.release()
-    return frame_paths
+    meta = {
+        "orig_w": orig_w,
+        "orig_h": orig_h,
+        "proxy_w": proxy_w,
+        "proxy_h": proxy_h,
+        "scale_x": scale_x,
+        "scale_y": scale_y,
+    }
+    return frame_paths, meta

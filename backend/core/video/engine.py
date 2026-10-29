@@ -262,14 +262,16 @@ class VideoProcessor:
 
         keyframe_indices = sorted(list(set(detected_kfs)))
 
-        # 2. Initialize SAM 2 Video Predictor
+        # 2. Initialize SAM 2 Video Predictor with Dual-Resolution Inference Proxy
         storage_dir = os.path.dirname(os.path.abspath(video_path))
         frames_dir = os.path.join(storage_dir, f"frames_{job_id}")
         sam2_tracker = SAM2BenthicTracker(device=opts.get("device_pref", "auto"))
         has_sam2 = False
+        proxy_meta = {"scale_x": 1.0, "scale_y": 1.0}
 
         try:
-            extract_video_frames_to_disk(video_path, frames_dir)
+            # Extract dual-resolution frames (e.g. max_dim=640) for 5-10x faster tracking
+            _, proxy_meta = extract_video_frames_to_disk(video_path, frames_dir, max_dim=640, jpeg_quality=85)
             sam2_tracker.init_video(frames_dir)
             has_sam2 = True
         except Exception as sam2_err:
@@ -282,7 +284,56 @@ class VideoProcessor:
         fps_clock = time.time()
         frames_processed_clock = 0
 
+        def _record_frame_state(cur_f: int, current_active_tracks: List[Any]):
+            nonlocal frames_processed_clock, fps_clock
+            bleached_count = sum(1 for t in current_active_tracks if t.bleaching.get("is_bleached", False))
+            healthy_count = len(current_active_tracks) - bleached_count
+            bleach_pct = (bleached_count / max(len(current_active_tracks), 1)) * 100.0
+
+            genus_counts: Dict[str, int] = {}
+            for t in current_active_tracks:
+                g = t.taxonomy.get("genus", "Coral")
+                genus_counts[g] = genus_counts.get(g, 0) + 1
+            dom_genus = max(genus_counts, key=genus_counts.get) if genus_counts else "Coral"
+
+            timestamp_sec = round(cur_f / max(video_fps, 1.0), 2)
+            m_meta = motion_metas.get(cur_f, {})
+            record = {
+                "frame_index": cur_f,
+                "timestamp_sec": timestamp_sec,
+                "active_corals_count": len(current_active_tracks),
+                "cumulative_unique_corals": tracker._next_track_id - 1,
+                "bleached_corals_count": bleached_count,
+                "healthy_corals_count": healthy_count,
+                "bleaching_prevalence_pct": round(bleach_pct, 1),
+                "dominant_genus": dom_genus,
+                "is_keyframe": cur_f in keyframe_indices,
+                "camera_motion_dx": m_meta.get("motion_dx", 0.0),
+                "camera_motion_dy": m_meta.get("motion_dy", 0.0),
+            }
+
+            with self._lock:
+                job["current_frame"] = cur_f + 1
+                job["progress_pct"] = round(((cur_f + 1) / max(total_frames, 1)) * 100.0, 1)
+                job["active_corals_count"] = len(current_active_tracks)
+                job["total_unique_corals"] = tracker._next_track_id - 1
+                job["bleaching_prevalence_pct"] = round(bleach_pct, 1)
+                job["frame_tracks_map"][cur_f] = list(current_active_tracks)
+                job["time_series"].append(record)
+
+            frames_processed_clock += 1
+            now = time.time()
+            if now - fps_clock >= 0.5:
+                inst_fps = frames_processed_clock / max(now - fps_clock, 0.001)
+                with self._lock:
+                    job["fps_realtime"] = round(inst_fps, 1)
+                fps_clock = now
+                frames_processed_clock = 0
+
         try:
+            scale_x = proxy_meta.get("scale_x", 1.0)
+            scale_y = proxy_meta.get("scale_y", 1.0)
+
             # Process in windows between keyframes
             for w_idx in range(len(keyframe_indices)):
                 if job["cancel_requested"]:
@@ -366,91 +417,66 @@ class VideoProcessor:
                                         except Exception:
                                             pass
 
-                # --- CONTINUOUS TRACKING STEP (Propagate Across Intervening Frames) ---
-                sam2_window_preds = {}
-                if has_sam2 and sam2_tracker.total_tracks_count > 0:
-                    try:
-                        sam2_window_preds = sam2_tracker.propagate_window(
-                            start_frame_idx=kf_frame_idx,
-                            num_frames=window_length,
-                        )
-                    except Exception:
-                        sam2_window_preds = {}
+                # Record keyframe state immediately into job state
+                active_tracks = tracker.get_active_tracks()
+                _record_frame_state(kf_frame_idx, active_tracks)
 
-                # Record frame-by-frame tracks and update telemetry
-                for cur_f in range(kf_frame_idx, next_kf_idx):
-                    if job["cancel_requested"]:
-                        break
+                # --- CONTINUOUS PROGRESSIVE STREAMING (Intervening Frames) ---
+                if window_length > 1:
+                    if has_sam2 and sam2_tracker.total_tracks_count > 0:
+                        try:
+                            for out_f, det_tracks in sam2_tracker.propagate_stream(
+                                start_frame_idx=kf_frame_idx + 1,
+                                num_frames=window_length - 1,
+                                scale_x=scale_x,
+                                scale_y=scale_y,
+                            ):
+                                if job["cancel_requested"]:
+                                    break
+                                for det in det_tracks:
+                                    trk_id = det["track_id"]
+                                    if trk_id in tracker._tracks:
+                                        t = tracker._tracks[trk_id]
+                                        t.bbox = det["bbox"]
+                                        t.centroid = det["centroid"]
+                                        t.polygon = det["polygon"]
+                                        t.area_px = det["area_px"]
+                                        t.mask = det["mask"]
+                                        t.last_seen_frame = out_f
+                                        t.time_since_update = 0
+                                        t.history.append((det["bbox"], det["polygon"]))
 
-                    if cur_f in sam2_window_preds:
-                        # Update tracker with exact SAM 2 masks
-                        for det in sam2_window_preds[cur_f]:
-                            trk_id = det["track_id"]
-                            if trk_id in tracker._tracks:
-                                t = tracker._tracks[trk_id]
-                                t.bbox = det["bbox"]
-                                t.centroid = det["centroid"]
-                                t.polygon = det["polygon"]
-                                t.area_px = det["area_px"]
-                                t.mask = det["mask"]
-                                t.last_seen_frame = cur_f
-                                t.time_since_update = 0
-                                t.history.append((det["bbox"], det["polygon"]))
-                    elif cur_f > kf_frame_idx:
-                        # Fallback homography warping for non-keyframes
-                        m_meta = motion_metas.get(cur_f, {})
-                        step_H = m_meta.get("step_H", np.eye(3, dtype=np.float32))
-                        tracker.warp_tracks_with_motion(
-                            step_H=step_H,
-                            frame_w=width,
-                            frame_h=height,
-                            frame_idx=cur_f,
-                        )
-
-                    active_tracks = tracker.get_active_tracks()
-                    bleached_count = sum(1 for t in active_tracks if t.bleaching.get("is_bleached", False))
-                    healthy_count = len(active_tracks) - bleached_count
-                    bleach_pct = (bleached_count / max(len(active_tracks), 1)) * 100.0
-
-                    genus_counts: Dict[str, int] = {}
-                    for t in active_tracks:
-                        g = t.taxonomy.get("genus", "Coral")
-                        genus_counts[g] = genus_counts.get(g, 0) + 1
-                    dom_genus = max(genus_counts, key=genus_counts.get) if genus_counts else "Coral"
-
-                    timestamp_sec = round(cur_f / max(video_fps, 1.0), 2)
-                    m_meta = motion_metas.get(cur_f, {})
-                    record = {
-                        "frame_index": cur_f,
-                        "timestamp_sec": timestamp_sec,
-                        "active_corals_count": len(active_tracks),
-                        "cumulative_unique_corals": tracker._next_track_id - 1,
-                        "bleached_corals_count": bleached_count,
-                        "healthy_corals_count": healthy_count,
-                        "bleaching_prevalence_pct": round(bleach_pct, 1),
-                        "dominant_genus": dom_genus,
-                        "is_keyframe": cur_f in keyframe_indices,
-                        "camera_motion_dx": m_meta.get("motion_dx", 0.0),
-                        "camera_motion_dy": m_meta.get("motion_dy", 0.0),
-                    }
-
-                    with self._lock:
-                        job["current_frame"] = cur_f + 1
-                        job["progress_pct"] = round(((cur_f + 1) / max(total_frames, 1)) * 100.0, 1)
-                        job["active_corals_count"] = len(active_tracks)
-                        job["total_unique_corals"] = tracker._next_track_id - 1
-                        job["bleaching_prevalence_pct"] = round(bleach_pct, 1)
-                        job["frame_tracks_map"][cur_f] = list(active_tracks)
-                        job["time_series"].append(record)
-
-                    frames_processed_clock += 1
-                    now = time.time()
-                    if now - fps_clock >= 0.5:
-                        inst_fps = frames_processed_clock / max(now - fps_clock, 0.001)
-                        with self._lock:
-                            job["fps_realtime"] = round(inst_fps, 1)
-                        fps_clock = now
-                        frames_processed_clock = 0
+                                active_tracks = tracker.get_active_tracks()
+                                _record_frame_state(out_f, active_tracks)
+                        except Exception:
+                            # Fallback to homography warping on streaming error
+                            for cur_f in range(kf_frame_idx + 1, next_kf_idx):
+                                if job["cancel_requested"]:
+                                    break
+                                m_meta = motion_metas.get(cur_f, {})
+                                step_H = m_meta.get("step_H", np.eye(3, dtype=np.float32))
+                                tracker.warp_tracks_with_motion(
+                                    step_H=step_H,
+                                    frame_w=width,
+                                    frame_h=height,
+                                    frame_idx=cur_f,
+                                )
+                                active_tracks = tracker.get_active_tracks()
+                                _record_frame_state(cur_f, active_tracks)
+                    else:
+                        for cur_f in range(kf_frame_idx + 1, next_kf_idx):
+                            if job["cancel_requested"]:
+                                break
+                            m_meta = motion_metas.get(cur_f, {})
+                            step_H = m_meta.get("step_H", np.eye(3, dtype=np.float32))
+                            tracker.warp_tracks_with_motion(
+                                step_H=step_H,
+                                frame_w=width,
+                                frame_h=height,
+                                frame_idx=cur_f,
+                            )
+                            active_tracks = tracker.get_active_tracks()
+                            _record_frame_state(cur_f, active_tracks)
 
             # Processing finished successfully
             if not job["cancel_requested"]:

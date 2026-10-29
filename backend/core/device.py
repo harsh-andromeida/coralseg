@@ -18,29 +18,51 @@ GPU_PROVIDERS = [
 ]
 
 
+def _check_torch_accelerators() -> Tuple[bool, bool]:
+    """Inspects native PyTorch GPU accelerators (CUDA and Apple Silicon MPS)."""
+    has_mps = False
+    has_cuda = False
+    try:
+        import torch
+        has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        has_cuda = torch.cuda.is_available()
+    except Exception:
+        pass
+    return has_mps, has_cuda
+
+
 def resolve_hardware_tier(preference: str = "auto") -> Dict[str, Any]:
     """
     Resolves compute tier following priority: GPU -> Multi-Threaded CPU -> CPU.
+    Recognizes NVIDIA CUDA, Apple Silicon GPU (MPS), ROCm, and DirectML.
+    Note: For ONNX Runtime on macOS, CPUExecutionProvider is used for static graphs
+    to avoid CoreML dynamic-slice dimension-0 limitations, while SAM 2 runs on native MPS GPU.
     """
     available = ort.get_available_providers()
     cpu_count = os.cpu_count() or 1
     pref = preference.lower().strip() if preference else "auto"
+    has_mps, has_cuda = _check_torch_accelerators()
 
     gpu_provider = next((p for p in GPU_PROVIDERS if p in available), None)
-    gpu_available = gpu_provider is not None
-
-    if gpu_provider == "CUDAExecutionProvider":
+    
+    # Check if GPU acceleration is present either through ORT or PyTorch (MPS / CUDA)
+    if has_cuda or gpu_provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider"):
+        gpu_available = True
+        gpu_provider = "CUDAExecutionProvider" if "CUDAExecutionProvider" in available else "CPUExecutionProvider"
         gpu_display_name = "NVIDIA CUDA GPU"
+    elif has_mps:
+        gpu_available = True
+        gpu_provider = "CPUExecutionProvider"
+        gpu_display_name = "Apple Silicon GPU (MPS)"
     elif gpu_provider == "ROCMExecutionProvider":
+        gpu_available = True
         gpu_display_name = "AMD ROCm GPU"
     elif gpu_provider == "DmlExecutionProvider":
+        gpu_available = True
         gpu_display_name = "Windows DirectML GPU"
-    elif gpu_provider == "TensorrtExecutionProvider":
-        gpu_display_name = "NVIDIA TensorRT GPU"
-    elif gpu_provider == "CoreMLExecutionProvider":
-        gpu_display_name = "Apple Silicon Neural Engine / GPU (CoreML)"
     else:
-        gpu_display_name = "GPU Accelerator"
+        gpu_available = gpu_provider is not None
+        gpu_display_name = "GPU Accelerator" if gpu_available else "CPU"
 
     # Explicit or automatic resolution
     if pref in ("gpu", "cuda", "dml", "directml", "rocm", "tensorrt", "coreml", "mps", "apple"):
@@ -170,19 +192,26 @@ def get_device_info(preference: str = "auto") -> Dict[str, Any]:
     available = info["available_providers"]
     provider = info["provider"]
     is_gpu = info["tier"] == "gpu"
+    has_mps, has_cuda = _check_torch_accelerators()
+
+    chip_label = "CPU"
+    if has_mps or provider == "CoreMLExecutionProvider":
+        chip_label = "Apple Silicon (MPS / CoreML)"
+    elif has_cuda or provider == "CUDAExecutionProvider":
+        chip_label = "NVIDIA GPU (CUDA)"
 
     return {
         "device": provider,
         "device_type": "gpu" if is_gpu else "cpu",
         "mode": info["tier"],
         "mode_label": info["mode_label"],
-        "cuda_available": "CUDAExecutionProvider" in available,
-        "mps_available": "CoreMLExecutionProvider" in available,
+        "cuda_available": ("CUDAExecutionProvider" in available) or has_cuda,
+        "mps_available": has_mps or ("CoreMLExecutionProvider" in available),
         "coreml_available": "CoreMLExecutionProvider" in available,
         "dml_available": "DmlExecutionProvider" in available,
         "gpu_available": info["gpu_available"],
         "gpu_name": info["display_name"],
-        "chip_name": "Apple Silicon (ANE/GPU)" if provider == "CoreMLExecutionProvider" else "CPU",
+        "chip_name": chip_label,
         "active_provider": provider,
         "threads": info["threads"],
         "cpu_count": info["cpu_count"],

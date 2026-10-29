@@ -545,3 +545,20 @@ def load_bleaching_model(
     pt_path = find_or_download_onnx_model(HF_BLEACHING_FILE, progress_callback=progress_callback)
     _BLEACHING_SESSION = ort.InferenceSession(pt_path, sess_options=sess_options, providers=providers)
     return _BLEACHING_SESSION
+
+
+def preload_all_foundation_models(device: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Warms up and preloads foundation models into resident memory/VRAM:
+    1. SAM ViT-B Instance Segmentation (Encoder + Decoder)
+    2. ReefNet BioCLIP Taxonomy Classifier & Embeddings
+    3. NMFS-OSI NOAA Bleaching Classifier
+    """
+    sam_bundle = load_coralscop_model(device=device)
+    bioclip_bundle = load_bioclip_model(device=device)
+    bleaching_session = load_bleaching_model(device=device)
+    return {
+        "sam": sam_bundle,
+        "bioclip": bioclip_bundle,
+        "bleaching": bleaching_session,
+    }

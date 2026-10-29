@@ -62,6 +62,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
 
   // Active frame tracks
   const [currentTracks, setCurrentTracks] = useState<VideoTrackItem[]>([]);
+  const [isFollowingLive, setIsFollowingLive] = useState<boolean>(true);
 
   const fps = videoItem.metadata.fps || 25.0;
   const durationSec = videoItem.metadata.duration_sec || 1.0;
@@ -82,7 +83,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
-  // Poll background job status
+  // Poll background job status and advance live video stream
   useEffect(() => {
     if (!jobId) return;
 
@@ -92,6 +93,18 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
         const s = await getVideoStatus(jobId);
         if (isMounted) {
           setJobStatus(s);
+
+          // Auto-advance player to follow live stream as frames are completed
+          if (s.state === "processing" && isFollowingLive && s.current_frame > 0) {
+            const liveFrame = Math.max(0, Math.min(totalFrames - 1, s.current_frame - 1));
+            setCurrentFrameIdx(liveFrame);
+            const liveSec = liveFrame / fps;
+            setCurrentTimeSec(liveSec);
+            if (videoRef.current) {
+              videoRef.current.currentTime = liveSec;
+            }
+          }
+
           if (s.state === "completed" || s.state === "error" || s.state === "cancelled") {
             clearInterval(interval);
           }
@@ -99,13 +112,13 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
       } catch {
         // quiet poll fail
       }
-    }, 1000);
+    }, 400);
 
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [jobId]);
+  }, [jobId, isFollowingLive, totalFrames, fps]);
 
   // Query frame annotations when currentFrameIdx changes
   useEffect(() => {
@@ -186,6 +199,13 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     videoRef.current.currentTime = targetSec;
     setCurrentTimeSec(targetSec);
     setCurrentFrameIdx(clampedFrame);
+
+    // If seeking to the latest processed frame, resume following live stream
+    if (jobStatus && clampedFrame >= Math.max(0, jobStatus.current_frame - 1)) {
+      setIsFollowingLive(true);
+    } else {
+      setIsFollowingLive(false);
+    }
   };
 
   // Step Frame
@@ -285,16 +305,16 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
               videoRef={videoRef}
             />
 
-            {/* 4 KPI Summary Cards - EXACT same component! */}
-            <MetricCards stats={stats} isLoading={isJobProcessing} />
+            {/* 4 KPI Summary Cards - Live Progressive Census */}
+            <MetricCards stats={stats} isLoading={!jobStatus} />
 
-            {/* Detected Coral Segments Breakdown Table - EXACT same component! */}
+            {/* Detected Coral Segments Breakdown Table - Live Updating */}
             <SegmentsTable
               segments={segments}
               stats={stats}
               selectedSegmentId={selectedTrackId}
               onSelectSegment={setSelectedTrackId}
-              isLoading={isJobProcessing}
+              isLoading={!jobStatus}
             />
 
             {/* Export & Data Inspector - EXACT same Card and Accordion layout! */}

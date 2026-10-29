@@ -2,7 +2,6 @@ import React, { useRef, useEffect } from "react";
 import { Film, Sparkles } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ThreeDotsLoader } from "../ThreeDotsLoader";
 import { CoralSegment } from "../../types";
 
 interface VideoViewerProps {
@@ -219,9 +218,12 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
               className="absolute inset-0 w-full h-full pointer-events-none select-none"
             />
             {isLoading && (
-              <div className="absolute inset-0 bg-background/50 backdrop-blur-xs flex flex-col items-center justify-center gap-2">
-                <ThreeDotsLoader size="md" />
-                <span className="text-xs font-mono text-muted-foreground">Processing Transect Track...</span>
+              <div className="absolute top-3 right-3 bg-card/85 backdrop-blur-md border border-emerald-500/50 px-3 py-1 rounded-full flex items-center gap-2 shadow-sm pointer-events-none">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span className="text-[11px] font-mono font-medium text-foreground tracking-wide">LIVE INFERENCE</span>
               </div>
             )}
           </div>
