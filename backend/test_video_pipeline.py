@@ -234,9 +234,69 @@ def test_video_api_endpoints():
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def test_real_video_sample_pipeline():
+    """Verifies end-to-end ingestion, tracking, keyframing, and export on real underwater reef footage."""
+    print("\n--- Testing Real Underwater Video Sample Pipeline ---")
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+
+    # 1. Fetch sample video
+    resp = client.get("/api/video/sample")
+    assert resp.status_code == 200, f"Sample video fetch failed: {resp.text}"
+    sample_data = resp.json()
+    video_name = sample_data["video_name"]
+    meta = sample_data["metadata"]
+    print(f"  Loaded sample video '{video_name}': {meta['width']}x{meta['height']} @ {meta['fps']}fps, {meta['total_frames']} frames")
+    assert meta["width"] == 972 and meta["height"] == 720
+    assert meta["total_frames"] > 0
+
+    # 2. Launch processing job
+    p_resp = client.post("/api/video/process", json={
+        "video_name": video_name,
+        "overlap_threshold": 0.70,
+        "min_stride": 15,
+        "max_stride": 45,
+        "points_per_side": 8,
+    })
+    assert p_resp.status_code == 200, f"Start job failed: {p_resp.text}"
+    job_id = p_resp.json()["job_id"]
+    print(f"  Launched processing job '{job_id}'")
+
+    # 3. Poll until completion
+    import time
+    for _ in range(120):
+        time.sleep(0.5)
+        s_resp = client.get(f"/api/video/status/{job_id}")
+        assert s_resp.status_code == 200
+        s_data = s_resp.json()
+        if s_data["state"] in ("completed", "error"):
+            break
+
+    assert s_data["state"] == "completed", f"Job failed: {s_data.get('error')}"
+    print(f"  Completed! Processed {s_data['current_frame']} frames | Keyframes: {s_data['keyframes_count']} | Total corals: {s_data['total_unique_corals']}")
+    assert s_data["keyframes_count"] >= 1
+    assert s_data["total_unique_corals"] >= 1
+
+    # 4. Verify frame annotations
+    frame_resp = client.get(f"/api/video/frame/{job_id}/0")
+    assert frame_resp.status_code == 200
+    f_data = frame_resp.json()
+    assert "tracks" in f_data
+    print(f"  Frame 0 annotations: {len(f_data['tracks'])} tracks detected")
+
+    # 5. Verify exports (MP4, CSV, JSON)
+    for fmt in ("mp4", "csv", "json"):
+        exp_resp = client.get(f"/api/video/export/{job_id}?format={fmt}")
+        assert exp_resp.status_code == 200, f"Export format '{fmt}' failed"
+        assert len(exp_resp.content) > 0
+        print(f"  Export '{fmt}' verified ({len(exp_resp.content)} bytes)")
+
+
 if __name__ == "__main__":
     test_keyframe_selector()
     test_benthic_tracker()
     test_export_utilities()
     test_video_api_endpoints()
+    test_real_video_sample_pipeline()
     print("\nAll video pipeline unit tests PASSED successfully!")
