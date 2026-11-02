@@ -41,6 +41,7 @@ class EgoMotionKeyframeSelector:
 
         self._keyframe_gray: Optional[np.ndarray] = None
         self._prev_gray: Optional[np.ndarray] = None
+        self._prev_motion_gray: Optional[np.ndarray] = None
         self._prev_hist: Optional[np.ndarray] = None
         self._cumulative_H: np.ndarray = np.eye(3, dtype=np.float32)
         self._frames_since_keyframe = 0
@@ -51,6 +52,7 @@ class EgoMotionKeyframeSelector:
         """Resets the selector state for a new video stream."""
         self._keyframe_gray = None
         self._prev_gray = None
+        self._prev_motion_gray = None
         self._prev_hist = None
         self._cumulative_H = np.eye(3, dtype=np.float32)
         self._frames_since_keyframe = 0
@@ -91,10 +93,21 @@ class EgoMotionKeyframeSelector:
         # Convert to grayscale for motion estimation
         curr_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
 
+        # Downscale proxy for optical flow (max_dim=640) to accelerate feature tracking 5-10x
+        proxy_scale = 1.0
+        if max(h, w) > 640:
+            proxy_scale = 640.0 / float(max(h, w))
+            proxy_w = max(16, int(round(w * proxy_scale)))
+            proxy_h = max(16, int(round(h * proxy_scale)))
+            curr_motion_gray = cv2.resize(curr_gray, (proxy_w, proxy_h), interpolation=cv2.INTER_AREA)
+        else:
+            curr_motion_gray = curr_gray
+
         # 1. First frame is always a Keyframe
         if self._keyframe_gray is None or self._total_frames == 1 or force_keyframe:
             self._keyframe_gray = curr_gray.copy()
             self._prev_gray = curr_gray.copy()
+            self._prev_motion_gray = curr_motion_gray.copy()
             self._prev_hist = self._compute_hist(curr_gray)
             self._cumulative_H = np.eye(3, dtype=np.float32)
             self._frames_since_keyframe = 0
@@ -120,22 +133,22 @@ class EgoMotionKeyframeSelector:
                 is_scene_cut = True
         self._prev_hist = curr_hist
 
-        # 3. Inter-frame motion estimation using pyramidal Lucas-Kanade
+        # 3. Inter-frame motion estimation using pyramidal Lucas-Kanade on proxy resolution
         pts_prev = cv2.goodFeaturesToTrack(
-            self._prev_gray,
+            self._prev_motion_gray if self._prev_motion_gray is not None else curr_motion_gray,
             maxCorners=200,
             qualityLevel=0.01,
-            minDistance=15,
+            minDistance=10,
             blockSize=7,
         )
 
         step_H = np.eye(3, dtype=np.float32)
         dx, dy = 0.0, 0.0
 
-        if pts_prev is not None and len(pts_prev) >= 8:
+        if pts_prev is not None and len(pts_prev) >= 8 and self._prev_motion_gray is not None:
             pts_curr, status, _ = cv2.calcOpticalFlowPyrLK(
-                self._prev_gray,
-                curr_gray,
+                self._prev_motion_gray,
+                curr_motion_gray,
                 pts_prev,
                 None,
                 winSize=(21, 21),
@@ -154,12 +167,16 @@ class EgoMotionKeyframeSelector:
                     ransacReprojThreshold=3.0,
                 )
                 if affine is not None:
+                    # Rescale translation offsets back to full-resolution coordinates
+                    affine[0, 2] /= proxy_scale
+                    affine[1, 2] /= proxy_scale
                     step_H = np.eye(3, dtype=np.float32)
                     step_H[:2, :] = affine
                     dx = float(affine[0, 2])
                     dy = float(affine[1, 2])
 
         self._prev_gray = curr_gray.copy()
+        self._prev_motion_gray = curr_motion_gray.copy()
 
         # Accumulate homography relative to current keyframe anchor
         self._cumulative_H = self._cumulative_H @ step_H

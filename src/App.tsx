@@ -50,6 +50,10 @@ export const App: React.FC = () => {
     <UploadView
       onLaunchStudio={handleLaunchStudio}
       onLaunchVideoStudio={handleLaunchVideoStudio}
+      activeVideo={activeVideo}
+      activeVideoJobId={activeVideoJobId}
+      onSetActiveVideo={setActiveVideo}
+      onSetActiveVideoJobId={setActiveVideoJobId}
     />
   );
 };

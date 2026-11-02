@@ -1,4 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import {
+  Cpu,
+  Terminal,
+  ChevronDown,
+  ChevronUp,
+  Play,
+  Pause,
+  StopCircle,
+  CheckCircle2,
+  Activity,
+} from "lucide-react";
 import { TopBar } from "../components/TopBar";
 import { Sidebar } from "../components/Sidebar";
 import { VideoTimelineBar } from "../components/video/VideoTimelineBar";
@@ -19,6 +30,9 @@ import {
   getVideoFrameAnnotations,
   getDevice,
   setDevicePreference,
+  pauseVideoJob,
+  resumeVideoJob,
+  cancelVideoJob,
 } from "../services/api";
 
 interface VideoAnalysisViewProps {
@@ -33,12 +47,15 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   onBackToUpload,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   const [jobId] = useState<string>(initialJobId || videoItem.job_id || "");
   const [jobStatus, setJobStatus] = useState<VideoJobStatus | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [devicePref, setDevicePref] = useState<string>("auto");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
+  const [showLogs, setShowLogs] = useState<boolean>(true);
+  const [isTogglingPause, setIsTogglingPause] = useState<boolean>(false);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -222,6 +239,42 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
+  // Auto-scroll activity log to bottom
+  useEffect(() => {
+    if (showLogs && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [jobStatus?.logs, showLogs]);
+
+  const handleTogglePauseJob = async () => {
+    if (!jobId || !jobStatus) return;
+    setIsTogglingPause(true);
+    try {
+      if (jobStatus.state === "paused") {
+        await resumeVideoJob(jobId);
+      } else {
+        await pauseVideoJob(jobId);
+      }
+      const updated = await getVideoStatus(jobId);
+      setJobStatus(updated);
+    } catch (err: any) {
+      alert(`Error toggling pause: ${err?.message || err}`);
+    } finally {
+      setIsTogglingPause(false);
+    }
+  };
+
+  const handleCancelJob = async () => {
+    if (!jobId) return;
+    try {
+      await cancelVideoJob(jobId);
+      const updated = await getVideoStatus(jobId);
+      setJobStatus(updated);
+    } catch (err: any) {
+      alert(`Error cancelling video: ${err?.message || err}`);
+    }
+  };
+
   const isJobProcessing = jobStatus ? jobStatus.state === "processing" : true;
   const keyframeIndices = jobStatus?.metadata ? (jobStatus as any).keyframe_indices || [0] : [0];
 
@@ -284,6 +337,174 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
               onStepFrame={handleStepFrame}
               onSeekFrame={handleSeekFrame}
             />
+
+            {/* Live Pipeline Telemetry HUD & Model Activity Inspector */}
+            {jobStatus && (
+              <div className="rounded-2xl border border-cyan-200/90 bg-white/95 backdrop-blur-md shadow-xs p-4 space-y-3">
+                {/* Header: State, Frame counter, Realtime FPS, Active Model, Controls */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {jobStatus.state === "processing" ? (
+                      <span className="relative flex h-3 w-3 shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-600" />
+                      </span>
+                    ) : jobStatus.state === "paused" ? (
+                      <span className="h-3 w-3 rounded-full bg-amber-500 shrink-0" />
+                    ) : (
+                      <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                    )}
+
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="text-xs font-bold text-slate-900 tracking-tight">
+                        {jobStatus.state === "processing"
+                          ? "Autonomous Pipeline Active"
+                          : jobStatus.state === "paused"
+                          ? "Pipeline Paused"
+                          : "Transect Processing Complete"}
+                      </span>
+
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-cyan-50 border border-cyan-200 text-cyan-900 font-bold">
+                        Frame {jobStatus.current_frame} / {totalFrames} ({jobStatus.progress_pct}%)
+                      </span>
+
+                      {jobStatus.fps_realtime > 0 && (
+                        <span className="text-[10px] font-mono font-bold text-cyan-800 bg-cyan-100/70 border border-cyan-200/60 px-1.5 py-0.5 rounded">
+                          {jobStatus.fps_realtime} FPS
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* Active Model Pill */}
+                    {jobStatus.current_model && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 text-white text-[11px] font-semibold shadow-xs">
+                        <Cpu size={12} className="text-cyan-400" />
+                        <span className="text-slate-300">Model:</span>
+                        <span className="text-cyan-300 font-bold">{jobStatus.current_model}</span>
+                      </div>
+                    )}
+
+                    {/* Pause / Resume & Cancel Buttons */}
+                    {(jobStatus.state === "processing" || jobStatus.state === "paused") && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleTogglePauseJob}
+                          disabled={isTogglingPause}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 shadow-2xs transition-all"
+                          title={jobStatus.state === "paused" ? "Resume analysis" : "Pause analysis"}
+                        >
+                          {jobStatus.state === "paused" ? <Play size={12} /> : <Pause size={12} />}
+                          <span>{jobStatus.state === "paused" ? "Resume" : "Pause"}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleCancelJob}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-red-200 bg-red-50/50 hover:bg-red-100/60 text-red-700 shadow-2xs transition-all"
+                          title="Cancel analysis"
+                        >
+                          <StopCircle size={12} />
+                          <span>Cancel</span>
+                        </button>
+                      </>
+                    )}
+
+                    {/* Toggle Activity Log Stream */}
+                    <button
+                      type="button"
+                      onClick={() => setShowLogs(!showLogs)}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${
+                        showLogs
+                          ? "bg-slate-100 border-slate-300 text-slate-900"
+                          : "bg-white border-slate-200 text-slate-600 hover:text-slate-900"
+                      }`}
+                      title="Toggle live model log stream"
+                    >
+                      <Terminal size={12} className={showLogs ? "text-cyan-600" : ""} />
+                      <span>Activity Log</span>
+                      <span className="text-[10px] font-mono px-1 rounded bg-slate-200/60 text-slate-700">
+                        {jobStatus.logs?.length || 0}
+                      </span>
+                      {showLogs ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Progress Bar */}
+                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200/60">
+                  <div
+                    className={`h-full transition-all duration-300 ${
+                      jobStatus.state === "completed"
+                        ? "bg-emerald-500"
+                        : jobStatus.state === "paused"
+                        ? "bg-amber-500"
+                        : "bg-gradient-to-r from-cyan-600 via-teal-500 to-cyan-400"
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, jobStatus.progress_pct))}%` }}
+                  />
+                </div>
+
+                {/* Sub-bar: Stage description & live colonies census */}
+                <div className="flex flex-wrap items-center justify-between text-xs text-slate-600 gap-2 pt-0.5">
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="font-semibold text-slate-800">
+                      {jobStatus.current_stage || "Analyzing benthic habitat..."}
+                    </span>
+                    {jobStatus.stage_detail && (
+                      <span className="text-slate-400 truncate text-[11px]">
+                        • {jobStatus.stage_detail}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3 text-[11px] font-medium shrink-0">
+                    <span className="text-slate-500">
+                      Discovered:{" "}
+                      <strong className="text-cyan-800 font-bold">{jobStatus.total_unique_corals || 0}</strong> colonies
+                    </span>
+                    <span className="text-slate-300">•</span>
+                    <span className="text-slate-500">
+                      Keyframes:{" "}
+                      <strong className="text-slate-800 font-bold">{jobStatus.keyframes_count || 0}</strong>
+                    </span>
+                    <span className="text-slate-300">•</span>
+                    <span className="text-slate-500">
+                      Bleaching:{" "}
+                      <strong className="text-amber-700 font-bold">{jobStatus.bleaching_prevalence_pct || 0}%</strong>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Collapsible Activity Log Console */}
+                {showLogs && (
+                  <div className="mt-2 rounded-xl bg-slate-950 border border-slate-800 p-3 font-mono text-[11px] text-slate-300 space-y-1 max-h-36 overflow-y-auto portal-scroll-area shadow-inner">
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 border-b border-slate-800 pb-1.5 mb-1.5">
+                      <span className="flex items-center gap-1 font-bold tracking-wider uppercase text-cyan-400">
+                        <Activity size={11} /> Real-time Pipeline Telemetry & Model Logs
+                      </span>
+                      <span>Engine: {jobStatus.tracker_mode === "sam2" ? "SAM 2 Video Predictor" : "Lucas-Kanade Optical Flow (60-120 FPS)"}</span>
+                    </div>
+
+                    {jobStatus.logs && jobStatus.logs.length > 0 ? (
+                      jobStatus.logs.map((logStr, lIdx) => (
+                        <div key={lIdx} className="leading-relaxed flex items-start gap-2">
+                          <span className="text-slate-500 shrink-0 select-none">›</span>
+                          <span className={logStr.includes("Keyframe") ? "text-cyan-300 font-semibold" : logStr.includes("BioCLIP") ? "text-emerald-300" : logStr.includes("Completed") || logStr.includes("finished") ? "text-amber-300 font-bold" : "text-slate-300"}>
+                            {logStr}
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-slate-500 italic">No events logged yet. Waiting for pipeline start...</div>
+                    )}
+                    <div ref={logsEndRef} />
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Canvas Video Viewer (built with exact same Card, header, badges, and layout modes as ImageViewer) */}
             <VideoViewer

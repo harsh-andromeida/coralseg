@@ -262,6 +262,24 @@ export interface VideoJobStatus {
     transect_csv?: string | null;
     coco_json?: string | null;
   };
+  current_stage?: string;
+  current_model?: string;
+  current_action?: string;
+  stage_detail?: string;
+  logs?: string[];
+  tracker_mode?: string;
+}
+
+export interface VideoProcessParams {
+  video_name: string;
+  overlap_threshold?: number;
+  min_stride?: number;
+  max_stride?: number;
+  points_per_side?: number;
+  iou_match_threshold?: number;
+  pred_iou_thresh?: number;
+  stability_thresh?: number;
+  tracker_mode?: string;
 }
 
 export interface UploadedVideoItem {

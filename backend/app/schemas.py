@@ -176,12 +176,13 @@ class SaveAnnotationsRequest(BaseModel):
 class VideoProcessRequest(BaseModel):
     video_name: str = Field(description="Filename of registered video in uploads")
     overlap_threshold: float = Field(default=0.75, ge=0.40, le=0.95, description="Scene overlap threshold triggering a keyframe")
-    min_stride: int = Field(default=5, ge=1, le=30, description="Minimum frame spacing between keyframes")
-    max_stride: int = Field(default=30, ge=5, le=120, description="Maximum frame spacing between keyframes")
-    points_per_side: int = Field(default=12, ge=8, le=32, description="SAM prompt grid density for keyframes")
+    min_stride: int = Field(default=15, ge=1, le=60, description="Minimum frame spacing between keyframes")
+    max_stride: int = Field(default=45, ge=5, le=120, description="Maximum frame spacing between keyframes")
+    points_per_side: int = Field(default=8, ge=8, le=32, description="SAM prompt grid density for keyframes")
     iou_match_threshold: float = Field(default=0.30, ge=0.10, le=0.80, description="IoU threshold for tracking association")
     pred_iou_thresh: float = Field(default=0.45, ge=0.20, le=0.90)
     stability_thresh: float = Field(default=0.45, ge=0.20, le=0.90)
+    tracker_mode: Optional[str] = Field(default="optical_flow", description="Tracking engine: 'optical_flow' (60-120 FPS high-speed) or 'sam2' (deep neural)")
 
 
 class VideoTrackItem(BaseModel):
@@ -214,6 +215,12 @@ class VideoStatusResponse(BaseModel):
     error: Optional[str] = None
     time_series: Optional[List[Dict[str, Any]]] = None
     export_paths: Optional[Dict[str, Optional[str]]] = None
+    current_stage: Optional[str] = "Processing"
+    current_model: Optional[str] = None
+    current_action: Optional[str] = None
+    stage_detail: Optional[str] = None
+    logs: Optional[List[str]] = None
+    tracker_mode: Optional[str] = "optical_flow"
 
 
 

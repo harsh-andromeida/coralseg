@@ -1559,6 +1559,7 @@ def process_video(req: VideoProcessRequest):
                 "pred_iou_thresh": req.pred_iou_thresh,
                 "stability_thresh": req.stability_thresh,
                 "device_pref": _ACTIVE_DEVICE_PREF,
+                "tracker_mode": req.tracker_mode or "optical_flow",
             },
         )
         job = _VIDEO_PROCESSOR.get_job(job_id)
@@ -1570,6 +1571,38 @@ def process_video(req: VideoProcessRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start video processing: {str(e)}")
+
+
+@app.get("/api/video/active-status", response_model=Optional[VideoStatusResponse])
+def get_active_video_status():
+    """Retrieves real-time processing status of the active or most recent video job."""
+    job = _VIDEO_PROCESSOR.get_active_job()
+    if not job:
+        return None
+
+    return VideoStatusResponse(
+        job_id=job["job_id"],
+        filename=job["filename"],
+        state=job["state"],
+        current_frame=job["current_frame"],
+        total_frames=job["total_frames"],
+        progress_pct=job["progress_pct"],
+        fps_realtime=job["fps_realtime"],
+        active_corals_count=job["active_corals_count"],
+        total_unique_corals=job["total_unique_corals"],
+        bleaching_prevalence_pct=job["bleaching_prevalence_pct"],
+        keyframes_count=job["keyframes_count"],
+        metadata=job["metadata"],
+        error=job["error"],
+        time_series=job["time_series"],
+        export_paths=job.get("export_paths"),
+        current_stage=job.get("current_stage", "Processing"),
+        current_model=job.get("current_model"),
+        current_action=job.get("current_action"),
+        stage_detail=job.get("stage_detail"),
+        logs=job.get("logs", []),
+        tracker_mode=job.get("tracker_mode", "optical_flow"),
+    )
 
 
 @app.get("/api/video/status/{job_id}", response_model=VideoStatusResponse)
@@ -1595,6 +1628,12 @@ def get_video_status(job_id: str):
         error=job["error"],
         time_series=job["time_series"],
         export_paths=job.get("export_paths"),
+        current_stage=job.get("current_stage", "Processing"),
+        current_model=job.get("current_model"),
+        current_action=job.get("current_action"),
+        stage_detail=job.get("stage_detail"),
+        logs=job.get("logs", []),
+        tracker_mode=job.get("tracker_mode", "optical_flow"),
     )
 
 

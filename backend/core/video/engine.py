@@ -61,6 +61,19 @@ class VideoProcessor:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def get_active_job(self) -> Optional[Dict[str, Any]]:
+        """Retrieves currently running/paused job, or the most recent video job."""
+        with self._lock:
+            if not self._jobs:
+                return None
+            # Return currently processing or paused job first
+            for j in reversed(list(self._jobs.values())):
+                if j.get("state") in (VideoJobState.PROCESSING, VideoJobState.PAUSED):
+                    return j
+            # Fallback to the latest job
+            sorted_jobs = sorted(self._jobs.values(), key=lambda j: j.get("created_at", 0), reverse=True)
+            return sorted_jobs[0] if sorted_jobs else None
+
     def probe_video(self, video_path: str) -> Dict[str, Any]:
         """Probes video metadata using OpenCV."""
         if not _HAS_CV2:
@@ -113,16 +126,19 @@ class VideoProcessor:
 
         opts = {
             "overlap_threshold": 0.75,
-            "min_stride": 5,
-            "max_stride": 30,
-            "points_per_side": 12,
+            "min_stride": 15,
+            "max_stride": 45,
+            "points_per_side": 8,
             "iou_match_threshold": 0.30,
             "pred_iou_thresh": 0.45,
             "stability_thresh": 0.45,
             "device_pref": "auto",
+            "tracker_mode": "optical_flow",
         }
         if params:
             opts.update(params)
+
+        tracker_mode = opts.get("tracker_mode", "optical_flow")
 
         job_info = {
             "job_id": job_id,
@@ -149,6 +165,16 @@ class VideoProcessor:
             "created_at": time.time(),
             "completed_at": None,
             "export_paths": {},
+            "current_stage": "Initializing transect pipeline...",
+            "current_model": "Video Demuxer / 25 FPS Grid",
+            "current_action": "Preparing video stream and loading neural models",
+            "stage_detail": f"Standardized 25.0 FPS video grid ({probe['total_frames']} frames @ {probe['width']}x{probe['height']})",
+            "stage_progress_pct": 0.0,
+            "logs": [
+                f"[{time.strftime('%H:%M:%S')}] Started transect tracking on '{probe['filename']}' ({probe['width']}x{probe['height']}, {probe['total_frames']} frames @ 25fps)",
+                f"[{time.strftime('%H:%M:%S')}] Engine configured: mode={tracker_mode}, min_stride={opts['min_stride']}, max_stride={opts['max_stride']}, points={opts['points_per_side']}x{opts['points_per_side']}",
+            ],
+            "tracker_mode": tracker_mode,
         }
 
         with self._lock:
@@ -210,6 +236,7 @@ class VideoProcessor:
         if not job:
             return
 
+        frames_dir: Optional[str] = None
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             with self._lock:
@@ -221,12 +248,45 @@ class VideoProcessor:
         width = job["metadata"]["width"]
         height = job["metadata"]["height"]
         video_fps = job["metadata"]["fps"]
+        tracker_mode = opts.get("tracker_mode", "optical_flow")
+
+        def _set_stage(
+            stage: str,
+            model: Optional[str] = None,
+            action: Optional[str] = None,
+            detail: Optional[str] = None,
+            log_entry: Optional[str] = None,
+        ):
+            with self._lock:
+                job["current_stage"] = stage
+                if model is not None:
+                    job["current_model"] = model
+                if action is not None:
+                    job["current_action"] = action
+                if detail is not None:
+                    job["stage_detail"] = detail
+                if log_entry:
+                    t_str = time.strftime("%H:%M:%S")
+                    job.setdefault("logs", []).append(f"[{t_str}] {log_entry}")
+                    if len(job["logs"]) > 60:
+                        job["logs"] = job["logs"][-60:]
 
         # 1. Load models
         try:
+            _set_stage(
+                stage="Loading foundation models into RAM...",
+                model="CoralSCOP SAM, BioCLIP, YOLO11n",
+                action="Initializing ONNX inference sessions",
+                log_entry="Loading foundation models: CoralSCOP SAM ViT-B, BioCLIP ViT, and Bleaching YOLO11n",
+            )
             sam_model = self.sam_loader()
             bioclip_bundle = self.bioclip_loader()
             bleaching_model = self.bleaching_loader()
+            _set_stage(
+                stage="Foundation models loaded",
+                detail="Inference sessions active in system memory",
+                log_entry="Foundation models loaded successfully into RAM",
+            )
         except Exception as e:
             with self._lock:
                 job["state"] = VideoJobState.ERROR
@@ -234,7 +294,7 @@ class VideoProcessor:
             cap.release()
             return
 
-        # 1. Pre-evaluate keyframes using high-speed optical flow (~1ms per frame)
+        # 2. Pre-evaluate keyframes using high-speed optical flow (~1-2ms per frame)
         selector = EgoMotionKeyframeSelector(
             overlap_threshold=opts["overlap_threshold"],
             min_stride=opts["min_stride"],
@@ -248,6 +308,14 @@ class VideoProcessor:
         motion_metas = {}
         scan_cap = cv2.VideoCapture(video_path)
         f_scan = 0
+
+        _set_stage(
+            stage="Analyzing camera ego-motion & seafloor overlap...",
+            model="Lucas-Kanade Optical Flow",
+            action="Computing camera translation & benthic scene overlap",
+            detail=f"Scanning frame 0/{total_frames}",
+        )
+
         while True:
             ret, f_bgr = scan_cap.read()
             if not ret or f_bgr is None:
@@ -258,24 +326,63 @@ class VideoProcessor:
             if is_kf and f_scan > 0:
                 detected_kfs.append(f_scan)
             f_scan += 1
+
+            if f_scan % 25 == 0 or f_scan == total_frames:
+                _set_stage(
+                    stage=f"Analyzing camera motion: {f_scan}/{total_frames} frames ({int(f_scan / max(total_frames, 1) * 100)}%)...",
+                    model="Lucas-Kanade Optical Flow",
+                    detail=f"Detected {len(detected_kfs)} candidate keyframes",
+                )
         scan_cap.release()
 
         keyframe_indices = sorted(list(set(detected_kfs)))
+        _set_stage(
+            stage="Motion scan complete",
+            detail=f"Found {len(keyframe_indices)} keyframes across {total_frames} frames",
+            log_entry=f"Camera motion scan complete: detected {len(keyframe_indices)} benthic keyframes (indices: {', '.join(str(k) for k in keyframe_indices[:6])}{'...' if len(keyframe_indices) > 6 else ''})",
+        )
 
-        # 2. Initialize SAM 2 Video Predictor with Dual-Resolution Inference Proxy
-        storage_dir = os.path.dirname(os.path.abspath(video_path))
-        frames_dir = os.path.join(storage_dir, f"frames_{job_id}")
-        sam2_tracker = SAM2BenthicTracker(device=opts.get("device_pref", "auto"))
+        # 3. Setup Tracker Mode
         has_sam2 = False
         proxy_meta = {"scale_x": 1.0, "scale_y": 1.0}
+        frames_dir = None
 
-        try:
-            # Extract dual-resolution frames (e.g. max_dim=640) for 5-10x faster tracking
-            _, proxy_meta = extract_video_frames_to_disk(video_path, frames_dir, max_dim=640, jpeg_quality=85)
-            sam2_tracker.init_video(frames_dir)
-            has_sam2 = True
-        except Exception as sam2_err:
-            has_sam2 = False
+        if tracker_mode == "sam2":
+            storage_dir = os.path.dirname(os.path.abspath(video_path))
+            frames_dir = os.path.join(storage_dir, f"frames_{job_id}")
+            sam2_tracker = SAM2BenthicTracker(device=opts.get("device_pref", "auto"))
+            try:
+                _set_stage(
+                    stage="Extracting dual-resolution frames for SAM 2...",
+                    model="SAM 2 Video Predictor",
+                    action="Writing 640p proxy frames to disk",
+                )
+                _, proxy_meta = extract_video_frames_to_disk(video_path, frames_dir, max_dim=640, jpeg_quality=85)
+                _set_stage(
+                    stage="Initializing SAM 2 inference state...",
+                    model="Meta SAM 2.1 Video Predictor",
+                    action="Building memory feature bank",
+                )
+                sam2_tracker.init_video(frames_dir)
+                has_sam2 = True
+                _set_stage(
+                    stage="SAM 2 Tracker active",
+                    log_entry="Initialized SAM 2.1 Video Predictor with dual-resolution proxy",
+                )
+            except Exception as sam2_err:
+                has_sam2 = False
+                _set_stage(
+                    stage="Optical Flow Tracker (Fallback)",
+                    detail=f"SAM 2 unavailable ({str(sam2_err)}); using high-speed optical flow",
+                    log_entry=f"SAM 2 initialization bypassed; operating with high-speed Optical Flow homography",
+                )
+        else:
+            _set_stage(
+                stage="High-Speed Optical Flow Benthic Tracker active",
+                model="Lucas-Kanade Optical Flow Tracker",
+                action="Homography coordinate warping at 60-120 FPS",
+                log_entry="Initialized High-Speed Lucas-Kanade Benthic Colony Tracker",
+            )
 
         with self._lock:
             job["keyframe_indices"] = list(keyframe_indices)
@@ -353,7 +460,13 @@ class VideoProcessor:
                 ret, kf_bgr = cap.read()
                 if ret and kf_bgr is not None:
                     kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
-                    points_per_side = opts.get("points_per_side", 12)
+                    points_per_side = opts.get("points_per_side", 8)
+                    _set_stage(
+                        stage=f"Keyframe #{w_idx+1}/{len(keyframe_indices)} (Frame {kf_frame_idx}): Segmenting benthic colonies...",
+                        model="CoralSCOP SAM ViT-B",
+                        action=f"Prompt grid segmentation ({points_per_side}x{points_per_side} points)",
+                        detail=f"Analyzing full-resolution frame {kf_frame_idx} ({width}x{height})",
+                    )
                     masks_info, _ = run_segmentation(
                         model=sam_model,
                         image=kf_rgb,
@@ -373,6 +486,12 @@ class VideoProcessor:
                     # Enrich newly spawned tracks
                     new_tracks = tracker.get_tracks_needing_enrichment()
                     if new_tracks:
+                        _set_stage(
+                            stage=f"Keyframe #{w_idx+1}: Classifying {len(new_tracks)} new corals with BioCLIP & YOLO...",
+                            model="BioCLIP ViT & YOLO11n Bleaching",
+                            action="Taxonomy and bleaching health inference",
+                            detail=f"Extracting {len(new_tracks)} bounding-box crops for fine-grained classification",
+                        )
                         pil_img = Image.fromarray(kf_rgb)
                         crops = []
                         for trk in new_tracks:
@@ -395,8 +514,8 @@ class VideoProcessor:
                                 trk.bleaching = bleach_results[k]
                                 trk.needs_enrichment = False
 
-                                # Register newly discovered coral into SAM 2 tracker
-                                if has_sam2:
+                                # Register newly discovered coral into SAM 2 tracker if active
+                                if has_sam2 and tracker_mode == "sam2":
                                     m_reg = getattr(trk, "mask", None)
                                     if m_reg is None and trk.polygon:
                                         m_reg = np.zeros((height, width), dtype=np.uint8)
@@ -417,13 +536,31 @@ class VideoProcessor:
                                         except Exception:
                                             pass
 
+                            genera = sorted(list(set(t.taxonomy.get('genus', 'Coral') for t in new_tracks)))
+                            _set_stage(
+                                stage=f"Keyframe #{w_idx+1} cataloged {len(new_tracks)} new colonies",
+                                detail=f"Dominant genera: {', '.join(genera[:3])}",
+                                log_entry=f"Keyframe #{w_idx+1} (Frame {kf_frame_idx}): Segmented {len(masks_info)} corals, classified {len(new_tracks)} new colonies ({', '.join(genera[:3])})",
+                            )
+                    else:
+                        _set_stage(
+                            stage=f"Keyframe #{w_idx+1}: Re-associated {len(masks_info)} active colonies",
+                            log_entry=f"Keyframe #{w_idx+1} (Frame {kf_frame_idx}): Re-associated {len(masks_info)} existing coral tracks",
+                        )
+
                 # Record keyframe state immediately into job state
                 active_tracks = tracker.get_active_tracks()
                 _record_frame_state(kf_frame_idx, active_tracks)
 
                 # --- CONTINUOUS PROGRESSIVE STREAMING (Intervening Frames) ---
                 if window_length > 1:
-                    if has_sam2 and sam2_tracker.total_tracks_count > 0:
+                    if tracker_mode == "sam2" and has_sam2 and sam2_tracker.total_tracks_count > 0:
+                        _set_stage(
+                            stage=f"Tracking frames {kf_frame_idx+1}-{next_kf_idx-1} via SAM 2...",
+                            model="Meta SAM 2.1 Video Predictor",
+                            action="Propagating neural deformable masks",
+                            detail=f"Streaming {window_length - 1} frames across {sam2_tracker.total_tracks_count} colonies",
+                        )
                         try:
                             for out_f, det_tracks in sam2_tracker.propagate_stream(
                                 start_frame_idx=kf_frame_idx + 1,
@@ -464,6 +601,12 @@ class VideoProcessor:
                                 active_tracks = tracker.get_active_tracks()
                                 _record_frame_state(cur_f, active_tracks)
                     else:
+                        _set_stage(
+                            stage=f"Tracking frames {kf_frame_idx+1}-{next_kf_idx-1} via Optical Flow (60-120 FPS)...",
+                            model="Lucas-Kanade Optical Flow Tracker",
+                            action="High-speed homography motion warping",
+                            detail=f"Propagating {len(active_tracks)} colonies across {window_length - 1} intervening frames",
+                        )
                         for cur_f in range(kf_frame_idx + 1, next_kf_idx):
                             if job["cancel_requested"]:
                                 break
@@ -480,6 +623,12 @@ class VideoProcessor:
 
             # Processing finished successfully
             if not job["cancel_requested"]:
+                _set_stage(
+                    stage="Exporting transect analytics, CSV, and overlay video...",
+                    model="Transect Exporter",
+                    action="Generating annotated MP4, CSV telemetry, and COCO video dataset",
+                    detail="Writing survey deliverables to export cache",
+                )
                 # Auto-generate export files in cache_dir
                 annotated_mp4 = os.path.join(self.cache_dir, f"{job_id}_annotated.mp4")
                 transect_csv = os.path.join(self.cache_dir, f"{job_id}_transect.csv")
@@ -508,6 +657,14 @@ class VideoProcessor:
                 except Exception as export_err:
                     pass
 
+                _set_stage(
+                    stage="Transect analysis completed",
+                    model="None (Completed)",
+                    action="Ready for playback & review",
+                    detail=f"Tracked {tracker._next_track_id - 1} unique corals ({job['bleaching_prevalence_pct']}% bleaching)",
+                    log_entry=f"Survey finished: {tracker._next_track_id - 1} unique corals, {job['bleaching_prevalence_pct']}% bleaching prevalence across {total_frames} frames",
+                )
+
                 with self._lock:
                     job["state"] = VideoJobState.COMPLETED
                     job["completed_at"] = time.time()
@@ -523,5 +680,5 @@ class VideoProcessor:
                 job["error"] = f"Pipeline execution error: {str(e)}"
         finally:
             cap.release()
-            if 'frames_dir' in locals() and os.path.isdir(frames_dir):
+            if isinstance(frames_dir, str) and os.path.isdir(frames_dir):
                 shutil.rmtree(frames_dir, ignore_errors=True)

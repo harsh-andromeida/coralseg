@@ -513,6 +513,7 @@ export async function processVideo(req: {
   max_stride?: number;
   points_per_side?: number;
   iou_match_threshold?: number;
+  tracker_mode?: string;
 }): Promise<{
   status: string;
   job_id: string;
@@ -528,6 +529,12 @@ export async function processVideo(req: {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Failed to start video processing");
   }
+  return res.json();
+}
+
+export async function getActiveVideoStatus(): Promise<import("../types").VideoJobStatus | null> {
+  const res = await fetch(`${API_BASE}/video/active-status`);
+  if (!res.ok) return null;
   return res.json();
 }
 

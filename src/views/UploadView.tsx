@@ -43,6 +43,7 @@ import {
   UploadedVideoItem,
   DownloadProgress,
   BatchStatusResponse,
+  VideoJobStatus,
 } from "../types";
 import {
   checkHealth,
@@ -62,6 +63,11 @@ import {
   cancelBatch,
   uploadVideo,
   processVideo,
+  getVideoStatus,
+  getActiveVideoStatus,
+  pauseVideoJob,
+  resumeVideoJob,
+  cancelVideoJob,
   loadSampleVideo,
   getVideoStreamUrl,
 } from "../services/api";
@@ -105,11 +111,19 @@ const MODEL_GROUPS: ModelGroupDef[] = [
 interface UploadViewProps {
   onLaunchStudio: (images: LoadedImage[]) => void;
   onLaunchVideoStudio?: (videoItem: UploadedVideoItem, jobId?: string) => void;
+  activeVideo?: UploadedVideoItem | null;
+  activeVideoJobId?: string;
+  onSetActiveVideo?: (video: UploadedVideoItem | null) => void;
+  onSetActiveVideoJobId?: (id: string) => void;
 }
 
 export const UploadView: React.FC<UploadViewProps> = ({
   onLaunchStudio,
   onLaunchVideoStudio,
+  activeVideo,
+  activeVideoJobId,
+  onSetActiveVideo,
+  onSetActiveVideoJobId,
 }) => {
   const [activeTab, setActiveTab] = useState<"samples" | "upload" | "video">("samples");
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
@@ -121,7 +135,9 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [concurrency, setConcurrency] = useState<number>(1);
 
   // Video State
-  const [uploadedVideo, setUploadedVideo] = useState<UploadedVideoItem | null>(null);
+  const [uploadedVideo, setUploadedVideo] = useState<UploadedVideoItem | null>(activeVideo || null);
+  const [videoJobStatus, setVideoJobStatus] = useState<VideoJobStatus | null>(null);
+  const [isPausingResumingVideo, setIsPausingResumingVideo] = useState<boolean>(false);
   const [videoDragActive, setVideoDragActive] = useState<boolean>(false);
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
   const [isStartingVideoJob, setIsStartingVideoJob] = useState<boolean>(false);
@@ -248,6 +264,53 @@ export const UploadView: React.FC<UploadViewProps> = ({
       clearTimeout(timer);
     };
   }, []);
+
+  // Continuous background video transect status poller
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    let isSubscribed = true;
+
+    const pollVideo = async () => {
+      try {
+        const targetId = activeVideoJobId || videoJobStatus?.job_id;
+        let s: VideoJobStatus | null = null;
+        if (targetId) {
+          s = await getVideoStatus(targetId);
+        } else {
+          s = await getActiveVideoStatus();
+        }
+        if (isSubscribed && s) {
+          setVideoJobStatus(s);
+          if (!uploadedVideo && s.filename) {
+            const previewUrl = getVideoStreamUrl(s.filename);
+            const recovered: UploadedVideoItem = {
+              file: new File([], s.filename),
+              video_name: s.filename,
+              video_path: s.metadata?.filename,
+              metadata: s.metadata,
+              previewUrl,
+              job_id: s.job_id,
+            };
+            setUploadedVideo(recovered);
+            onSetActiveVideo?.(recovered);
+            onSetActiveVideoJobId?.(s.job_id);
+          }
+        }
+      } catch {
+        // silent poll
+      }
+      if (isSubscribed) {
+        timer = setTimeout(pollVideo, 1000);
+      }
+    };
+
+    pollVideo();
+
+    return () => {
+      isSubscribed = false;
+      clearTimeout(timer);
+    };
+  }, [activeVideoJobId, videoJobStatus?.job_id, uploadedVideo]);
 
   const handleManualRetry = async () => {
     setIsCheckingBackend(true);
@@ -582,9 +645,9 @@ export const UploadView: React.FC<UploadViewProps> = ({
     setVideoError(null);
 
     const presetConfigs = {
-      high_fps: { max_stride: 60, min_stride: 10, points_per_side: 8, overlap_threshold: 0.80 },
-      balanced: { max_stride: 30, min_stride: 5, points_per_side: 12, overlap_threshold: 0.75 },
-      accuracy: { max_stride: 15, min_stride: 3, points_per_side: 16, overlap_threshold: 0.70 },
+      high_fps: { max_stride: 60, min_stride: 20, points_per_side: 8, overlap_threshold: 0.80, tracker_mode: "optical_flow" },
+      balanced: { max_stride: 45, min_stride: 15, points_per_side: 8, overlap_threshold: 0.75, tracker_mode: "optical_flow" },
+      accuracy: { max_stride: 25, min_stride: 10, points_per_side: 12, overlap_threshold: 0.70, tracker_mode: "optical_flow" },
     };
     const cfg = presetConfigs[videoPreset];
 
@@ -595,7 +658,11 @@ export const UploadView: React.FC<UploadViewProps> = ({
         min_stride: cfg.min_stride,
         max_stride: cfg.max_stride,
         points_per_side: cfg.points_per_side,
+        tracker_mode: cfg.tracker_mode,
       });
+
+      onSetActiveVideo?.(uploadedVideo);
+      onSetActiveVideoJobId?.(procRes.job_id);
 
       if (onLaunchVideoStudio) {
         onLaunchVideoStudio(uploadedVideo, procRes.job_id);
@@ -605,6 +672,48 @@ export const UploadView: React.FC<UploadViewProps> = ({
     } finally {
       setIsStartingVideoJob(false);
     }
+  };
+
+  const handlePauseResumeVideo = async () => {
+    if (!videoJobStatus) return;
+    setIsPausingResumingVideo(true);
+    try {
+      if (videoJobStatus.state === "paused") {
+        await resumeVideoJob(videoJobStatus.job_id);
+      } else {
+        await pauseVideoJob(videoJobStatus.job_id);
+      }
+      const updated = await getVideoStatus(videoJobStatus.job_id);
+      setVideoJobStatus(updated);
+    } catch (err: any) {
+      alert(`Error toggling video pause: ${err?.message || err}`);
+    } finally {
+      setIsPausingResumingVideo(false);
+    }
+  };
+
+  const handleCancelVideo = async () => {
+    if (!videoJobStatus) return;
+    try {
+      await cancelVideoJob(videoJobStatus.job_id);
+      const updated = await getVideoStatus(videoJobStatus.job_id);
+      setVideoJobStatus(updated);
+    } catch (err: any) {
+      alert(`Error cancelling video: ${err?.message || err}`);
+    }
+  };
+
+  const handleOpenVideoStudioFromPanel = () => {
+    if (!videoJobStatus) return;
+    const videoItem = uploadedVideo || {
+      file: new File([], videoJobStatus.filename),
+      video_name: videoJobStatus.filename,
+      video_path: videoJobStatus.metadata?.filename,
+      metadata: videoJobStatus.metadata,
+      previewUrl: getVideoStreamUrl(videoJobStatus.filename),
+      job_id: videoJobStatus.job_id,
+    };
+    onLaunchVideoStudio?.(videoItem, videoJobStatus.job_id);
   };
 
   const handleLaunchStudioNow = () => {
@@ -619,6 +728,168 @@ export const UploadView: React.FC<UploadViewProps> = ({
       }));
       onLaunchStudio(loaded);
     }
+  };
+
+  // Reusable video transect control & progress panel
+  const renderVideoControlPanel = () => {
+    const isRunning = videoJobStatus?.state === "processing";
+    const isPaused = videoJobStatus?.state === "paused";
+    const isComplete = videoJobStatus?.state === "completed";
+    const hasProcessed = (videoJobStatus?.current_frame ?? 0) > 0;
+
+    if (!isRunning && !isPaused && !isComplete && !hasProcessed) {
+      return (
+        <div className="shrink-0 pt-2.5 mt-auto border-t border-slate-100 bg-white">
+          <Button
+            type="button"
+            className="w-full h-10 text-xs font-bold tracking-wider uppercase text-white rounded-xl shadow-xs hover:shadow-md transition-all gap-2 bg-gradient-to-r from-[#0f1e4a] via-[#163e80] to-[#0d7c85] hover:opacity-95"
+            onClick={handleStartVideoAnalysis}
+            disabled={!uploadedVideo || isStartingVideoJob || isUploadingVideo || !isBackendConnected}
+          >
+            <Rocket size={14} className={isStartingVideoJob ? "animate-bounce" : ""} />
+            <span>
+              {isUploadingVideo
+                ? "Uploading Video..."
+                : isStartingVideoJob
+                ? "Starting Video Tracker..."
+                : uploadedVideo
+                ? "Launch Video Tracking & Transect Studio"
+                : "Select or Drag Video Above to Begin"}
+            </span>
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="shrink-0 pt-2.5 mt-auto border-t border-slate-200/90 bg-white">
+        <div className="rounded-xl border border-cyan-200 bg-cyan-50/70 p-3 shadow-xs space-y-2.5">
+          {/* Row 1: Header status and controls */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              {isRunning && (
+                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-600" />
+                </span>
+              )}
+              {isPaused && <span className="h-2.5 w-2.5 rounded-full bg-amber-500 shrink-0" />}
+              {isComplete && <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />}
+
+              <span className="text-xs font-bold text-slate-800 truncate">
+                {isComplete
+                  ? "Transect Survey Complete"
+                  : isPaused
+                  ? "Transect Tracking Paused"
+                  : "Autonomous Transect Processing"}
+              </span>
+
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white border border-cyan-200 text-cyan-800 font-bold shrink-0">
+                {videoJobStatus?.current_frame || 0} / {videoJobStatus?.total_frames || 0} Frames
+              </span>
+
+              {videoJobStatus?.fps_realtime ? (
+                <span className="text-[9px] font-mono text-cyan-700 bg-cyan-100/80 px-1 rounded shrink-0">
+                  {videoJobStatus.fps_realtime} FPS
+                </span>
+              ) : null}
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              {(isRunning || isPaused) && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePauseResumeVideo}
+                    disabled={isPausingResumingVideo}
+                    className="h-7 px-2 text-[10px] font-semibold gap-1 text-slate-700 hover:bg-slate-100"
+                    title={isPaused ? "Resume processing" : "Pause processing"}
+                  >
+                    {isPaused ? <Play size={11} /> : <Pause size={11} />}
+                    <span>{isPaused ? "Resume" : "Pause"}</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancelVideo}
+                    className="h-7 px-2 text-[10px] font-semibold gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                    title="Cancel video tracking"
+                  >
+                    <StopCircle size={11} />
+                    <span>Cancel</span>
+                  </Button>
+                </>
+              )}
+
+              {isComplete && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleStartVideoAnalysis}
+                  disabled={isStartingVideoJob}
+                  className="h-7 px-2 text-[10px] font-semibold gap-1 text-slate-600 hover:bg-slate-100"
+                  title="Re-run tracking from start"
+                >
+                  <Rocket size={11} />
+                  <span>Re-run</span>
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Row 2: Active Stage & Model Info */}
+          <div className="flex items-center justify-between text-[11px] text-slate-600 gap-2">
+            <div className="flex items-center gap-1.5 truncate">
+              {videoJobStatus?.current_model && (
+                <span className="text-[10px] bg-white border border-cyan-200 text-cyan-800 font-semibold px-1.5 py-0.2 rounded shrink-0">
+                  {videoJobStatus.current_model}
+                </span>
+              )}
+              <span className="truncate">
+                {videoJobStatus?.current_stage || "Processing seabed video transect..."}
+              </span>
+            </div>
+
+            <span className="font-mono font-bold text-cyan-700 shrink-0">
+              {videoJobStatus?.progress_pct || 0}%
+            </span>
+          </div>
+
+          {/* Row 3: Progress bar */}
+          <Progress
+            value={videoJobStatus?.progress_pct || 0}
+            className="h-2 bg-cyan-100"
+            indicatorColor={isRunning ? "bg-gradient-to-r from-cyan-600 to-teal-500" : isPaused ? "bg-amber-500" : "bg-emerald-600"}
+          />
+
+          {/* Row 4: Colonies count and Open Studio Action */}
+          <div className="flex items-center justify-between pt-1 border-t border-cyan-100/80">
+            <div className="text-[10px] text-slate-500 flex items-center gap-2">
+              <span>{videoJobStatus?.total_unique_corals || 0} Unique Corals</span>
+              <span>•</span>
+              <span>{videoJobStatus?.keyframes_count || 0} Keyframes</span>
+              <span>•</span>
+              <span>{videoJobStatus?.bleaching_prevalence_pct || 0}% Bleached</span>
+            </div>
+
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleOpenVideoStudioFromPanel}
+              className="h-7 px-3 text-xs font-bold gap-1.5 bg-gradient-to-r from-[#0f1e4a] via-[#163e80] to-[#0d7c85] text-white hover:opacity-95 shadow-xs"
+            >
+              <span>Open Video Studio ({videoJobStatus?.current_frame || 0} Frames Ready)</span>
+              <ArrowRight size={12} />
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // Reusable batch control & progress panel
@@ -1233,12 +1504,51 @@ export const UploadView: React.FC<UploadViewProps> = ({
                   >
                     <Film size={14} className={activeTab === "video" ? "text-cyan-600" : ""} />
                     <span>Video Transect</span>
-                    <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[9px] bg-cyan-100 text-cyan-800 font-bold uppercase tracking-wider">
-                      Live
-                    </span>
+                    {videoJobStatus && (videoJobStatus.state === "processing" || videoJobStatus.state === "paused") ? (
+                      <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[9px] bg-cyan-500 text-white font-bold animate-pulse">
+                        {videoJobStatus.progress_pct}%
+                      </span>
+                    ) : (
+                      <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[9px] bg-cyan-100 text-cyan-800 font-bold uppercase tracking-wider">
+                        Live
+                      </span>
+                    )}
                   </button>
                 </div>
               </div>
+
+              {/* Ongoing Video Transect Alert Banner (when viewing other tabs) */}
+              {videoJobStatus && (videoJobStatus.state === "processing" || videoJobStatus.state === "paused") && activeTab !== "video" && (
+                <div className="shrink-0 mb-2 px-3.5 py-2 rounded-xl bg-cyan-50/90 border border-cyan-200 text-cyan-900 text-xs flex items-center justify-between shadow-xs">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="relative flex h-2 w-2 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-600" />
+                    </span>
+                    <span className="font-bold truncate">Video Transect Ongoing:</span>
+                    <span className="text-slate-600 truncate max-w-[200px]">{videoJobStatus.filename}</span>
+                    <span className="font-mono text-[11px] text-cyan-800 bg-white border border-cyan-200 px-1.5 py-0.2 rounded shrink-0">
+                      Frame {videoJobStatus.current_frame} / {videoJobStatus.total_frames} ({videoJobStatus.progress_pct}%)
+                    </span>
+                    {videoJobStatus.current_model && (
+                      <span className="text-[10px] bg-cyan-100/90 text-cyan-800 font-semibold px-1.5 py-0.2 rounded shrink-0">
+                        {videoJobStatus.current_model}
+                      </span>
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setActiveTab("video");
+                    }}
+                    className="h-6 px-2.5 text-[10px] font-bold border-cyan-300 text-cyan-800 bg-white hover:bg-cyan-100 gap-1 shrink-0"
+                  >
+                    <span>View Live Transect</span>
+                    <ArrowRight size={10} />
+                  </Button>
+                </div>
+              )}
 
               {/* Tab 1: Upload */}
               {activeTab === "upload" && (
@@ -1613,26 +1923,8 @@ export const UploadView: React.FC<UploadViewProps> = ({
                     )}
                   </div>
 
-                  {/* Fixed Bottom Launch Bar */}
-                  <div className="shrink-0 pt-2.5 mt-auto border-t border-slate-100 bg-white">
-                    <Button
-                      type="button"
-                      className="w-full h-10 text-xs font-bold tracking-wider uppercase text-white rounded-xl shadow-xs hover:shadow-md transition-all gap-2 bg-gradient-to-r from-[#0f1e4a] via-[#163e80] to-[#0d7c85] hover:opacity-95"
-                      onClick={handleStartVideoAnalysis}
-                      disabled={!uploadedVideo || isStartingVideoJob || isUploadingVideo || !isBackendConnected}
-                    >
-                      <Rocket size={14} className={isStartingVideoJob ? "animate-bounce" : ""} />
-                      <span>
-                        {isUploadingVideo
-                          ? "Uploading Video..."
-                          : isStartingVideoJob
-                          ? "Starting Video Tracker..."
-                          : uploadedVideo
-                          ? "Launch Video Tracking & Transect Studio"
-                          : "Select or Drag Video Above to Begin"}
-                      </span>
-                    </Button>
-                  </div>
+                  {/* Fixed Bottom Launch & Transect Control Bar */}
+                  {renderVideoControlPanel()}
                 </div>
               )}
             </div>
