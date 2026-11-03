@@ -47,7 +47,8 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   onBackToUpload,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+  const [isUserScrolledUp, setIsUserScrolledUp] = useState<boolean>(false);
 
   const [jobId] = useState<string>(initialJobId || videoItem.job_id || "");
   const [jobStatus, setJobStatus] = useState<VideoJobStatus | null>(null);
@@ -239,12 +240,20 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
-  // Auto-scroll activity log to bottom
+  // Activity log scroll handler: detects if user has scrolled up to inspect previous logs
+  const handleLogsScroll = () => {
+    if (!logsContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = logsContainerRef.current;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    setIsUserScrolledUp(distanceFromBottom > 35);
+  };
+
+  // Safe auto-scroll: scrolls ONLY the internal container and only when user hasn't scrolled up
   useEffect(() => {
-    if (showLogs && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (showLogs && !isUserScrolledUp && logsContainerRef.current) {
+      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
     }
-  }, [jobStatus?.logs, showLogs]);
+  }, [jobStatus?.logs, showLogs, isUserScrolledUp]);
 
   const handleTogglePauseJob = async () => {
     if (!jobId || !jobStatus) return;
@@ -480,12 +489,34 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
 
                 {/* Collapsible Activity Log Console */}
                 {showLogs && (
-                  <div className="mt-2 rounded-xl bg-slate-950 border border-slate-800 p-3 font-mono text-[11px] text-slate-300 space-y-1 max-h-36 overflow-y-auto portal-scroll-area shadow-inner">
-                    <div className="flex items-center justify-between text-[10px] text-slate-500 border-b border-slate-800 pb-1.5 mb-1.5">
+                  <div
+                    ref={logsContainerRef}
+                    onScroll={handleLogsScroll}
+                    className="mt-2 rounded-xl bg-slate-950 border border-slate-800 p-3 font-mono text-[11px] text-slate-300 space-y-1 max-h-36 overflow-y-auto portal-scroll-area shadow-inner relative"
+                  >
+                    <div className="sticky top-0 bg-slate-950/95 backdrop-blur-xs flex items-center justify-between text-[10px] text-slate-500 border-b border-slate-800 pb-1.5 mb-1.5 z-10">
                       <span className="flex items-center gap-1 font-bold tracking-wider uppercase text-cyan-400">
                         <Activity size={11} /> Real-time Pipeline Telemetry & Model Logs
                       </span>
-                      <span>Engine: {jobStatus.tracker_mode === "sam2" ? "SAM 2 Video Predictor" : "Lucas-Kanade Optical Flow (60-120 FPS)"}</span>
+                      <div className="flex items-center gap-2">
+                        {isUserScrolledUp ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsUserScrolledUp(false);
+                              if (logsContainerRef.current) {
+                                logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+                              }
+                            }}
+                            className="text-[10px] text-cyan-300 bg-cyan-950 border border-cyan-700/80 px-2 py-0.5 rounded hover:bg-cyan-900 transition-colors flex items-center gap-1 font-sans cursor-pointer"
+                          >
+                            <span>Resume auto-scroll</span>
+                            <span>↓</span>
+                          </button>
+                        ) : (
+                          <span>Engine: {jobStatus.tracker_mode === "sam2" ? "SAM 2 Video Predictor" : "Lucas-Kanade Optical Flow (60-120 FPS)"}</span>
+                        )}
+                      </div>
                     </div>
 
                     {jobStatus.logs && jobStatus.logs.length > 0 ? (
@@ -500,7 +531,6 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                     ) : (
                       <div className="text-slate-500 italic">No events logged yet. Waiting for pipeline start...</div>
                     )}
-                    <div ref={logsEndRef} />
                   </div>
                 )}
               </div>

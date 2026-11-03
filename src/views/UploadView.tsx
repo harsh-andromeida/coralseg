@@ -142,6 +142,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
   const [isStartingVideoJob, setIsStartingVideoJob] = useState<boolean>(false);
   const [videoPreset, setVideoPreset] = useState<"balanced" | "high_fps" | "accuracy">("balanced");
+  const [videoTrackerMode, setVideoTrackerMode] = useState<"sam2" | "optical_flow">("sam2");
   const [videoError, setVideoError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
@@ -645,9 +646,9 @@ export const UploadView: React.FC<UploadViewProps> = ({
     setVideoError(null);
 
     const presetConfigs = {
-      high_fps: { max_stride: 60, min_stride: 20, points_per_side: 8, overlap_threshold: 0.80, tracker_mode: "optical_flow" },
-      balanced: { max_stride: 45, min_stride: 15, points_per_side: 8, overlap_threshold: 0.75, tracker_mode: "optical_flow" },
-      accuracy: { max_stride: 25, min_stride: 10, points_per_side: 12, overlap_threshold: 0.70, tracker_mode: "optical_flow" },
+      high_fps: { max_stride: 60, min_stride: 20, points_per_side: 12, overlap_threshold: 0.80 },
+      balanced: { max_stride: 45, min_stride: 15, points_per_side: 16, overlap_threshold: 0.75 },
+      accuracy: { max_stride: 25, min_stride: 10, points_per_side: 16, overlap_threshold: 0.70 },
     };
     const cfg = presetConfigs[videoPreset];
 
@@ -658,7 +659,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
         min_stride: cfg.min_stride,
         max_stride: cfg.max_stride,
         points_per_side: cfg.points_per_side,
-        tracker_mode: cfg.tracker_mode,
+        tracker_mode: videoTrackerMode,
       });
 
       onSetActiveVideo?.(uploadedVideo);
@@ -1876,12 +1877,15 @@ export const UploadView: React.FC<UploadViewProps> = ({
                         {/* Preset Selection */}
                         <div className="space-y-1.5 pt-1 border-t border-cyan-100">
                           <span className="text-[11px] font-semibold text-slate-700 block">
-                            Tracking Sensitivity & Speed Preset
+                            Survey Cadence & Keyframe Preset
                           </span>
                           <div className="grid grid-cols-3 gap-2">
                             <button
                               type="button"
-                              onClick={() => setVideoPreset("balanced")}
+                              onClick={() => {
+                                setVideoPreset("balanced");
+                                setVideoTrackerMode("sam2");
+                              }}
                               className={`p-2 rounded-lg border text-left transition-all ${
                                 videoPreset === "balanced"
                                   ? "bg-white border-cyan-500 shadow-xs"
@@ -1889,12 +1893,15 @@ export const UploadView: React.FC<UploadViewProps> = ({
                               }`}
                             >
                               <div className="text-xs font-bold text-slate-800">Balanced</div>
-                              <div className="text-[10px] text-slate-500">30-60 FPS live (25% area trigger)</div>
+                              <div className="text-[10px] text-slate-500">25% benthic overlap gate (16x16 grid)</div>
                             </button>
 
                             <button
                               type="button"
-                              onClick={() => setVideoPreset("high_fps")}
+                              onClick={() => {
+                                setVideoPreset("high_fps");
+                                setVideoTrackerMode("optical_flow");
+                              }}
                               className={`p-2 rounded-lg border text-left transition-all ${
                                 videoPreset === "high_fps"
                                   ? "bg-white border-cyan-500 shadow-xs"
@@ -1902,12 +1909,15 @@ export const UploadView: React.FC<UploadViewProps> = ({
                               }`}
                             >
                               <div className="text-xs font-bold text-slate-800">Ultra High FPS</div>
-                              <div className="text-[10px] text-slate-500">60-120 FPS (Fast AUV transit)</div>
+                              <div className="text-[10px] text-slate-500">60-120 FPS flow (Fast AUV survey)</div>
                             </button>
 
                             <button
                               type="button"
-                              onClick={() => setVideoPreset("accuracy")}
+                              onClick={() => {
+                                setVideoPreset("accuracy");
+                                setVideoTrackerMode("sam2");
+                              }}
                               className={`p-2 rounded-lg border text-left transition-all ${
                                 videoPreset === "accuracy"
                                   ? "bg-white border-cyan-500 shadow-xs"
@@ -1915,7 +1925,56 @@ export const UploadView: React.FC<UploadViewProps> = ({
                               }`}
                             >
                               <div className="text-xs font-bold text-slate-800">High Accuracy</div>
-                              <div className="text-[10px] text-slate-500">Dense census (15-frame cadence)</div>
+                              <div className="text-[10px] text-slate-500">Dense census (10-frame cadence)</div>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Tracker Engine Selector */}
+                        <div className="space-y-1.5 pt-1 border-t border-cyan-100">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-slate-700">
+                              Tracking Engine
+                            </span>
+                            <span className="text-[10px] text-cyan-700 font-mono">
+                              {videoTrackerMode === "sam2" ? "Deformable Neural Masks" : "Affine Homography"}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setVideoTrackerMode("sam2")}
+                              className={`p-2 rounded-lg border text-left transition-all ${
+                                videoTrackerMode === "sam2"
+                                  ? "bg-cyan-50/80 border-cyan-500 ring-1 ring-cyan-500/30"
+                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                                SAM 2 Neural Tracker
+                              </div>
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                Deformable pixel masks (CUDA GPU 30-45 FPS, MPS usable)
+                              </div>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setVideoTrackerMode("optical_flow")}
+                              className={`p-2 rounded-lg border text-left transition-all ${
+                                videoTrackerMode === "optical_flow"
+                                  ? "bg-cyan-50/80 border-cyan-500 ring-1 ring-cyan-500/30"
+                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                High-Speed Optical Flow
+                              </div>
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                60-120 FPS Lucas-Kanade homography warping
+                              </div>
                             </button>
                           </div>
                         </div>

@@ -128,12 +128,12 @@ class VideoProcessor:
             "overlap_threshold": 0.75,
             "min_stride": 15,
             "max_stride": 45,
-            "points_per_side": 8,
+            "points_per_side": 16,
             "iou_match_threshold": 0.30,
-            "pred_iou_thresh": 0.45,
-            "stability_thresh": 0.45,
+            "pred_iou_thresh": 0.50,
+            "stability_thresh": 0.50,
             "device_pref": "auto",
-            "tracker_mode": "optical_flow",
+            "tracker_mode": "sam2",
         }
         if params:
             opts.update(params)
@@ -460,7 +460,7 @@ class VideoProcessor:
                 ret, kf_bgr = cap.read()
                 if ret and kf_bgr is not None:
                     kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
-                    points_per_side = opts.get("points_per_side", 8)
+                    points_per_side = opts.get("points_per_side", 16)
                     _set_stage(
                         stage=f"Keyframe #{w_idx+1}/{len(keyframe_indices)} (Frame {kf_frame_idx}): Segmenting benthic colonies...",
                         model="CoralSCOP SAM ViT-B",
@@ -471,9 +471,9 @@ class VideoProcessor:
                         model=sam_model,
                         image=kf_rgb,
                         points_per_side=points_per_side,
-                        pred_iou_thresh=opts.get("pred_iou_thresh", 0.45),
-                        stability_score_thresh=opts.get("stability_thresh", 0.45),
-                        min_mask_region_area=80,
+                        pred_iou_thresh=opts.get("pred_iou_thresh", 0.50),
+                        stability_score_thresh=opts.get("stability_thresh", 0.50),
+                        min_mask_region_area=100,
                     )
 
                     tracker.match_keyframe_detections(

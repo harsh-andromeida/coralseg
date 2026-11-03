@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import torch
+import contextlib
 from typing import Dict, List, Any, Optional, Tuple
 
 
@@ -20,11 +21,19 @@ def _resolve_torch_device(pref: Optional[str] = None) -> str:
     return "cpu"
 
 
+def _autocast_context(device: str):
+    """Provides hardware-optimized mixed precision context for CUDA (bfloat16/float16)."""
+    if device == "cuda" and torch.cuda.is_available():
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        return torch.autocast("cuda", dtype=dtype)
+    return contextlib.nullcontext()
+
+
 class SAM2BenthicTracker:
     """
     Continuous benthic colony tracking using Meta's SAM 2.1 Video Predictor.
-    Tracks all registered coral colonies across intervening frames with exact
-    deformable pixel masks, and accepts new colonies on keyframe triggers.
+    Optimized for NVIDIA CUDA Tensor Cores with automatic mixed precision (bfloat16/float16),
+    while preserving smooth PyTorch MPS and CPU execution for testing.
     """
 
     def __init__(self, device: Optional[str] = None, model_id: str = "facebook/sam2.1-hiera-tiny"):
@@ -35,6 +44,13 @@ class SAM2BenthicTracker:
         self._tracks_meta: Dict[int, Dict[str, Any]] = {}
         self.initialized = False
 
+        if self.device == "cuda" and torch.cuda.is_available():
+            try:
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.benchmark = True
+            except Exception:
+                pass
+
     def load(self):
         if self._predictor is not None:
             return
@@ -44,7 +60,8 @@ class SAM2BenthicTracker:
     def init_video(self, frames_dir: str):
         """Initializes the SAM 2 video predictor with extracted 25 FPS JPEG frames."""
         self.load()
-        self._inference_state = self._predictor.init_state(video_path=frames_dir)
+        with torch.inference_mode(), _autocast_context(self.device):
+            self._inference_state = self._predictor.init_state(video_path=frames_dir)
         self._tracks_meta.clear()
         self.initialized = True
 
@@ -76,13 +93,14 @@ class SAM2BenthicTracker:
             mask_resized = cv2.resize(mask_np.astype(np.uint8), (state_w, state_h), interpolation=cv2.INTER_NEAREST)
             mask_np = mask_resized.astype(bool)
 
-        # Add mask prompt to SAM 2
-        self._predictor.add_new_mask(
-            inference_state=self._inference_state,
-            frame_idx=frame_idx,
-            obj_id=track_id,
-            mask=mask_np,
-        )
+        # Add mask prompt to SAM 2 under inference context
+        with torch.inference_mode(), _autocast_context(self.device):
+            self._predictor.add_new_mask(
+                inference_state=self._inference_state,
+                frame_idx=frame_idx,
+                obj_id=track_id,
+                mask=mask_np,
+            )
 
         cond_label = "Bleached" if bleaching.get("is_bleached", False) else "Healthy"
         self._tracks_meta[track_id] = {
@@ -109,88 +127,98 @@ class SAM2BenthicTracker:
         Streaming generator that yields (out_frame_idx, frame_tracks) immediately as SAM 2
         computes each frame's memory-attention propagation.
         Applies affine scaling (scale_x, scale_y) to remap coordinates back to raw video pixels.
+        Batches GPU-to-CPU memory transfers to eliminate synchronization bottlenecks.
         """
         if not self.initialized or not self._tracks_meta:
             return
 
-        for out_frame_idx, out_obj_ids, out_mask_logits in self._predictor.propagate_in_video(
-            self._inference_state,
-            start_frame_idx=start_frame_idx,
-            max_frame_num_to_track=num_frames,
-        ):
-            frame_tracks = []
-            for i, obj_id in enumerate(out_obj_ids):
-                if obj_id not in self._tracks_meta:
+        with torch.inference_mode(), _autocast_context(self.device):
+            for out_frame_idx, out_obj_ids, out_mask_logits in self._predictor.propagate_in_video(
+                self._inference_state,
+                start_frame_idx=start_frame_idx,
+                max_frame_num_to_track=num_frames,
+            ):
+                if len(out_obj_ids) == 0:
+                    yield out_frame_idx, []
                     continue
 
-                meta = self._tracks_meta[obj_id]
-                logits = out_mask_logits[i]
-                mask_bool = (logits > 0.0).cpu().numpy()
-                if mask_bool.ndim == 3:
-                    mask_bool = mask_bool[0]
+                # Batch transfer all object masks to CPU in a single tensor operation
+                masks_bool = (out_mask_logits > 0.0).squeeze(1).cpu().numpy()
+                if masks_bool.ndim == 2:
+                    masks_bool = np.expand_dims(masks_bool, axis=0)
 
-                area_px = int(np.sum(mask_bool))
-                if area_px < 15:
-                    continue
+                frame_tracks = []
+                for i, obj_id in enumerate(out_obj_ids):
+                    if obj_id not in self._tracks_meta:
+                        continue
 
-                # Extract contour polygons
-                contours, _ = cv2.findContours(
-                    mask_bool.astype(np.uint8),
-                    cv2.RETR_EXTERNAL,
-                    cv2.CHAIN_APPROX_SIMPLE,
-                )
+                    meta = self._tracks_meta[obj_id]
+                    mask_bool = masks_bool[i]
+                    if mask_bool.ndim == 3:
+                        mask_bool = mask_bool[0]
 
-                poly = []
-                if contours:
-                    c = max(contours, key=cv2.contourArea)
-                    poly = [[int(pt[0][0]), int(pt[0][1])] for pt in c]
+                    area_px = int(np.sum(mask_bool))
+                    if area_px < 15:
+                        continue
 
-                # Bounding box
-                y_indices, x_indices = np.where(mask_bool)
-                if len(x_indices) > 0 and len(y_indices) > 0:
-                    xmin, xmax = int(np.min(x_indices)), int(np.max(x_indices))
-                    ymin, ymax = int(np.min(y_indices)), int(np.max(y_indices))
-                    bbox = [xmin, ymin, max(1, xmax - xmin), max(1, ymax - ymin)]
-                    cx = int((xmin + xmax) / 2)
-                    cy = int((ymin + ymax) / 2)
-                else:
-                    bbox = [0, 0, 0, 0]
-                    cx, cy = 0, 0
+                    # Extract contour polygons
+                    contours, _ = cv2.findContours(
+                        mask_bool.astype(np.uint8),
+                        cv2.RETR_EXTERNAL,
+                        cv2.CHAIN_APPROX_SIMPLE,
+                    )
 
-                # Remap proxy coordinates back to raw video display coordinates
-                if scale_x != 1.0 or scale_y != 1.0:
-                    poly = [[int(round(pt[0] * scale_x)), int(round(pt[1] * scale_y))] for pt in poly]
-                    bbox = [
-                        int(round(bbox[0] * scale_x)),
-                        int(round(bbox[1] * scale_y)),
-                        max(1, int(round(bbox[2] * scale_x))),
-                        max(1, int(round(bbox[3] * scale_y))),
-                    ]
-                    cx = int(round(cx * scale_x))
-                    cy = int(round(cy * scale_y))
-                    area_px = int(round(area_px * scale_x * scale_y))
+                    poly = []
+                    if contours:
+                        c = max(contours, key=cv2.contourArea)
+                        poly = [[int(pt[0][0]), int(pt[0][1])] for pt in c]
 
-                frame_tracks.append({
-                    "track_id": obj_id,
-                    "id": obj_id,
-                    "id_str": f"#{obj_id}",
-                    "genus": meta["genus"],
-                    "growth_form": meta["growth_form"],
-                    "condition": meta["condition"],
-                    "condition_conf": meta["condition_conf"],
-                    "taxon_conf": meta["taxon_conf"],
-                    "is_bleached": meta["is_bleached"],
-                    "color_hex": meta["color_hex"],
-                    "area_px": area_px,
-                    "area": area_px,
-                    "predicted_iou": meta["predicted_iou"],
-                    "bbox": bbox,
-                    "centroid": [cx, cy],
-                    "polygon": poly,
-                    "mask": mask_bool,
-                })
+                    # Bounding box
+                    y_indices, x_indices = np.where(mask_bool)
+                    if len(x_indices) > 0 and len(y_indices) > 0:
+                        xmin, xmax = int(np.min(x_indices)), int(np.max(x_indices))
+                        ymin, ymax = int(np.min(y_indices)), int(np.max(y_indices))
+                        bbox = [xmin, ymin, max(1, xmax - xmin), max(1, ymax - ymin)]
+                        cx = int((xmin + xmax) / 2)
+                        cy = int((ymin + ymax) / 2)
+                    else:
+                        bbox = [0, 0, 0, 0]
+                        cx, cy = 0, 0
 
-            yield out_frame_idx, frame_tracks
+                    # Remap proxy coordinates back to raw video display coordinates
+                    if scale_x != 1.0 or scale_y != 1.0:
+                        poly = [[int(round(pt[0] * scale_x)), int(round(pt[1] * scale_y))] for pt in poly]
+                        bbox = [
+                            int(round(bbox[0] * scale_x)),
+                            int(round(bbox[1] * scale_y)),
+                            max(1, int(round(bbox[2] * scale_x))),
+                            max(1, int(round(bbox[3] * scale_y))),
+                        ]
+                        cx = int(round(cx * scale_x))
+                        cy = int(round(cy * scale_y))
+                        area_px = int(round(area_px * scale_x * scale_y))
+
+                    frame_tracks.append({
+                        "track_id": obj_id,
+                        "id": obj_id,
+                        "id_str": f"#{obj_id}",
+                        "genus": meta["genus"],
+                        "growth_form": meta["growth_form"],
+                        "condition": meta["condition"],
+                        "condition_conf": meta["condition_conf"],
+                        "taxon_conf": meta["taxon_conf"],
+                        "is_bleached": meta["is_bleached"],
+                        "color_hex": meta["color_hex"],
+                        "area_px": area_px,
+                        "area": area_px,
+                        "predicted_iou": meta["predicted_iou"],
+                        "bbox": bbox,
+                        "centroid": [cx, cy],
+                        "polygon": poly,
+                        "mask": mask_bool,
+                    })
+
+                yield out_frame_idx, frame_tracks
 
     def propagate_window(
         self,

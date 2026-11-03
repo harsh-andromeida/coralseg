@@ -10,7 +10,17 @@ from PIL import Image
 
 from core.video.keyframe_selector import EgoMotionKeyframeSelector
 from core.video.tracker import BenthicColonyTracker, CoralTrack, compute_box_iou
+from core.video.sam2_tracker import SAM2BenthicTracker
 from core.video.export import export_transect_csv, export_coco_video, render_video_overlay
+
+
+def test_sam2_tracker_initialization():
+    print("Testing SAM2BenthicTracker initialization & methods...")
+    tracker = SAM2BenthicTracker(device="cpu")
+    assert tracker.device == "cpu"
+    assert tracker.initialized is False
+    assert tracker.total_tracks_count == 0
+    print("  SAM2BenthicTracker initialization verified.")
 
 
 def test_keyframe_selector():
@@ -300,6 +310,7 @@ def test_real_video_sample_pipeline():
 if __name__ == "__main__":
     test_keyframe_selector()
     test_benthic_tracker()
+    test_sam2_tracker_initialization()
     test_export_utilities()
     test_video_api_endpoints()
     test_real_video_sample_pipeline()

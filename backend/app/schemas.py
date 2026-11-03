@@ -178,11 +178,11 @@ class VideoProcessRequest(BaseModel):
     overlap_threshold: float = Field(default=0.75, ge=0.40, le=0.95, description="Scene overlap threshold triggering a keyframe")
     min_stride: int = Field(default=15, ge=1, le=60, description="Minimum frame spacing between keyframes")
     max_stride: int = Field(default=45, ge=5, le=120, description="Maximum frame spacing between keyframes")
-    points_per_side: int = Field(default=8, ge=8, le=32, description="SAM prompt grid density for keyframes")
+    points_per_side: int = Field(default=16, ge=8, le=32, description="SAM prompt grid density for keyframes (Image Studio default: 16)")
     iou_match_threshold: float = Field(default=0.30, ge=0.10, le=0.80, description="IoU threshold for tracking association")
-    pred_iou_thresh: float = Field(default=0.45, ge=0.20, le=0.90)
-    stability_thresh: float = Field(default=0.45, ge=0.20, le=0.90)
-    tracker_mode: Optional[str] = Field(default="optical_flow", description="Tracking engine: 'optical_flow' (60-120 FPS high-speed) or 'sam2' (deep neural)")
+    pred_iou_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM predicted IoU threshold (Image Studio default: 0.50)")
+    stability_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM stability score threshold (Image Studio default: 0.50)")
+    tracker_mode: Optional[str] = Field(default="sam2", description="Tracking engine: 'sam2' (deep neural deformable) or 'optical_flow' (60-120 FPS high-speed)")
 
 
 class VideoTrackItem(BaseModel):
