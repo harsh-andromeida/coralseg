@@ -134,6 +134,7 @@ def export_annotated_video(
     output_mp4_path: str,
     frame_tracks_map: Dict[int, List[CoralTrack]],
     progress_callback: Optional[Callable[[int, int, float], None]] = None,
+    max_frames: Optional[int] = None,
 ) -> str:
     """
     Generates an annotated MP4 video with rendered bounding boxes, polygons, and benthic HUD.
@@ -145,18 +146,25 @@ def export_annotated_video(
     if not cap.isOpened():
         raise ValueError(f"Could not open source video: {input_video_path}")
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    raw_total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames = min(raw_total_frames, max_frames) if max_frames is not None and max_frames > 0 else raw_total_frames
     fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     os.makedirs(os.path.dirname(os.path.abspath(output_mp4_path)), exist_ok=True)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")
     writer = cv2.VideoWriter(output_mp4_path, fourcc, fps, (width, height))
+    if not writer.isOpened():
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(output_mp4_path, fourcc, fps, (width, height))
 
     try:
         frame_idx = 0
         while True:
+            if max_frames is not None and frame_idx >= max_frames:
+                break
+
             ret, frame_bgr = cap.read()
             if not ret or frame_bgr is None:
                 break

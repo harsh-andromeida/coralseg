@@ -1672,7 +1672,7 @@ def get_video_frame_annotations(job_id: str, frame_idx: int):
 
 @app.get("/api/video/export/{job_id}")
 def export_video_result(job_id: str, format: str = "mp4"):
-    """Downloads annotated MP4, Transect CSV, or MOT/COCO JSON."""
+    """Downloads annotated MP4, Transect CSV, or MOT/COCO JSON with on-demand fallback."""
     from fastapi.responses import FileResponse
     job = _VIDEO_PROCESSOR.get_job(job_id)
     if not job:
@@ -1680,19 +1680,89 @@ def export_video_result(job_id: str, format: str = "mp4"):
 
     export_paths = job.get("export_paths", {})
     fmt = format.lower().strip()
+    cache_dir = _VIDEO_PROCESSOR.cache_dir
+    os.makedirs(cache_dir, exist_ok=True)
 
     if fmt == "mp4":
         p = export_paths.get("annotated_mp4")
         if not p or not os.path.isfile(p):
-            raise HTTPException(status_code=404, detail="Annotated MP4 export not ready.")
+            candidate = os.path.join(cache_dir, f"{job_id}_annotated.mp4")
+            if os.path.isfile(candidate):
+                p = candidate
+                job.setdefault("export_paths", {})["annotated_mp4"] = candidate
+            elif job.get("frame_tracks_map") and job.get("video_path") and os.path.isfile(job["video_path"]):
+                try:
+                    export_annotated_video(
+                        input_video_path=job["video_path"],
+                        output_mp4_path=candidate,
+                        frame_tracks_map=job["frame_tracks_map"],
+                        max_frames=job.get("current_frame"),
+                    )
+                    if os.path.isfile(candidate):
+                        p = candidate
+                        job.setdefault("export_paths", {})["annotated_mp4"] = candidate
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Failed to generate annotated video: {str(e)}")
+
+        if not p or not os.path.isfile(p):
+            raise HTTPException(status_code=404, detail="Annotated MP4 export not ready. Please wait for frames to process.")
         return FileResponse(p, media_type="video/mp4", filename=os.path.basename(p))
+
     elif fmt == "csv":
         p = export_paths.get("transect_csv")
         if not p or not os.path.isfile(p):
+            candidate = os.path.join(cache_dir, f"{job_id}_transect.csv")
+            if os.path.isfile(candidate):
+                p = candidate
+                job.setdefault("export_paths", {})["transect_csv"] = candidate
+            elif job.get("time_series"):
+                try:
+                    export_transect_csv(
+                        output_csv_path=candidate,
+                        time_series_records=job["time_series"],
+                    )
+                    if os.path.isfile(candidate):
+                        p = candidate
+                        job.setdefault("export_paths", {})["transect_csv"] = candidate
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Failed to generate CSV: {str(e)}")
+
+        if not p or not os.path.isfile(p):
             raise HTTPException(status_code=404, detail="Transect CSV export not ready.")
         return FileResponse(p, media_type="text/csv", filename=os.path.basename(p))
+
     elif fmt in ("json", "coco", "mot"):
         p = export_paths.get("coco_json")
+        if not p or not os.path.isfile(p):
+            candidate = os.path.join(cache_dir, f"{job_id}_coco_video.json")
+            if os.path.isfile(candidate):
+                p = candidate
+                job.setdefault("export_paths", {})["coco_json"] = candidate
+            elif job.get("frame_tracks_map"):
+                try:
+                    meta = job.get("metadata", {})
+                    # Flatten unique tracks from frame_tracks_map
+                    all_tracks_dict = {}
+                    for f_tracks in job["frame_tracks_map"].values():
+                        for tr in f_tracks:
+                            all_tracks_dict[tr.track_id] = tr
+
+                    export_coco_video(
+                        output_json_path=candidate,
+                        video_filename=job.get("filename", "video.mp4"),
+                        width=meta.get("width", 1920),
+                        height=meta.get("height", 1080),
+                        total_frames=meta.get("total_frames", job.get("total_frames", 1)),
+                        fps=meta.get("fps", 25.0),
+                        all_tracks=list(all_tracks_dict.values()),
+                        frame_tracks_map=job["frame_tracks_map"],
+                    )
+                    if os.path.isfile(candidate):
+                        p = candidate
+                        job.setdefault("export_paths", {})["coco_json"] = candidate
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Failed to generate COCO JSON: {str(e)}")
+
         if not p or not os.path.isfile(p):
             raise HTTPException(status_code=404, detail="COCO JSON export not ready.")
         return FileResponse(p, media_type="application/json", filename=os.path.basename(p))

@@ -581,6 +581,79 @@ export function getVideoExportUrl(jobId: string, format: "mp4" | "csv" | "coco")
   return `${API_BASE}/video/export/${jobId}?format=${format}`;
 }
 
+export async function downloadVideoExport(
+  jobId: string,
+  format: "mp4" | "csv" | "coco",
+  defaultName: string,
+  sourcePath?: string | null
+): Promise<{ success: boolean; path?: string; cancelled?: boolean; error?: string }> {
+  const isTauri = typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
+
+  // 1. If in Tauri desktop mode and we have the direct on-disk source path (e.g. for MP4)
+  if (isTauri && sourcePath && format === "mp4") {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res = await invoke<any>("copy_file_dialog", {
+        defaultName,
+        filterName: "MP4 Video",
+        extensions: ["mp4"],
+        sourcePath,
+      });
+      return { success: res.success, path: res.path, cancelled: res.cancelled, error: res.error };
+    } catch (e: any) {
+      console.warn("Tauri copy_file_dialog failed, falling back to HTTP fetch:", e);
+    }
+  }
+
+  // 2. Fetch the file blob from backend
+  const url = getVideoExportUrl(jobId, format);
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Export failed with status ${res.status}`);
+  }
+  const blob = await res.blob();
+
+  // 3. If in Tauri and saving via save_file_dialog
+  if (isTauri) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+      const dataUrl = await base64Promise;
+      const filterName = format === "mp4" ? "MP4 Video" : format === "csv" ? "CSV Spreadsheet" : "COCO JSON";
+      const ext = format === "coco" ? "json" : format;
+      const saveRes = await invoke<any>("save_file_dialog", {
+        defaultName,
+        filterName,
+        extensions: [ext],
+        content: dataUrl,
+        isBase64: true,
+      });
+      return { success: saveRes.success, path: saveRes.path, cancelled: saveRes.cancelled, error: saveRes.error };
+    } catch (e: any) {
+      console.warn("Tauri save_file_dialog failed, falling back to browser download:", e);
+    }
+  }
+
+  // 4. Standard browser download fallback
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = defaultName;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
+  }, 1000);
+
+  return { success: true, path: defaultName };
+}
+
 export async function loadSampleVideo(): Promise<{
   status: string;
   video_name: string;

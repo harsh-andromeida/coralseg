@@ -15,6 +15,8 @@ import { truncateMiddle } from "../PaginationBar";
 interface VideoTimelineBarProps {
   currentFrame: number;
   totalFrames: number;
+  maxProcessedFrame?: number;
+  isProcessing?: boolean;
   currentTimeSec: number;
   durationSec: number;
   isPlaying: boolean;
@@ -28,6 +30,8 @@ interface VideoTimelineBarProps {
 export const VideoTimelineBar: React.FC<VideoTimelineBarProps> = ({
   currentFrame,
   totalFrames,
+  maxProcessedFrame,
+  isProcessing = false,
   currentTimeSec,
   durationSec,
   isPlaying,
@@ -45,6 +49,12 @@ export const VideoTimelineBar: React.FC<VideoTimelineBarProps> = ({
   };
 
   const isCurrentKeyframe = keyframeIndices.includes(currentFrame);
+  const maxNavigableFrame = isProcessing && maxProcessedFrame !== undefined
+    ? Math.max(0, Math.min(totalFrames - 1, maxProcessedFrame))
+    : Math.max(0, totalFrames - 1);
+
+  const safeTotalFrames = Math.max(1, totalFrames);
+  const processedPct = Math.min(100, Math.max(0, ((maxNavigableFrame + 1) / safeTotalFrames) * 100));
 
   return (
     <nav
@@ -63,7 +73,10 @@ export const VideoTimelineBar: React.FC<VideoTimelineBarProps> = ({
           </span>
           <span className="text-muted-foreground/40 shrink-0">•</span>
           <span className="text-xs text-muted-foreground font-medium shrink-0 whitespace-nowrap">
-            <strong className="text-foreground font-bold">{currentFrame + 1}</strong> of {totalFrames}
+            <strong className="text-foreground font-bold">{currentFrame + 1}</strong>
+            {isProcessing && maxProcessedFrame !== undefined
+              ? ` of ${maxNavigableFrame + 1} processed (${totalFrames} total)`
+              : ` of ${totalFrames}`}
           </span>
           <span className="text-muted-foreground/40 shrink-0">•</span>
           <span className="font-mono text-xs text-primary font-semibold shrink-0">
@@ -128,7 +141,7 @@ export const VideoTimelineBar: React.FC<VideoTimelineBarProps> = ({
           variant="outline"
           size="icon"
           onClick={() => onStepFrame(1)}
-          disabled={currentFrame >= totalFrames - 1}
+          disabled={currentFrame >= maxNavigableFrame}
           className="h-8 w-8 shrink-0 border-border/80"
           title="Next Frame (Right Arrow)"
         >
@@ -137,13 +150,26 @@ export const VideoTimelineBar: React.FC<VideoTimelineBarProps> = ({
 
         {/* Interactive Frame Slider */}
         <div className="flex-1 min-w-[120px] px-1 relative flex items-center">
+          {isProcessing && (
+            <div
+              className="absolute h-1.5 rounded-full bg-cyan-500/30 pointer-events-none transition-all duration-300"
+              style={{
+                left: "4px",
+                width: `calc(${processedPct}% - 8px)`,
+              }}
+              title={`Processed: ${maxNavigableFrame + 1} / ${totalFrames} frames`}
+            />
+          )}
           <Slider
-            value={[currentFrame]}
+            value={[Math.min(currentFrame, maxNavigableFrame)]}
             min={0}
             max={Math.max(1, totalFrames - 1)}
             step={1}
             onValueChange={(vals) => {
-              if (vals.length > 0) onSeekFrame(vals[0]);
+              if (vals.length > 0) {
+                const clamped = Math.min(vals[0], maxNavigableFrame);
+                onSeekFrame(clamped);
+              }
             }}
             className="cursor-pointer"
           />

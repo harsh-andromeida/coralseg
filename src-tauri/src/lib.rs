@@ -148,6 +148,65 @@ fn save_file_dialog(
 }
 
 #[tauri::command]
+fn copy_file_dialog(
+    default_name: String,
+    filter_name: String,
+    extensions: Vec<String>,
+    source_path: String,
+) -> SaveResult {
+    let exts: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+    let mut dialog = rfd::FileDialog::new()
+        .set_file_name(&default_name)
+        .add_filter(&filter_name, &exts);
+
+    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        let dl = PathBuf::from(home).join("Downloads");
+        if dl.exists() {
+            dialog = dialog.set_directory(&dl);
+        }
+    }
+
+    if let Some(dest) = dialog.save_file() {
+        let src = PathBuf::from(&source_path);
+        if !src.exists() {
+            return SaveResult {
+                success: false,
+                path: None,
+                cancelled: false,
+                error: Some(format!("Source file does not exist: {}", source_path)),
+            };
+        }
+        match std::fs::copy(&src, &dest) {
+            Ok(_) => {
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = Command::new("open").arg("-R").arg(&dest).spawn();
+                }
+                SaveResult {
+                    success: true,
+                    path: Some(dest.to_string_lossy().to_string()),
+                    cancelled: false,
+                    error: None,
+                }
+            }
+            Err(e) => SaveResult {
+                success: false,
+                path: None,
+                cancelled: false,
+                error: Some(format!("Failed to copy file: {}", e)),
+            },
+        }
+    } else {
+        SaveResult {
+            success: false,
+            path: None,
+            cancelled: true,
+            error: None,
+        }
+    }
+}
+
+#[tauri::command]
 fn pick_folder_dialog(default_path: Option<String>) -> Option<String> {
     let mut dialog = rfd::FileDialog::new();
     if let Some(ref dp) = default_path {
@@ -195,6 +254,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             save_file_dialog,
+            copy_file_dialog,
             pick_folder_dialog,
             open_folder
         ])

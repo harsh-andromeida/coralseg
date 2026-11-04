@@ -48,6 +48,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
+  const frameCacheRef = useRef<Map<number, VideoTrackItem[]>>(new Map());
   const [isUserScrolledUp, setIsUserScrolledUp] = useState<boolean>(false);
 
   const [jobId] = useState<string>(initialJobId || videoItem.job_id || "");
@@ -86,6 +87,13 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   const durationSec = videoItem.metadata.duration_sec || 1.0;
   const totalFrames = videoItem.metadata.total_frames || Math.max(1, Math.round(durationSec * fps));
 
+  const isJobProcessing = jobStatus ? jobStatus.state === "processing" : true;
+  const isProcessingState = jobStatus?.state === "processing" || jobStatus?.state === "paused";
+  const maxProcessedFrame = isProcessingState
+    ? Math.max(0, (jobStatus?.current_frame || 1) - 1)
+    : Math.max(0, totalFrames - 1);
+  const maxNavigableFrame = isProcessingState ? maxProcessedFrame : Math.max(0, totalFrames - 1);
+
   // Fetch device info on mount
   useEffect(() => {
     getDevice().then(setDeviceInfo).catch(() => {});
@@ -112,8 +120,8 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
         if (isMounted) {
           setJobStatus(s);
 
-          // Auto-advance player to follow live stream as frames are completed
-          if (s.state === "processing" && isFollowingLive && s.current_frame > 0) {
+          // ONLY auto-advance player to follow live stream if user is NOT playing and is following live
+          if (s.state === "processing" && isFollowingLive && !isPlaying && s.current_frame > 0) {
             const liveFrame = Math.max(0, Math.min(totalFrames - 1, s.current_frame - 1));
             setCurrentFrameIdx(liveFrame);
             const liveSec = liveFrame / fps;
@@ -136,16 +144,23 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
       isMounted = false;
       clearInterval(interval);
     };
-  }, [jobId, isFollowingLive, totalFrames, fps]);
+  }, [jobId, isFollowingLive, isPlaying, totalFrames, fps]);
 
-  // Query frame annotations when currentFrameIdx changes
+  // Query frame annotations when currentFrameIdx changes (with client-side in-memory cache)
   useEffect(() => {
     if (!jobId) return;
     let cancelled = false;
 
+    // Instant return if already in client cache
+    if (frameCacheRef.current.has(currentFrameIdx)) {
+      setCurrentTracks(frameCacheRef.current.get(currentFrameIdx)!);
+      return;
+    }
+
     getVideoFrameAnnotations(jobId, currentFrameIdx)
       .then((res) => {
         if (!cancelled && res && res.tracks) {
+          frameCacheRef.current.set(currentFrameIdx, res.tracks);
           setCurrentTracks(res.tracks);
         }
       })
@@ -205,6 +220,11 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
       videoRef.current.pause();
       setIsPlaying(false);
     } else {
+      // If at or beyond max processed frame, loop back to frame 0 so user can watch from start
+      if (maxNavigableFrame > 0 && currentFrameIdx >= maxNavigableFrame) {
+        handleSeekFrame(0);
+      }
+      setIsFollowingLive(false);
       videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
     }
   };
@@ -212,14 +232,14 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   // Handle Seek
   const handleSeekFrame = (targetFrame: number) => {
     if (!videoRef.current) return;
-    const clampedFrame = Math.max(0, Math.min(totalFrames - 1, targetFrame));
+    const clampedFrame = Math.max(0, Math.min(maxNavigableFrame, targetFrame));
     const targetSec = clampedFrame / fps;
     videoRef.current.currentTime = targetSec;
     setCurrentTimeSec(targetSec);
     setCurrentFrameIdx(clampedFrame);
 
     // If seeking to the latest processed frame, resume following live stream
-    if (jobStatus && clampedFrame >= Math.max(0, jobStatus.current_frame - 1)) {
+    if (isProcessingState && clampedFrame >= maxNavigableFrame) {
       setIsFollowingLive(true);
     } else {
       setIsFollowingLive(false);
@@ -233,8 +253,21 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
 
   // Time update from HTML5 video element
   const handleTimeUpdate = (timeSec: number) => {
+    const maxAllowedSec = maxNavigableFrame / fps;
+
+    if (isProcessingState && timeSec >= maxAllowedSec) {
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = maxAllowedSec;
+      }
+      setIsPlaying(false);
+      setCurrentTimeSec(maxAllowedSec);
+      setCurrentFrameIdx(maxNavigableFrame);
+      return;
+    }
+
     setCurrentTimeSec(timeSec);
-    const frame = Math.min(totalFrames - 1, Math.floor(timeSec * fps));
+    const frame = Math.min(maxNavigableFrame, Math.floor(timeSec * fps));
     if (frame !== currentFrameIdx) {
       setCurrentFrameIdx(frame);
     }
@@ -284,7 +317,6 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
-  const isJobProcessing = jobStatus ? jobStatus.state === "processing" : true;
   const keyframeIndices = jobStatus?.metadata ? (jobStatus as any).keyframe_indices || [0] : [0];
 
   return (
@@ -337,6 +369,8 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
             <VideoTimelineBar
               currentFrame={currentFrameIdx}
               totalFrames={totalFrames}
+              maxProcessedFrame={maxProcessedFrame}
+              isProcessing={isProcessingState}
               currentTimeSec={currentTimeSec}
               durationSec={durationSec}
               isPlaying={isPlaying}
@@ -573,6 +607,8 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
               jobId={jobId}
               videoName={videoItem.video_name}
               hasResults={!isJobProcessing || segments.length > 0}
+              exportPaths={jobStatus?.export_paths as any}
+              isProcessing={isProcessingState}
               rawJsonData={{
                 job_id: jobId,
                 current_frame: currentFrameIdx,

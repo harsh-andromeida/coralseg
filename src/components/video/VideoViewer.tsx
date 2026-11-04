@@ -172,7 +172,7 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
           </CardHeader>
           <div className="relative bg-muted/40 aspect-video flex items-center justify-center overflow-hidden">
             <video
-              ref={isSideBySide ? secondaryVideoRef : (videoRef as any)}
+              ref={isSideBySide ? secondaryVideoRef : (!showOverlay ? (videoRef as any) : undefined)}
               src={videoSrc}
               muted
               playsInline
@@ -205,7 +205,7 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
           </CardHeader>
           <div className="relative bg-muted/40 aspect-video flex items-center justify-center overflow-hidden">
             <video
-              ref={isSideBySide ? (videoRef as any) : undefined}
+              ref={isSideBySide ? (videoRef as any) : (showOverlay ? (videoRef as any) : undefined)}
               src={videoSrc}
               muted
               playsInline
