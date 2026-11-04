@@ -71,6 +71,29 @@ class CoralTrack:
         self.active = True
         self.history = [(list(bbox), list(polygon))]
 
+    def snapshot(self) -> "CoralTrack":
+        """Returns an independent snapshot of this track at the current instant, decoupling geometry."""
+        snap = CoralTrack(
+            track_id=self.track_id,
+            bbox=list(self.bbox),
+            polygon=[list(pt) for pt in self.polygon],
+            area_px=self.area_px,
+            area_pct=self.area_pct,
+            predicted_iou=self.predicted_iou,
+            centroid=tuple(self.centroid),
+            color_rgb=tuple(self.color_rgb),
+            frame_idx=self.last_seen_frame,
+            taxonomy=dict(self.taxonomy) if self.taxonomy else None,
+            bleaching=dict(self.bleaching) if self.bleaching else None,
+            mask=self.mask.copy() if (self.mask is not None and hasattr(self.mask, "copy")) else self.mask,
+        )
+        snap.first_seen_frame = self.first_seen_frame
+        snap.last_seen_frame = self.last_seen_frame
+        snap.hits = self.hits
+        snap.misses = self.misses
+        snap.active = self.active
+        return snap
+
     def to_dict(self) -> Dict[str, Any]:
         """Serializes track state for API responses and video overlay rendering."""
         return {
@@ -154,6 +177,182 @@ class BenthicColonyTracker:
         """Returns tracks that have not yet undergone BioCLIP / YOLO Bleaching."""
         return [t for t in self._tracks.values() if t.active and t.needs_enrichment]
 
+    def _apply_affine_to_track(
+        self,
+        track: CoralTrack,
+        affine: np.ndarray,
+        frame_w: int,
+        frame_h: int,
+        frame_idx: int,
+    ):
+        """Applies a 2x3 affine matrix to a single track's polygon/bbox."""
+        if track.polygon and len(track.polygon) >= 3:
+            pts = np.array(track.polygon, dtype=np.float32).reshape(-1, 1, 2)
+            warped_pts = cv2.transform(pts, affine[:2, :])
+            warped_poly = [[float(p[0][0]), float(p[0][1])] for p in warped_pts]
+            xs = [p[0] for p in warped_poly]
+            ys = [p[1] for p in warped_poly]
+            min_x = max(0, int(min(xs)))
+            min_y = max(0, int(min(ys)))
+            max_x = min(frame_w, int(max(xs)))
+            max_y = min(frame_h, int(max(ys)))
+            new_w = max_x - min_x
+            new_h = max_y - min_y
+            if new_w < 5 or new_h < 5:
+                track.active = False
+                return
+            track.polygon = warped_poly
+            track.bbox = [min_x, min_y, new_w, new_h]
+            track.centroid = (int((min_x + max_x) / 2), int((min_y + max_y) / 2))
+            track.last_seen_frame = frame_idx
+            track.hits += 1
+        else:
+            x, y, w, h = track.bbox
+            corners = np.array([[[x, y]], [[x + w, y + h]]], dtype=np.float32)
+            warped = cv2.transform(corners, affine[:2, :])
+            x0 = max(0, min(frame_w, int(warped[0, 0, 0])))
+            y0 = max(0, min(frame_h, int(warped[0, 0, 1])))
+            x1 = max(0, min(frame_w, int(warped[1, 0, 0])))
+            y1 = max(0, min(frame_h, int(warped[1, 0, 1])))
+            bw = x1 - x0
+            bh = y1 - y0
+            if bw < 5 or bh < 5:
+                track.active = False
+                return
+            track.bbox = [x0, y0, bw, bh]
+            track.centroid = (x0 + bw // 2, y0 + bh // 2)
+            track.last_seen_frame = frame_idx
+            track.hits += 1
+
+    def _apply_translation_to_track(
+        self,
+        track: CoralTrack,
+        dx: float,
+        dy: float,
+        frame_w: int,
+        frame_h: int,
+        frame_idx: int,
+    ):
+        """Translates track polygon and bbox by (dx, dy)."""
+        aff = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
+        self._apply_affine_to_track(track, aff, frame_w, frame_h, frame_idx)
+
+    def _warp_single_track(
+        self,
+        track: CoralTrack,
+        step_H: np.ndarray,
+        frame_w: int,
+        frame_h: int,
+        frame_idx: int,
+    ):
+        """Warps a single track using a 3x3 homography / 2x3 affine matrix."""
+        self._apply_affine_to_track(track, step_H[:2, :], frame_w, frame_h, frame_idx)
+
+    def warp_tracks_colony_flow(
+        self,
+        prev_gray: np.ndarray,
+        curr_gray: np.ndarray,
+        frame_w: int,
+        frame_h: int,
+        frame_idx: int,
+        fallback_H: Optional[np.ndarray] = None,
+    ):
+        """
+        Warp each active coral colony independently using dense/sparse optical flow sampled
+        inside that colony's bounding box/polygon.
+        Overcomes 3D relief and depth parallax where different corals move at different speeds.
+        """
+        if not _HAS_CV2 or prev_gray is None or curr_gray is None:
+            if fallback_H is not None:
+                self.warp_tracks_with_motion(fallback_H, frame_w, frame_h, frame_idx)
+            return
+
+        for track in list(self._tracks.values()):
+            if not track.active:
+                continue
+
+            x, y, w, h = track.bbox
+            if w < 6 or h < 6:
+                track.active = False
+                continue
+
+            pad = 6
+            x0 = max(0, x - pad)
+            y0 = max(0, y - pad)
+            x1 = min(frame_w, x + w + pad)
+            y1 = min(frame_h, y + h + pad)
+
+            roi_prev = prev_gray[y0:y1, x0:x1]
+            if roi_prev.shape[0] < 8 or roi_prev.shape[1] < 8:
+                if fallback_H is not None:
+                    self._warp_single_track(track, fallback_H, frame_w, frame_h, frame_idx)
+                continue
+
+            # Detect feature points inside colony ROI
+            pts_local = cv2.goodFeaturesToTrack(
+                roi_prev,
+                maxCorners=35,
+                qualityLevel=0.01,
+                minDistance=4,
+                blockSize=5,
+            )
+
+            if pts_local is None or len(pts_local) < 3:
+                if fallback_H is not None:
+                    self._warp_single_track(track, fallback_H, frame_w, frame_h, frame_idx)
+                continue
+
+            # Convert local ROI coordinates to full frame coordinates
+            pts_prev = pts_local.copy()
+            pts_prev[:, 0, 0] += x0
+            pts_prev[:, 0, 1] += y0
+
+            pts_curr, status, _ = cv2.calcOpticalFlowPyrLK(
+                prev_gray,
+                curr_gray,
+                pts_prev,
+                None,
+                winSize=(15, 15),
+                maxLevel=2,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 15, 0.03),
+            )
+
+            good_prev = pts_prev[status == 1]
+            good_curr = pts_curr[status == 1]
+
+            if len(good_prev) < 3:
+                if fallback_H is not None:
+                    self._warp_single_track(track, fallback_H, frame_w, frame_h, frame_idx)
+                continue
+
+            diffs = good_curr - good_prev
+            med_dx = float(np.median(diffs[:, 0]))
+            med_dy = float(np.median(diffs[:, 1]))
+
+            # Discard extreme velocity noise (>80px jump per frame is physically improbable)
+            if abs(med_dx) > 80 or abs(med_dy) > 80:
+                if fallback_H is not None:
+                    self._warp_single_track(track, fallback_H, frame_w, frame_h, frame_idx)
+                continue
+
+            # Estimate affine if >= 6 points, else pure translation
+            applied_affine = False
+            if len(good_prev) >= 6:
+                aff, inliers = cv2.estimateAffinePartial2D(
+                    good_prev,
+                    good_curr,
+                    method=cv2.RANSAC,
+                    ransacReprojThreshold=2.5,
+                )
+                if aff is not None and np.sum(inliers) >= 4:
+                    scale = float(np.sqrt(aff[0, 0]**2 + aff[0, 1]**2))
+                    if 0.85 <= scale <= 1.15:
+                        self._apply_affine_to_track(track, aff, frame_w, frame_h, frame_idx)
+                        applied_affine = True
+
+            if not applied_affine:
+                self._apply_translation_to_track(track, med_dx, med_dy, frame_w, frame_h, frame_idx)
+
     def warp_tracks_with_motion(
         self,
         step_H: np.ndarray,
@@ -171,59 +370,7 @@ class BenthicColonyTracker:
         for track in list(self._tracks.values()):
             if not track.active:
                 continue
-
-            # 1. Warp polygon vertices
-            if track.polygon and len(track.polygon) >= 3:
-                pts = np.array(track.polygon, dtype=np.float32).reshape(-1, 1, 2)
-                # Apply affine transformation (top 2x3 of step_H)
-                warped_pts = cv2.transform(pts, step_H[:2, :])
-                warped_poly = [[float(p[0][0]), float(p[0][1])] for p in warped_pts]
-
-                # Compute new bounding box from warped polygon
-                xs = [p[0] for p in warped_poly]
-                ys = [p[1] for p in warped_poly]
-                min_x = max(0, int(min(xs)))
-                min_y = max(0, int(min(ys)))
-                max_x = min(frame_w, int(max(xs)))
-                max_y = min(frame_h, int(max(ys)))
-                new_w = max_x - min_x
-                new_h = max_y - min_y
-
-                # If track completely moved out of frame, mark inactive
-                if new_w < 5 or new_h < 5:
-                    track.active = False
-                    continue
-
-                track.polygon = warped_poly
-                track.bbox = [min_x, min_y, new_w, new_h]
-                track.centroid = (int((min_x + max_x) / 2), int((min_y + max_y) / 2))
-                track.last_seen_frame = frame_idx
-                track.hits += 1
-            else:
-                # Warp bbox corners
-                x, y, w, h = track.bbox
-                corners = np.array([
-                    [[x, y]],
-                    [[x + w, y + h]],
-                ], dtype=np.float32)
-                warped = cv2.transform(corners, step_H[:2, :])
-                x0, y0 = int(warped[0, 0, 0]), int(warped[0, 0, 1])
-                x1, y1 = int(warped[1, 0, 0]), int(warped[1, 0, 1])
-                x0 = max(0, min(frame_w, x0))
-                y0 = max(0, min(frame_h, y0))
-                x1 = max(0, min(frame_w, x1))
-                y1 = max(0, min(frame_h, y1))
-                bw = x1 - x0
-                bh = y1 - y0
-
-                if bw < 5 or bh < 5:
-                    track.active = False
-                    continue
-
-                track.bbox = [x0, y0, bw, bh]
-                track.centroid = (x0 + bw // 2, y0 + bh // 2)
-                track.last_seen_frame = frame_idx
-                track.hits += 1
+            self._warp_single_track(track, step_H, frame_w, frame_h, frame_idx)
 
     def match_keyframe_detections(
         self,
@@ -254,23 +401,38 @@ class BenthicColonyTracker:
                     track.active = False
             return self.get_active_tracks()
 
-        # Compute IoU cost matrix
-        iou_matrix = np.zeros((n_tracks, n_dets), dtype=np.float32)
+        # Compute IoU + spatial proximity score matrix
+        score_matrix = np.zeros((n_tracks, n_dets), dtype=np.float32)
         for i, track in enumerate(active_tracks):
+            tcx, tcy = track.centroid
+            t_diag = float(np.sqrt(max(track.bbox[2]**2 + track.bbox[3]**2, 100.0)))
             for j, det in enumerate(new_detections):
                 det_bbox = det.get("bbox", [0, 0, 1, 1])
-                iou_matrix[i, j] = compute_box_iou(track.bbox, det_bbox)
+                iou = compute_box_iou(track.bbox, det_bbox)
+
+                dcx, dcy = det.get("centroid", (det_bbox[0] + det_bbox[2] // 2, det_bbox[1] + det_bbox[3] // 2))
+                dist = float(np.sqrt((tcx - dcx)**2 + (tcy - dcy)**2))
+                norm_dist = dist / max(t_diag, 10.0)
+                center_sim = max(0.0, 1.0 - min(norm_dist, 1.0))
+
+                # Combined spatial association score
+                score = 0.65 * iou + 0.35 * center_sim
+                if track.taxonomy.get("genus") == det.get("taxonomy", {}).get("genus"):
+                    score += 0.05
+                score_matrix[i, j] = score
 
         # Greedy bipartite matching
         matched_tracks = set()
         matched_dets = set()
 
-        # Sort candidate pairs by descending IoU
+        # Sort candidate pairs by descending score
         pairs = []
         for i in range(n_tracks):
             for j in range(n_dets):
-                if iou_matrix[i, j] >= self.iou_match_threshold:
-                    pairs.append((iou_matrix[i, j], i, j))
+                det_bbox = new_detections[j].get("bbox", [0, 0, 1, 1])
+                iou = compute_box_iou(active_tracks[i].bbox, det_bbox)
+                if score_matrix[i, j] >= self.iou_match_threshold or iou >= self.iou_match_threshold:
+                    pairs.append((score_matrix[i, j], i, j))
         pairs.sort(key=lambda x: x[0], reverse=True)
 
         for iou_val, trk_idx, det_idx in pairs:

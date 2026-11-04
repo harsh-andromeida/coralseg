@@ -120,6 +120,8 @@ class EgoMotionKeyframeSelector:
                 "frames_since_kf": 0,
                 "keyframe_index": self._keyframe_count,
                 "trigger_reason": "initial_frame" if not force_keyframe else "forced",
+                "step_H": np.eye(3, dtype=np.float32),
+                "cumulative_H": self._cumulative_H.copy(),
             }
 
         self._frames_since_keyframe += 1
@@ -228,34 +230,23 @@ class EgoMotionKeyframeSelector:
     def _calculate_scene_overlap(self, w: int, h: int, H: np.ndarray) -> float:
         """
         Warps frame corner vertices using cumulative homography H and calculates
-        the intersection area with the original viewport.
+        the true polygon intersection area with the original viewport.
         """
-        corners = np.array([
-            [0, 0, 1],
-            [w, 0, 1],
-            [w, h, 1],
-            [0, h, 1],
-        ], dtype=np.float32).T  # (3, 4)
+        if not _HAS_CV2:
+            return 1.0
+
+        p1 = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32)
 
         try:
-            # Invert H to project current viewport into keyframe anchor coordinates
-            H_inv = np.linalg.inv(H)
-            warped = H_inv @ corners
-            warped_x = warped[0, :] / np.maximum(warped[2, :], 1e-6)
-            warped_y = warped[1, :] / np.maximum(warped[2, :], 1e-6)
+            # Transform p1 by H to get the new warped quadrilateral in current coordinates
+            p1_hom = np.hstack([p1, np.ones((4, 1), dtype=np.float32)])
+            p2_hom = (H @ p1_hom.T).T
+            p2 = p2_hom[:, :2] / np.maximum(p2_hom[:, 2:], 1e-6)
 
-            # Bounding box of intersection
-            inter_x0 = max(0.0, float(np.min(warped_x)))
-            inter_x1 = min(float(w), float(np.max(warped_x)))
-            inter_y0 = max(0.0, float(np.min(warped_y)))
-            inter_y1 = min(float(h), float(np.max(warped_y)))
-
-            if inter_x1 <= inter_x0 or inter_y1 <= inter_y0:
-                return 0.0
-
-            inter_area = (inter_x1 - inter_x0) * (inter_y1 - inter_y0)
+            # Compute exact polygon intersection area between viewport and warped quad
+            inter_area, _ = cv2.intersectConvexConvex(p1, p2.astype(np.float32))
             total_area = float(w * h)
-            overlap = inter_area / max(total_area, 1.0)
+            overlap = float(inter_area) / max(total_area, 1.0)
             return float(np.clip(overlap, 0.0, 1.0))
-        except (np.linalg.LinAlgError, ZeroDivisionError):
-            return 0.0
+        except Exception:
+            return 1.0

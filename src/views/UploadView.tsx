@@ -141,7 +141,6 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [videoDragActive, setVideoDragActive] = useState<boolean>(false);
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
   const [isStartingVideoJob, setIsStartingVideoJob] = useState<boolean>(false);
-  const [videoPreset, setVideoPreset] = useState<"balanced" | "high_fps" | "accuracy">("balanced");
   const [videoTrackerMode, setVideoTrackerMode] = useState<"sam2" | "optical_flow">("sam2");
   const [videoError, setVideoError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
@@ -645,12 +644,12 @@ export const UploadView: React.FC<UploadViewProps> = ({
     setIsStartingVideoJob(true);
     setVideoError(null);
 
-    const presetConfigs = {
-      high_fps: { max_stride: 60, min_stride: 20, points_per_side: 12, overlap_threshold: 0.80 },
-      balanced: { max_stride: 45, min_stride: 15, points_per_side: 16, overlap_threshold: 0.75 },
-      accuracy: { max_stride: 25, min_stride: 10, points_per_side: 16, overlap_threshold: 0.70 },
+    const cfg = {
+      max_stride: 25,
+      min_stride: 10,
+      points_per_side: 16,
+      overlap_threshold: 0.70,
     };
-    const cfg = presetConfigs[videoPreset];
 
     try {
       const procRes = await processVideo({
@@ -1874,59 +1873,24 @@ export const UploadView: React.FC<UploadViewProps> = ({
                           </Button>
                         </div>
 
-                        {/* Preset Selection */}
+                        {/* Survey Cadence Status */}
                         <div className="space-y-1.5 pt-1 border-t border-cyan-100">
-                          <span className="text-[11px] font-semibold text-slate-700 block">
-                            Survey Cadence & Keyframe Preset
-                          </span>
-                          <div className="grid grid-cols-3 gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setVideoPreset("balanced");
-                                setVideoTrackerMode("sam2");
-                              }}
-                              className={`p-2 rounded-lg border text-left transition-all ${
-                                videoPreset === "balanced"
-                                  ? "bg-white border-cyan-500 shadow-xs"
-                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
-                              }`}
-                            >
-                              <div className="text-xs font-bold text-slate-800">Balanced</div>
-                              <div className="text-[10px] text-slate-500">25% benthic overlap gate (16x16 grid)</div>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setVideoPreset("high_fps");
-                                setVideoTrackerMode("optical_flow");
-                              }}
-                              className={`p-2 rounded-lg border text-left transition-all ${
-                                videoPreset === "high_fps"
-                                  ? "bg-white border-cyan-500 shadow-xs"
-                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
-                              }`}
-                            >
-                              <div className="text-xs font-bold text-slate-800">Ultra High FPS</div>
-                              <div className="text-[10px] text-slate-500">60-120 FPS flow (Fast AUV survey)</div>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setVideoPreset("accuracy");
-                                setVideoTrackerMode("sam2");
-                              }}
-                              className={`p-2 rounded-lg border text-left transition-all ${
-                                videoPreset === "accuracy"
-                                  ? "bg-white border-cyan-500 shadow-xs"
-                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
-                              }`}
-                            >
-                              <div className="text-xs font-bold text-slate-800">High Accuracy</div>
-                              <div className="text-[10px] text-slate-500">Dense census (10-frame cadence)</div>
-                            </button>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-semibold text-slate-700">
+                              Survey Cadence Preset
+                            </span>
+                            <span className="text-[10px] text-cyan-700 font-medium bg-cyan-100/70 px-1.5 py-0.5 rounded">
+                              Max Accuracy
+                            </span>
+                          </div>
+                          <div className="p-2 rounded-lg border border-cyan-200 bg-cyan-50/50 text-left">
+                            <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-600" />
+                              High Accuracy Cadence
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              Dense 10-25 frame keyframe census with 70% benthic overlap gate
+                            </div>
                           </div>
                         </div>
 
@@ -1937,7 +1901,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
                               Tracking Engine
                             </span>
                             <span className="text-[10px] text-cyan-700 font-mono">
-                              {videoTrackerMode === "sam2" ? "Deformable Neural Masks" : "Affine Homography"}
+                              {videoTrackerMode === "sam2" ? "Neural Spatio-Temporal Masks" : "Colony-Level Flow + Re-ID"}
                             </span>
                           </div>
                           <div className="grid grid-cols-2 gap-2">
@@ -1955,7 +1919,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
                                 SAM 2 Neural Tracker
                               </div>
                               <div className="text-[10px] text-slate-500 mt-0.5">
-                                Deformable pixel masks (CUDA GPU 30-45 FPS, MPS usable)
+                                Deformable masks with memory attention (Max Accuracy)
                               </div>
                             </button>
 
@@ -1970,10 +1934,10 @@ export const UploadView: React.FC<UploadViewProps> = ({
                             >
                               <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                High-Speed Optical Flow
+                                Colony Flow + Re-ID
                               </div>
                               <div className="text-[10px] text-slate-500 mt-0.5">
-                                60-120 FPS Lucas-Kanade homography warping
+                                Per-colony optical flow with depth compensation (High Speed)
                               </div>
                             </button>
                           </div>

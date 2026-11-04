@@ -425,7 +425,7 @@ class VideoProcessor:
                 job["active_corals_count"] = len(current_active_tracks)
                 job["total_unique_corals"] = tracker._next_track_id - 1
                 job["bleaching_prevalence_pct"] = round(bleach_pct, 1)
-                job["frame_tracks_map"][cur_f] = list(current_active_tracks)
+                job["frame_tracks_map"][cur_f] = [t.snapshot() for t in current_active_tracks]
                 job["time_series"].append(record)
 
             frames_processed_clock += 1
@@ -586,38 +586,52 @@ class VideoProcessor:
                                 active_tracks = tracker.get_active_tracks()
                                 _record_frame_state(out_f, active_tracks)
                         except Exception:
-                            # Fallback to homography warping on streaming error
+                            # Fallback to colony-level flow / homography on streaming error
+                            interv_prev_gray = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2GRAY) if kf_bgr is not None else None
                             for cur_f in range(kf_frame_idx + 1, next_kf_idx):
                                 if job["cancel_requested"]:
                                     break
+                                ret_c, cur_bgr = cap.read()
+                                cur_gray = cv2.cvtColor(cur_bgr, cv2.COLOR_BGR2GRAY) if (ret_c and cur_bgr is not None) else None
                                 m_meta = motion_metas.get(cur_f, {})
                                 step_H = m_meta.get("step_H", np.eye(3, dtype=np.float32))
-                                tracker.warp_tracks_with_motion(
-                                    step_H=step_H,
+                                tracker.warp_tracks_colony_flow(
+                                    prev_gray=interv_prev_gray,
+                                    curr_gray=cur_gray,
                                     frame_w=width,
                                     frame_h=height,
                                     frame_idx=cur_f,
+                                    fallback_H=step_H,
                                 )
+                                if cur_gray is not None:
+                                    interv_prev_gray = cur_gray
                                 active_tracks = tracker.get_active_tracks()
                                 _record_frame_state(cur_f, active_tracks)
                     else:
                         _set_stage(
-                            stage=f"Tracking frames {kf_frame_idx+1}-{next_kf_idx-1} via Optical Flow (60-120 FPS)...",
-                            model="Lucas-Kanade Optical Flow Tracker",
-                            action="High-speed homography motion warping",
+                            stage=f"Tracking frames {kf_frame_idx+1}-{next_kf_idx-1} via Colony-Level Optical Flow (60-100 FPS)...",
+                            model="Benthic Colony Optical Flow Tracker",
+                            action="Independent colony optical flow with local depth compensation",
                             detail=f"Propagating {len(active_tracks)} colonies across {window_length - 1} intervening frames",
                         )
+                        interv_prev_gray = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2GRAY) if kf_bgr is not None else None
                         for cur_f in range(kf_frame_idx + 1, next_kf_idx):
                             if job["cancel_requested"]:
                                 break
+                            ret_c, cur_bgr = cap.read()
+                            cur_gray = cv2.cvtColor(cur_bgr, cv2.COLOR_BGR2GRAY) if (ret_c and cur_bgr is not None) else None
                             m_meta = motion_metas.get(cur_f, {})
                             step_H = m_meta.get("step_H", np.eye(3, dtype=np.float32))
-                            tracker.warp_tracks_with_motion(
-                                step_H=step_H,
+                            tracker.warp_tracks_colony_flow(
+                                prev_gray=interv_prev_gray,
+                                curr_gray=cur_gray,
                                 frame_w=width,
                                 frame_h=height,
                                 frame_idx=cur_f,
+                                fallback_H=step_H,
                             )
+                            if cur_gray is not None:
+                                interv_prev_gray = cur_gray
                             active_tracks = tracker.get_active_tracks()
                             _record_frame_state(cur_f, active_tracks)
 
