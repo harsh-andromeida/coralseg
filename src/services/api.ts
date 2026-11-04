@@ -15,7 +15,7 @@ import {
   SaveAnnotationsResponse,
 } from "../types";
 
-const API_BASE = "http://127.0.0.1:8000/api";
+const API_BASE = "";
 
 export async function checkHealth(): Promise<{ status: string; device: DeviceInfo }> {
   const res = await fetch(`${API_BASE}/health`);

@@ -1,3 +1,4 @@
+
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -6,41 +7,54 @@ import process from "node:process";
 
 const host = process.env.TAURI_DEV_HOST;
 
-// https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
+
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+
   server: {
     port: 1425,
     strictPort: true,
-    host: host || false,
+
+    // Allow access from Google Colab and Cloudflare
+    host: "0.0.0.0",
+
+    // Allow Cloudflare temporary domains
+    allowedHosts: [".trycloudflare.com"],
+
+    // Forward API requests to Python backend
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+
     headers: {
       "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
       "Pragma": "no-cache",
     },
+
+    // Cloudflare-compatible HMR
     hmr: host
       ? {
-          protocol: "ws",
-          host,
-          port: 1426,
-        }
+        protocol: "ws",
+        host,
+        port: 1426,
+      }
       : {
-          protocol: "ws",
-          host: "localhost",
-          port: 1425,
-        },
+        protocol: "wss",
+        clientPort: 443,
+      },
+
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
   },
