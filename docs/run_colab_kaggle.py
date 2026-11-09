@@ -60,6 +60,32 @@ def get_cloudflared_binary() -> str:
     return ""
 
 
+def get_cuda_library_paths() -> list:
+    """Finds all nvidia and CUDA shared library directories in site-packages and system."""
+    paths = []
+    for p in sys.path:
+        if "site-packages" in p or "dist-packages" in p:
+            nvidia_dir = os.path.join(p, "nvidia")
+            if os.path.isdir(nvidia_dir):
+                for sub in os.listdir(nvidia_dir):
+                    lib_dir = os.path.join(nvidia_dir, sub, "lib")
+                    if os.path.isdir(lib_dir):
+                        paths.append(lib_dir)
+            torch_lib = os.path.join(p, "torch", "lib")
+            if os.path.isdir(torch_lib):
+                paths.append(torch_lib)
+
+    for sys_p in (
+        "/usr/local/cuda/lib64",
+        "/usr/local/cuda/targets/x86_64-linux/lib",
+        "/opt/cuda/lib64",
+    ):
+        if os.path.isdir(sys_p):
+            paths.append(sys_p)
+
+    return paths
+
+
 def free_port(port: int = 8000):
     """Ensure port 8000 is not blocked by previous crashed/zombie processes."""
     try:
@@ -161,6 +187,13 @@ def main():
     backend_script = os.path.join(BACKEND_DIR, "run_server.py")
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{BACKEND_DIR}:{env.get('PYTHONPATH', '')}"
+
+    # Prepend CUDA and cuDNN shared libraries to LD_LIBRARY_PATH so dynamic linker maps them cleanly
+    cuda_paths = get_cuda_library_paths()
+    if cuda_paths:
+        curr_ld = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = ":".join(cuda_paths) + (f":{curr_ld}" if curr_ld else "")
+        print(f"  🔗 Linked {len(cuda_paths)} CUDA/cuDNN shared library directories into runtime path.", flush=True)
 
     server_proc = subprocess.Popen(
         [sys.executable, backend_script, "--host", "0.0.0.0", "--port", "8000"],

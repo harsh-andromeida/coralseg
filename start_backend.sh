@@ -61,5 +61,13 @@ if [ -n "$PIDS" ]; then
     fi
 fi
 
+# Configure NVIDIA CUDA / cuDNN library paths if running on GPU
+if command -v nvidia-smi >/dev/null 2>&1; then
+    NVIDIA_SITE_PATHS=$(find "$DIR/.venv/lib" -type d -name "lib" 2>/dev/null | tr '\n' ':' || true)
+    if [ -n "$NVIDIA_SITE_PATHS" ]; then
+        export LD_LIBRARY_PATH="${NVIDIA_SITE_PATHS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+fi
+
 echo "[backend] Starting Reef Vision Studio FastAPI Engine on port 8000 using $PYTHON_EXEC..."
 exec "$PYTHON_EXEC" backend/run_server.py --port 8000 --reload "$@"

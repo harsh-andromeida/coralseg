@@ -472,12 +472,26 @@ def load_coralscop_model(
 
     _SAM_CACHE_KEY = cache_key
     _SAM_MTIME = current_mtime
+
+    # Attempt native GPU acceleration first without silent CPU fallback hiding initialization issues
     if active_provider == "CUDAExecutionProvider":
-        providers = [("CUDAExecutionProvider", get_cuda_provider_options()), "CPUExecutionProvider"]
-    else:
-        providers = [active_provider]
-        if "CPUExecutionProvider" not in providers:
-            providers.append("CPUExecutionProvider")
+        try:
+            cuda_providers = [("CUDAExecutionProvider", get_cuda_provider_options())]
+            encoder_sess = ort.InferenceSession(enc_path, sess_options=sess_options, providers=cuda_providers)
+            decoder_sess = ort.InferenceSession(dec_path, sess_options=sess_options, providers=cuda_providers)
+            actual_prov = encoder_sess.get_providers()[0]
+            print(f"  ⚡ [Model] CoralSCOP SAM sessions successfully loaded on NVIDIA CUDA GPU ({actual_prov})!")
+            _SAM_BUNDLE = {
+                "encoder": encoder_sess,
+                "decoder": decoder_sess,
+            }
+            return _SAM_BUNDLE
+        except Exception as cuda_init_err:
+            print(f"  ⚠️ [Model] CoralSCOP SAM CUDA provider error ({cuda_init_err}); falling back to CPUExecutionProvider...")
+
+    providers = [active_provider]
+    if "CPUExecutionProvider" not in providers:
+        providers.append("CPUExecutionProvider")
 
     encoder_sess = ort.InferenceSession(enc_path, sess_options=sess_options, providers=providers)
     decoder_sess = ort.InferenceSession(dec_path, sess_options=sess_options, providers=providers)
@@ -508,20 +522,31 @@ def load_bioclip_model(
         return _BIOCLIP_BUNDLE
 
     _BIOCLIP_CACHE_KEY = cache_key
-    if active_provider == "CUDAExecutionProvider":
-        providers = [("CUDAExecutionProvider", get_cuda_provider_options()), "CPUExecutionProvider"]
-    else:
-        providers = [active_provider]
-        if "CPUExecutionProvider" not in providers:
-            providers.append("CPUExecutionProvider")
-
     model_path = find_or_download_onnx_model(HF_BIOCLIP_FILE, progress_callback=progress_callback)
     embeds_path = find_or_download_onnx_model(HF_TAXONOMY_FILE, progress_callback=progress_callback)
+    text_features = np.load(embeds_path).astype(np.float32)
+
+    if active_provider == "CUDAExecutionProvider":
+        try:
+            cuda_providers = [("CUDAExecutionProvider", get_cuda_provider_options())]
+            session = ort.InferenceSession(model_path, sess_options=sess_options, providers=cuda_providers)
+            actual_prov = session.get_providers()[0]
+            print(f"  ⚡ [Model] BioCLIP session successfully loaded on NVIDIA CUDA GPU ({actual_prov})!")
+            _BIOCLIP_BUNDLE = {
+                "session": session,
+                "text_features": text_features,
+            }
+            return _BIOCLIP_BUNDLE
+        except Exception as cuda_init_err:
+            print(f"  ⚠️ [Model] BioCLIP CUDA provider error ({cuda_init_err}); falling back to CPUExecutionProvider...")
+
+    providers = [active_provider]
+    if "CPUExecutionProvider" not in providers:
+        providers.append("CPUExecutionProvider")
 
     session = ort.InferenceSession(model_path, sess_options=sess_options, providers=providers)
     actual_prov = session.get_providers()[0]
     print(f"[Model] BioCLIP session initialized with provider: {actual_prov} (requested: {active_provider})")
-    text_features = np.load(embeds_path).astype(np.float32)
 
     _BIOCLIP_BUNDLE = {
         "session": session,
@@ -548,14 +573,22 @@ def load_bleaching_model(
         return _BLEACHING_SESSION
 
     _BLEACHING_CACHE_KEY = cache_key
-    if active_provider == "CUDAExecutionProvider":
-        providers = [("CUDAExecutionProvider", get_cuda_provider_options()), "CPUExecutionProvider"]
-    else:
-        providers = [active_provider]
-        if "CPUExecutionProvider" not in providers:
-            providers.append("CPUExecutionProvider")
-
     pt_path = find_or_download_onnx_model(HF_BLEACHING_FILE, progress_callback=progress_callback)
+
+    if active_provider == "CUDAExecutionProvider":
+        try:
+            cuda_providers = [("CUDAExecutionProvider", get_cuda_provider_options())]
+            _BLEACHING_SESSION = ort.InferenceSession(pt_path, sess_options=sess_options, providers=cuda_providers)
+            actual_prov = _BLEACHING_SESSION.get_providers()[0]
+            print(f"  ⚡ [Model] Bleaching YOLO11n session successfully loaded on NVIDIA CUDA GPU ({actual_prov})!")
+            return _BLEACHING_SESSION
+        except Exception as cuda_init_err:
+            print(f"  ⚠️ [Model] Bleaching YOLO CUDA provider error ({cuda_init_err}); falling back to CPUExecutionProvider...")
+
+    providers = [active_provider]
+    if "CPUExecutionProvider" not in providers:
+        providers.append("CPUExecutionProvider")
+
     _BLEACHING_SESSION = ort.InferenceSession(pt_path, sess_options=sess_options, providers=providers)
     actual_prov = _BLEACHING_SESSION.get_providers()[0]
     print(f"[Model] Bleaching YOLO11n session initialized with provider: {actual_prov} (requested: {active_provider})")
