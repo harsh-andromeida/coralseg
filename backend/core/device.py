@@ -52,10 +52,26 @@ def _setup_cuda_environment():
         if os.path.isdir(torch_lib):
             candidate_dirs.append(torch_lib)
 
-    # 2. Standard Linux / Colab system CUDA installations
-    for p in ("/usr/local/cuda/lib64", "/usr/local/cuda/bin", "/opt/cuda/lib64", "/usr/lib/x86_64-linux-gnu"):
+    # 2. Standard Linux / Colab system CUDA installations (do NOT scan generic /usr/lib)
+    for p in (
+        "/usr/local/cuda/lib64",
+        "/usr/local/cuda/targets/x86_64-linux/lib",
+        "/usr/local/cuda/bin",
+        "/opt/cuda/lib64",
+    ):
         if os.path.isdir(p):
             candidate_dirs.append(p)
+
+    # Check for versioned /usr/local/cuda-* paths
+    try:
+        if os.path.isdir("/usr/local"):
+            for entry in os.listdir("/usr/local"):
+                if entry.startswith("cuda-"):
+                    c_path = os.path.join("/usr/local", entry, "lib64")
+                    if os.path.isdir(c_path):
+                        candidate_dirs.append(c_path)
+    except Exception:
+        pass
 
     # 3. Apply discovered library paths to operating system dynamic loader
     if sys.platform.startswith("linux"):
@@ -64,13 +80,28 @@ def _setup_cuda_environment():
         if new_paths:
             os.environ["LD_LIBRARY_PATH"] = ":".join(new_paths) + (f":{current_ld}" if current_ld else "")
 
-        # Preload shared libraries with RTLD_GLOBAL so dlopen from ONNX Runtime resolves them
+        # Preload ONLY CUDA and cuDNN shared libraries with RTLD_GLOBAL so dlopen from ONNX Runtime resolves them.
+        # NEVER preload arbitrary system libraries which exhausts glibc static TLS slots.
+        CUDA_LIB_PREFIXES = (
+            "libcudart.so",
+            "libcublas.so",
+            "libcublasLt.so",
+            "libcudnn.so",
+            "libcufft.so",
+            "libcurand.so",
+            "libcusolver.so",
+            "libcusparse.so",
+        )
         import ctypes
         for c_dir in candidate_dirs:
             if not os.path.isdir(c_dir):
                 continue
-            for fname in sorted(os.listdir(c_dir)):
-                if fname.startswith("lib") and (".so" in fname):
+            try:
+                files = os.listdir(c_dir)
+            except Exception:
+                continue
+            for fname in sorted(files):
+                if any(fname.startswith(prefix) for prefix in CUDA_LIB_PREFIXES):
                     try:
                         ctypes.CDLL(os.path.join(c_dir, fname), mode=ctypes.RTLD_GLOBAL)
                     except Exception:

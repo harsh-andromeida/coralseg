@@ -15,6 +15,7 @@ import urllib.request
 import platform
 import stat
 import shutil
+import socket
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
@@ -59,6 +60,20 @@ def get_cloudflared_binary() -> str:
     return ""
 
 
+def free_port(port: int = 8000):
+    """Ensure port 8000 is not blocked by previous crashed/zombie processes."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                print(f"  ⚠️ Port {port} is already in use. Freeing port...", flush=True)
+                if shutil.which("fuser"):
+                    subprocess.run(["fuser", "-k", f"{port}/tcp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    time.sleep(1)
+    except Exception:
+        pass
+
+
 def setup_colab_gpu_environment():
     """
     Ensures onnxruntime-gpu is installed and CUDA/cuDNN shared libraries are linked.
@@ -90,7 +105,7 @@ def setup_colab_gpu_environment():
             need_ort_gpu = True
 
         if need_ort_gpu:
-            print("  ⚡ Upgrading to onnxruntime-gpu for 50x-100x acceleration in Colab...", flush=True)
+            print("  ⚡ Installing onnxruntime-gpu for 50x-100x acceleration in Colab...", flush=True)
             subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "onnxruntime"], stdout=subprocess.DEVNULL)
             subprocess.run([sys.executable, "-m", "pip", "install", "onnxruntime-gpu>=1.17.0"], check=False)
             print("  ✅ onnxruntime-gpu installation finished.", flush=True)
@@ -104,8 +119,8 @@ def setup_colab_gpu_environment():
 
 def ensure_production_frontend():
     """
-    Ensures the production single-bundle frontend in dist/ is built.
-    Eliminates Vite dev-server network waterfalls over Cloudflare Tunnel (400+ sequential HTTP requests).
+    Ensures the production single-bundle frontend in dist/ is available.
+    Eliminates Vite dev-server waterfalls over Cloudflare Tunnel (400+ sequential HTTP requests).
     Serving dist/ directly via FastAPI gives sub-second instant page loads.
     """
     index_html = os.path.join(DIST_DIR, "index.html")
@@ -117,18 +132,16 @@ def ensure_production_frontend():
     has_npm = shutil.which("npm") is not None
     if has_npm and os.path.isfile(os.path.join(ROOT_DIR, "package.json")):
         try:
-            # Install node_modules if missing
             if not os.path.isdir(os.path.join(ROOT_DIR, "node_modules")):
                 print("  📦 Installing npm dependencies (one-time setup)...", flush=True)
                 subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--quiet"], cwd=ROOT_DIR, check=True)
-            # Build production bundle
             print("  🔨 Building optimized bundle with 'npm run build'...", flush=True)
             subprocess.run(["npm", "run", "build"], cwd=ROOT_DIR, check=True)
             print("  ✅ Frontend build complete! Bundle ready in dist/.", flush=True)
         except Exception as e:
             print(f"  ⚠️ Warning: Frontend build failed ({e}). Backend will run API-only mode.", flush=True)
     else:
-        print("  ℹ️ Node.js not detected. Backend will run in API server mode.", flush=True)
+        print("  ℹ️ Node.js not detected. Backend will serve API and fallback page.", flush=True)
 
 
 def main():
@@ -142,7 +155,8 @@ def main():
     # 2. Ensure optimized production frontend bundle in dist/
     ensure_production_frontend()
 
-    # 3. Start Unified FastAPI Engine on Port 8000 (serves both API and UI)
+    # 3. Clean port 8000 and start Unified FastAPI Engine on Port 8000
+    free_port(8000)
     print("\n[3/4] Starting Unified ReefVision Engine on port 8000...", flush=True)
     backend_script = os.path.join(BACKEND_DIR, "run_server.py")
     env = os.environ.copy()
@@ -153,20 +167,34 @@ def main():
         cwd=ROOT_DIR,
         env=env,
     )
-    time.sleep(3)
 
-    if server_proc.poll() is not None:
-        print("❌ Error: FastAPI server failed to start.", flush=True)
+    # Robust health-gate: wait up to 60s for /api/health to return HTTP 200 before exposing tunnel
+    print("  ⏳ Waiting for FastAPI Vision Engine to initialize and pass health check...", flush=True)
+    backend_ready = False
+    start_time = time.time()
+    timeout = 60
+
+    while time.time() - start_time < timeout:
+        ret = server_proc.poll()
+        if ret is not None:
+            print(f"❌ Error: FastAPI server terminated prematurely (exit code {ret}).", flush=True)
+            return
+
+        try:
+            req = urllib.request.Request("http://127.0.0.1:8000/api/health")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                if resp.status == 200:
+                    data = resp.read().decode()
+                    print(f"  ✅ Backend online and healthy: {data[:100]}...", flush=True)
+                    backend_ready = True
+                    break
+        except Exception:
+            time.sleep(1.5)
+
+    if not backend_ready:
+        print(f"❌ Error: Backend did not respond on port 8000 within {timeout}s.", flush=True)
+        server_proc.terminate()
         return
-
-    # Check health
-    try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3) as resp:
-            data = resp.read().decode()
-            print(f"  ✅ Backend online: {data[:120]}...", flush=True)
-    except Exception as err:
-        print(f"  ⚠️ Warning: Health check pending ({err})", flush=True)
 
     # 4. Expose public URL via Cloudflare Tunnel on unified port 8000
     cf_bin = get_cloudflared_binary()
@@ -181,24 +209,36 @@ def main():
         )
 
         try:
+            tunnel_url = None
             for line in iter(cf_proc.stdout.readline, ""):
                 if not line:
                     break
                 match = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
                 if match:
-                    url = match.group(0)
+                    tunnel_url = match.group(0)
                     print("\n" + "=" * 65, flush=True)
                     print(f"🚀 REEFVISION STUDIO IS READY AT:", flush=True)
-                    print(f"👉 {url}", flush=True)
+                    print(f"👉 {tunnel_url}", flush=True)
                     print("\n💡 INSTANT USAGE OPTIONS:", flush=True)
-                    print(f"  A) Open in Browser: {url}", flush=True)
+                    print(f"  A) Open in Browser: {tunnel_url}", flush=True)
                     print(f"     Loads in < 1 second using the pre-compiled production bundle.", flush=True)
-                    print(f"  B) In Desktop App: Click 'Remote/Colab' & paste {url}", flush=True)
+                    print(f"  B) In Desktop App: Click 'Remote/Colab' & paste {tunnel_url}", flush=True)
                     print("=" * 65 + "\n", flush=True)
                     break
 
-            # Keep process alive
-            cf_proc.wait()
+            if not tunnel_url:
+                print("⚠️ Tunnel launched but could not parse public URL. Check cloudflared output.")
+
+            # Monitor processes
+            while True:
+                if server_proc.poll() is not None:
+                    print("\n❌ Backend server process stopped unexpectedly.", flush=True)
+                    break
+                if cf_proc.poll() is not None:
+                    print("\n⚠️ Cloudflare tunnel disconnected.", flush=True)
+                    break
+                time.sleep(1)
+
         except KeyboardInterrupt:
             print("\nStopping ReefVision servers...", flush=True)
         finally:

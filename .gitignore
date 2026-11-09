@@ -15,7 +15,6 @@ venv.bak/
 
 # Node & Frontend
 node_modules/
-dist/
 dist-ssr/
 *.local
 logs/
@@ -25,6 +24,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+dist/*.icns
+dist/app_icon.iconset/
 
 # Rust / Tauri
 target/
@@ -52,9 +53,7 @@ onnx_models/*.npy
 *.zip
 *.tar.gz
 build/
-dist/
 **/build/
-**/dist/
 
 # OS & Editor Files
 .DS_Store

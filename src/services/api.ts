@@ -22,6 +22,15 @@ export function getApiBase(): string {
       const clean = custom.trim().replace(/\/+$/, "");
       return clean.endsWith("/api") ? clean : `${clean}/api`;
     }
+
+    // If running inside native packaged Tauri desktop app where origin is tauri:// or tauri.localhost
+    const isTauriScheme =
+      window.location.protocol === "tauri:" ||
+      window.location.hostname === "tauri.localhost" ||
+      ("__TAURI_INTERNALS__" in window && window.location.port !== "1425");
+    if (isTauriScheme) {
+      return "http://127.0.0.1:8000/api";
+    }
   }
   return "/api";
 }
