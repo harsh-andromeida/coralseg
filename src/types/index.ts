@@ -4,6 +4,11 @@ export interface DeviceInfo {
   mode?: "gpu" | "multithread_cpu" | "cpu";
   mode_label?: string;
   cuda_available: boolean;
+  torch_cuda_available?: boolean;
+  ort_cuda_available?: boolean;
+  cuda_status?: "active" | "onnxruntime_gpu_missing" | "unavailable" | string;
+  cuda_diagnostic?: string | null;
+  cuda_fix_command?: string | null;
   dml_available: boolean;
   gpu_available?: boolean;
   gpu_name: string;

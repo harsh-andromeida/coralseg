@@ -13,7 +13,7 @@ from tqdm.auto import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache, constants
 from huggingface_hub.file_download import repo_folder_name
 
-from core.device import get_optimal_device, get_device_mode, get_session_options
+from core.device import get_optimal_device, get_device_mode, get_session_options, get_cuda_provider_options
 
 # Model-specific inference locks for high-throughput concurrency
 _SAM_LOCK = threading.Lock()
@@ -472,12 +472,17 @@ def load_coralscop_model(
 
     _SAM_CACHE_KEY = cache_key
     _SAM_MTIME = current_mtime
-    providers = [active_provider]
-    if "CPUExecutionProvider" not in providers:
-        providers.append("CPUExecutionProvider")
+    if active_provider == "CUDAExecutionProvider":
+        providers = [("CUDAExecutionProvider", get_cuda_provider_options()), "CPUExecutionProvider"]
+    else:
+        providers = [active_provider]
+        if "CPUExecutionProvider" not in providers:
+            providers.append("CPUExecutionProvider")
 
     encoder_sess = ort.InferenceSession(enc_path, sess_options=sess_options, providers=providers)
     decoder_sess = ort.InferenceSession(dec_path, sess_options=sess_options, providers=providers)
+    actual_prov = encoder_sess.get_providers()[0]
+    print(f"[Model] CoralSCOP SAM sessions initialized with provider: {actual_prov} (requested: {active_provider})")
 
     _SAM_BUNDLE = {
         "encoder": encoder_sess,
@@ -503,14 +508,19 @@ def load_bioclip_model(
         return _BIOCLIP_BUNDLE
 
     _BIOCLIP_CACHE_KEY = cache_key
-    providers = [active_provider]
-    if "CPUExecutionProvider" not in providers:
-        providers.append("CPUExecutionProvider")
+    if active_provider == "CUDAExecutionProvider":
+        providers = [("CUDAExecutionProvider", get_cuda_provider_options()), "CPUExecutionProvider"]
+    else:
+        providers = [active_provider]
+        if "CPUExecutionProvider" not in providers:
+            providers.append("CPUExecutionProvider")
 
     model_path = find_or_download_onnx_model(HF_BIOCLIP_FILE, progress_callback=progress_callback)
     embeds_path = find_or_download_onnx_model(HF_TAXONOMY_FILE, progress_callback=progress_callback)
 
     session = ort.InferenceSession(model_path, sess_options=sess_options, providers=providers)
+    actual_prov = session.get_providers()[0]
+    print(f"[Model] BioCLIP session initialized with provider: {actual_prov} (requested: {active_provider})")
     text_features = np.load(embeds_path).astype(np.float32)
 
     _BIOCLIP_BUNDLE = {
@@ -538,12 +548,17 @@ def load_bleaching_model(
         return _BLEACHING_SESSION
 
     _BLEACHING_CACHE_KEY = cache_key
-    providers = [active_provider]
-    if "CPUExecutionProvider" not in providers:
-        providers.append("CPUExecutionProvider")
+    if active_provider == "CUDAExecutionProvider":
+        providers = [("CUDAExecutionProvider", get_cuda_provider_options()), "CPUExecutionProvider"]
+    else:
+        providers = [active_provider]
+        if "CPUExecutionProvider" not in providers:
+            providers.append("CPUExecutionProvider")
 
     pt_path = find_or_download_onnx_model(HF_BLEACHING_FILE, progress_callback=progress_callback)
     _BLEACHING_SESSION = ort.InferenceSession(pt_path, sess_options=sess_options, providers=providers)
+    actual_prov = _BLEACHING_SESSION.get_providers()[0]
+    print(f"[Model] Bleaching YOLO11n session initialized with provider: {actual_prov} (requested: {active_provider})")
     return _BLEACHING_SESSION
 
 

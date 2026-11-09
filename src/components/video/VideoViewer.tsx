@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState, useCallback } from "react";
 import { Film, Sparkles } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,13 @@ interface VideoViewerProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
 }
 
+interface VideoRenderBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 export const VideoViewer: React.FC<VideoViewerProps> = ({
   videoSrc,
   layoutMode,
@@ -43,6 +50,8 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const secondaryVideoRef = useRef<HTMLVideoElement>(null);
+  const overlayContainerRef = useRef<HTMLDivElement>(null);
+  const [renderBox, setRenderBox] = useState<VideoRenderBox>({ left: 0, top: 0, width: 0, height: 0 });
 
   // Sync secondary video for side-by-side playback
   useEffect(() => {
@@ -58,27 +67,110 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
     }
   }, [isPlaying, currentTimeSec, layoutMode]);
 
+  // Compute exact visible video bounding box inside container
+  const updateRenderBox = useCallback(() => {
+    const container = overlayContainerRef.current;
+    const video = videoRef.current;
+    if (!container || !video) return;
+
+    const cRect = container.getBoundingClientRect();
+    const vRect = video.getBoundingClientRect();
+
+    const cW = video.clientWidth;
+    const cH = video.clientHeight;
+    const vW = video.videoWidth || cW;
+    const vH = video.videoHeight || cH;
+
+    if (cW <= 0 || cH <= 0 || vW <= 0 || vH <= 0) {
+      setRenderBox({ left: 0, top: 0, width: Math.round(cRect.width), height: Math.round(cRect.height) });
+      return;
+    }
+
+    const videoAspect = vW / vH;
+    const elemAspect = cW / cH;
+
+    let renderW = cW;
+    let renderH = cH;
+    let renderX = 0;
+    let renderY = 0;
+
+    // Detect if the video element has letterboxing/pillarboxing inside its CSS box
+    if (elemAspect > videoAspect + 0.005) {
+      renderW = cH * videoAspect;
+      renderH = cH;
+      renderX = (cW - renderW) / 2;
+    } else if (elemAspect < videoAspect - 0.005) {
+      renderH = cW / videoAspect;
+      renderW = cW;
+      renderY = (cH - renderH) / 2;
+    }
+
+    // Offset relative to the container element
+    const left = vRect.left - cRect.left + renderX;
+    const top = vRect.top - cRect.top + renderY;
+
+    setRenderBox({
+      left: Math.round(left),
+      top: Math.round(top),
+      width: Math.max(1, Math.round(renderW)),
+      height: Math.max(1, Math.round(renderH)),
+    });
+  }, [videoRef]);
+
+  // Observe container & video resizing to maintain pixel-perfect overlay registration
+  useEffect(() => {
+    updateRenderBox();
+    const container = overlayContainerRef.current;
+    const video = videoRef.current;
+    if (!container || !video) return;
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        updateRenderBox();
+      });
+      ro.observe(container);
+      ro.observe(video);
+    }
+
+    window.addEventListener("resize", updateRenderBox);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener("resize", updateRenderBox);
+    };
+  }, [updateRenderBox, videoRef, layoutMode]);
+
   // Render canvas overlays synchronized with video frame
   useEffect(() => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
-    if (!canvas || !video) return;
+    if (!canvas || !video || renderBox.width <= 0 || renderBox.height <= 0) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const rect = video.getBoundingClientRect();
-    if (canvas.width !== rect.width || canvas.height !== rect.height) {
-      canvas.width = rect.width;
-      canvas.height = rect.height;
+    const dpr = window.devicePixelRatio || 1;
+    const targetW = Math.round(renderBox.width * dpr);
+    const targetH = Math.round(renderBox.height * dpr);
+
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
     }
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, renderBox.width, renderBox.height);
+
+    if (layoutMode === "Masks on Black") {
+      ctx.fillStyle = "#020617";
+      ctx.fillRect(0, 0, renderBox.width, renderBox.height);
+    }
 
     const vidW = video.videoWidth || 972;
     const vidH = video.videoHeight || 720;
-    const scaleX = canvas.width / vidW;
-    const scaleY = canvas.height / vidH;
+    const scaleX = renderBox.width / vidW;
+    const scaleY = renderBox.height / vidH;
 
     // 1. Draw Segmentation Polygons
     segments.forEach((seg) => {
@@ -142,7 +234,9 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
         ctx.fillText(label, renderX + 2, renderY);
       });
     }
-  }, [segments, selectedSegmentId, alpha, drawContours, drawBoxes, drawLabels, currentTimeSec, layoutMode]);
+
+    ctx.restore();
+  }, [segments, selectedSegmentId, alpha, drawContours, drawBoxes, drawLabels, currentTimeSec, layoutMode, renderBox]);
 
   const isSideBySide = layoutMode === "Side-by-Side";
   const showOriginal = isSideBySide || layoutMode === "Original Only";
@@ -203,22 +297,35 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
               </Badge>
             </div>
           </CardHeader>
-          <div className="relative bg-muted/40 aspect-video flex items-center justify-center overflow-hidden">
+          <div
+            ref={overlayContainerRef}
+            className="relative bg-muted/40 aspect-video flex items-center justify-center overflow-hidden"
+          >
             <video
               ref={isSideBySide ? (videoRef as any) : (showOverlay ? (videoRef as any) : undefined)}
               src={videoSrc}
               muted
               playsInline
+              onLoadedMetadata={updateRenderBox}
               onTimeUpdate={(e) => onTimeUpdate((e.target as HTMLVideoElement).currentTime)}
               onEnded={onVideoEnded}
               className="max-h-[64vh] w-auto mx-auto object-contain select-none"
             />
-            <canvas
-              ref={canvasRef}
-              className="absolute inset-0 w-full h-full pointer-events-none select-none"
-            />
+            {renderBox.width > 0 && renderBox.height > 0 && (
+              <canvas
+                ref={canvasRef}
+                style={{
+                  position: "absolute",
+                  left: `${renderBox.left}px`,
+                  top: `${renderBox.top}px`,
+                  width: `${renderBox.width}px`,
+                  height: `${renderBox.height}px`,
+                }}
+                className="pointer-events-none select-none"
+              />
+            )}
             {isLoading && (
-              <div className="absolute top-3 right-3 bg-card/85 backdrop-blur-md border border-emerald-500/50 px-3 py-1 rounded-full flex items-center gap-2 shadow-sm pointer-events-none">
+              <div className="absolute top-3 right-3 bg-card/85 backdrop-blur-md border border-emerald-500/50 px-3 py-1 rounded-full flex items-center gap-2 shadow-sm pointer-events-none z-10">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>

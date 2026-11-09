@@ -70,6 +70,8 @@ import {
   cancelVideoJob,
   loadSampleVideo,
   getVideoStreamUrl,
+  getCustomApiUrl,
+  setCustomApiUrl,
 } from "../services/api";
 
 interface ModelGroupDef {
@@ -173,6 +175,21 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [selectedPreset, setSelectedPreset] = useState<string>("First 6 Samples");
   const [selectedSpecific, setSelectedSpecific] = useState<string[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [showRemoteModal, setShowRemoteModal] = useState<boolean>(false);
+  const [remoteUrlInput, setRemoteUrlInput] = useState<string>(getCustomApiUrl());
+
+  const handleSaveRemoteUrl = () => {
+    setCustomApiUrl(remoteUrlInput);
+    setShowRemoteModal(false);
+    handleManualRetry();
+  };
+
+  const handleResetToLocal = () => {
+    setCustomApiUrl(null);
+    setRemoteUrlInput("");
+    setShowRemoteModal(false);
+    handleManualRetry();
+  };
 
   // Poll backend health and initialize with continuous heartbeat
   useEffect(() => {
@@ -419,8 +436,14 @@ export const UploadView: React.FC<UploadViewProps> = ({
 
   const getEngineName = (info: DeviceInfo | null): string => {
     if (!info) return "Detecting compute hardware...";
-    if (info.device_type === "gpu" || info.active_provider?.includes("CUDA")) {
-      return info.gpu_name || "NVIDIA CUDA GPU";
+    if (info.active_provider?.includes("CUDA")) {
+      return "NVIDIA CUDA GPU";
+    }
+    if (info.cuda_status === "onnxruntime_gpu_missing") {
+      return "CPU (GPU Needs onnxruntime-gpu)";
+    }
+    if (info.active_provider?.includes("CoreML") || info.gpu_name?.includes("MPS")) {
+      return "Apple Silicon (MPS)";
     }
     if (info.mode === "cpu") {
       return "Single-Threaded CPU Engine (1 Thread)";
@@ -1109,10 +1132,22 @@ export const UploadView: React.FC<UploadViewProps> = ({
               </div>
 
               {isBackendConnected ? (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/70">
-                  <Check size={10} strokeWidth={2.5} />
-                  Connected
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/70">
+                    <Check size={10} strokeWidth={2.5} />
+                    Connected
+                  </span>
+                  {getCustomApiUrl() && (
+                    <button
+                      type="button"
+                      onClick={() => setShowRemoteModal(true)}
+                      className="text-[9.5px] font-medium text-teal-700 hover:underline px-1 py-0.5 bg-teal-50 rounded border border-teal-200/60"
+                      title={`Connected to remote backend: ${getCustomApiUrl()}`}
+                    >
+                      Remote
+                    </button>
+                  )}
+                </div>
               ) : (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] font-medium text-amber-700">
@@ -1122,10 +1157,20 @@ export const UploadView: React.FC<UploadViewProps> = ({
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-6 px-2 text-[10px] font-semibold border-amber-300 hover:bg-amber-50"
+                    className="h-6 px-1.5 text-[10px] font-semibold border-amber-300 hover:bg-amber-50"
                     onClick={handleManualRetry}
                   >
                     Retry
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-1.5 text-[10px] font-semibold text-teal-700 hover:bg-teal-50"
+                    onClick={() => setShowRemoteModal(true)}
+                    title="Connect to Google Colab or remote tunnel"
+                  >
+                    Remote/Colab
                   </Button>
                 </div>
               )}
@@ -1256,14 +1301,43 @@ export const UploadView: React.FC<UploadViewProps> = ({
             <div className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-slate-50 border border-slate-100 mb-2">
               <span className="text-[11px] font-medium text-slate-500">Active Engine</span>
               <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-white border border-slate-200 text-slate-700 shadow-2xs">
-                {deviceInfo?.device_type === "gpu" || deviceInfo?.active_provider?.includes("CUDA") ? (
+                {deviceInfo?.active_provider?.includes("CUDA") ? (
                   <Zap size={11} className="text-amber-500" />
+                ) : deviceInfo?.cuda_status === "onnxruntime_gpu_missing" ? (
+                  <Zap size={11} className="text-amber-500 animate-pulse" />
                 ) : (
                   <Cpu size={11} className="text-teal-600" />
                 )}
                 <span className="truncate max-w-[170px]">{getEngineName(deviceInfo)}</span>
               </div>
             </div>
+
+            {deviceInfo?.cuda_status === "onnxruntime_gpu_missing" && (
+              <div className="p-2 mb-2 rounded-lg bg-amber-50/90 border border-amber-200 text-amber-900 text-[11px] flex flex-col gap-1.5 shadow-2xs">
+                <div className="flex items-center gap-1.5 font-semibold text-amber-950">
+                  <Zap size={12} className="text-amber-600 fill-amber-500" />
+                  <span>NVIDIA GPU Detected (CPU Fallback)</span>
+                </div>
+                <p className="text-[10px] text-amber-800 leading-tight">
+                  PyTorch detects CUDA, but ONNX is running on CPU because <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono">onnxruntime-gpu</code> is not installed. To unlock 50x–100x GPU acceleration:
+                </p>
+                <div className="flex items-center justify-between gap-1 bg-white p-1.5 rounded border border-amber-200">
+                  <code className="text-[9px] font-mono text-slate-700 select-all truncate">
+                    pip uninstall -y onnxruntime && pip install onnxruntime-gpu
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText("pip uninstall -y onnxruntime && pip install onnxruntime-gpu");
+                      alert("Command copied to clipboard! Run it in your Python / Colab environment.");
+                    }}
+                    className="px-2 py-0.5 text-[9px] font-semibold bg-amber-100 hover:bg-amber-200 text-amber-800 rounded transition-colors shrink-0"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="mb-2">
               <label className="block text-[11px] font-medium text-slate-500 mb-1">
@@ -1715,8 +1789,34 @@ export const UploadView: React.FC<UploadViewProps> = ({
                   {/* Scrollable Imagery Container - Image Cards Grid */}
                   <div className="portal-scroll-area flex-1 min-h-0">
                     {!isBackendConnected ? (
-                      <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-500 text-xs my-4">
-                        Connecting to Python Vision Engine... (Please ensure backend is started)
+                      <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-500 text-xs my-4 flex flex-col items-center gap-2.5">
+                        <div className="flex items-center gap-2 font-semibold text-slate-700 text-sm">
+                          <Loader2 size={16} className="animate-spin text-teal-600" />
+                          <span>Connecting to Python Vision Engine...</span>
+                        </div>
+                        <p className="text-slate-500 max-w-md text-xs">
+                          Please ensure the backend is started locally (<code>./start_backend.sh</code>) or connect to your Google Colab / remote tunnel instance.
+                        </p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs border-slate-300"
+                            onClick={handleManualRetry}
+                          >
+                            Retry Connection
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 text-xs bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
+                            onClick={() => setShowRemoteModal(true)}
+                          >
+                            Set Google Colab / Remote URL
+                          </Button>
+                        </div>
                       </div>
                     ) : sampleSubset.length === 0 ? (
                       <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-500 text-xs my-4">
@@ -2033,6 +2133,72 @@ export const UploadView: React.FC<UploadViewProps> = ({
             >
               Close
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remote / Google Colab Backend URL Modal */}
+      <Dialog open={showRemoteModal} onOpenChange={setShowRemoteModal}>
+        <DialogContent className="max-w-md p-6">
+          <DialogHeader>
+            <div className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-teal-600" />
+              <DialogTitle className="text-base font-bold text-[#0f1e4a]">
+                Connect to Remote / Colab Backend
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-xs text-slate-500 pt-1">
+              Connect this desktop app to a Google Colab GPU instance or remote server exposed via Cloudflare Tunnel or ngrok.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 my-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Backend Server URL
+              </label>
+              <input
+                type="text"
+                value={remoteUrlInput}
+                onChange={(e) => setRemoteUrlInput(e.target.value)}
+                placeholder="https://your-tunnel-name.trycloudflare.com"
+                className="w-full text-xs px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 font-mono"
+              />
+              <p className="text-[10px] text-slate-500 mt-1">
+                Leave empty or click Reset to use the local machine backend (<code>http://127.0.0.1:8000</code>).
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="flex items-center justify-between sm:justify-between mt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleResetToLocal}
+              className="text-xs text-slate-600 hover:bg-slate-100"
+            >
+              Reset to Local
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowRemoteModal(false)}
+                className="text-xs"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleSaveRemoteUrl}
+                className="text-xs bg-teal-600 hover:bg-teal-700 text-white font-medium"
+              >
+                Save & Connect
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

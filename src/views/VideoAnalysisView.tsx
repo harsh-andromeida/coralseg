@@ -28,6 +28,7 @@ import {
 import {
   getVideoStatus,
   getVideoFrameAnnotations,
+  getVideoFramesBulk,
   getDevice,
   setDevicePreference,
   pauseVideoJob,
@@ -49,6 +50,8 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const frameCacheRef = useRef<Map<number, VideoTrackItem[]>>(new Map());
+  const activeFrameRef = useRef<number>(0);
+  const lastBulkFetchedFrameRef = useRef<number>(-1);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState<boolean>(false);
 
   const [jobId] = useState<string>(initialJobId || videoItem.job_id || "");
@@ -109,6 +112,24 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
+  // Load initial batch of frame annotations on mount
+  useEffect(() => {
+    if (!jobId) return;
+    getVideoFramesBulk(jobId, 0)
+      .then((bulkRes) => {
+        if (bulkRes && bulkRes.frames) {
+          Object.entries(bulkRes.frames).forEach(([fStr, item]) => {
+            frameCacheRef.current.set(Number(fStr), item.tracks);
+          });
+          lastBulkFetchedFrameRef.current = bulkRes.total_frames_available;
+          if (frameCacheRef.current.has(currentFrameIdx)) {
+            setCurrentTracks(frameCacheRef.current.get(currentFrameIdx)!);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [jobId]);
+
   // Poll background job status and advance live video stream
   useEffect(() => {
     if (!jobId) return;
@@ -120,14 +141,37 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
         if (isMounted) {
           setJobStatus(s);
 
+          // Fetch newly available processed frames in bulk for smooth playback
+          const currentProcessed = s.current_frame || 0;
+          if (currentProcessed > lastBulkFetchedFrameRef.current) {
+            const startF = Math.max(0, lastBulkFetchedFrameRef.current);
+            lastBulkFetchedFrameRef.current = currentProcessed;
+            getVideoFramesBulk(jobId, startF, currentProcessed + 5)
+              .then((bulkRes) => {
+                if (bulkRes && bulkRes.frames) {
+                  Object.entries(bulkRes.frames).forEach(([fStr, item]) => {
+                    frameCacheRef.current.set(Number(fStr), item.tracks);
+                  });
+                  if (frameCacheRef.current.has(activeFrameRef.current)) {
+                    setCurrentTracks(frameCacheRef.current.get(activeFrameRef.current)!);
+                  }
+                }
+              })
+              .catch(() => {});
+          }
+
           // ONLY auto-advance player to follow live stream if user is NOT playing and is following live
           if (s.state === "processing" && isFollowingLive && !isPlaying && s.current_frame > 0) {
             const liveFrame = Math.max(0, Math.min(totalFrames - 1, s.current_frame - 1));
+            activeFrameRef.current = liveFrame;
             setCurrentFrameIdx(liveFrame);
             const liveSec = liveFrame / fps;
             setCurrentTimeSec(liveSec);
             if (videoRef.current) {
               videoRef.current.currentTime = liveSec;
+            }
+            if (frameCacheRef.current.has(liveFrame)) {
+              setCurrentTracks(frameCacheRef.current.get(liveFrame)!);
             }
           }
 
@@ -146,10 +190,10 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     };
   }, [jobId, isFollowingLive, isPlaying, totalFrames, fps]);
 
-  // Query frame annotations when currentFrameIdx changes (with client-side in-memory cache)
+  // Query frame annotations when currentFrameIdx changes (instant in-memory cache lookup)
   useEffect(() => {
     if (!jobId) return;
-    let cancelled = false;
+    activeFrameRef.current = currentFrameIdx;
 
     // Instant return if already in client cache
     if (frameCacheRef.current.has(currentFrameIdx)) {
@@ -157,20 +201,20 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
       return;
     }
 
-    getVideoFrameAnnotations(jobId, currentFrameIdx)
+    const targetFrame = currentFrameIdx;
+    getVideoFrameAnnotations(jobId, targetFrame)
       .then((res) => {
-        if (!cancelled && res && res.tracks) {
-          frameCacheRef.current.set(currentFrameIdx, res.tracks);
-          setCurrentTracks(res.tracks);
+        if (res && res.tracks) {
+          // Always cache the retrieved frame tracks so future scrubbing is instant
+          frameCacheRef.current.set(targetFrame, res.tracks);
+          if (activeFrameRef.current === targetFrame) {
+            setCurrentTracks(res.tracks);
+          }
         }
       })
       .catch(() => {
         // quiet error on frame seek
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [jobId, currentFrameIdx]);
 
   // Convert VideoTrackItem[] to CoralSegment[] so SegmentsTable & Sidebar render identical tables
@@ -229,6 +273,44 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
+  // High-FPS playback sync: keeps tracking overlays locked to video frames at 60 FPS
+  useEffect(() => {
+    if (!isPlaying) return;
+    let animId: number;
+
+    const syncPlayback = () => {
+      const vid = videoRef.current;
+      if (vid && !vid.paused) {
+        const time = vid.currentTime;
+        const maxSec = maxNavigableFrame / fps;
+        if (isProcessingState && time >= maxSec) {
+          vid.pause();
+          setIsPlaying(false);
+          setCurrentTimeSec(maxSec);
+          setCurrentFrameIdx(maxNavigableFrame);
+          if (frameCacheRef.current.has(maxNavigableFrame)) {
+            setCurrentTracks(frameCacheRef.current.get(maxNavigableFrame)!);
+          }
+          return;
+        }
+
+        const f = Math.min(maxNavigableFrame, Math.floor(time * fps));
+        setCurrentTimeSec(time);
+        if (f !== activeFrameRef.current) {
+          activeFrameRef.current = f;
+          setCurrentFrameIdx(f);
+          if (frameCacheRef.current.has(f)) {
+            setCurrentTracks(frameCacheRef.current.get(f)!);
+          }
+        }
+      }
+      animId = requestAnimationFrame(syncPlayback);
+    };
+
+    animId = requestAnimationFrame(syncPlayback);
+    return () => cancelAnimationFrame(animId);
+  }, [isPlaying, maxNavigableFrame, fps, isProcessingState]);
+
   // Handle Seek
   const handleSeekFrame = (targetFrame: number) => {
     if (!videoRef.current) return;
@@ -236,7 +318,12 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     const targetSec = clampedFrame / fps;
     videoRef.current.currentTime = targetSec;
     setCurrentTimeSec(targetSec);
+    activeFrameRef.current = clampedFrame;
     setCurrentFrameIdx(clampedFrame);
+
+    if (frameCacheRef.current.has(clampedFrame)) {
+      setCurrentTracks(frameCacheRef.current.get(clampedFrame)!);
+    }
 
     // If seeking to the latest processed frame, resume following live stream
     if (isProcessingState && clampedFrame >= maxNavigableFrame) {
@@ -262,14 +349,22 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
       }
       setIsPlaying(false);
       setCurrentTimeSec(maxAllowedSec);
+      activeFrameRef.current = maxNavigableFrame;
       setCurrentFrameIdx(maxNavigableFrame);
+      if (frameCacheRef.current.has(maxNavigableFrame)) {
+        setCurrentTracks(frameCacheRef.current.get(maxNavigableFrame)!);
+      }
       return;
     }
 
     setCurrentTimeSec(timeSec);
     const frame = Math.min(maxNavigableFrame, Math.floor(timeSec * fps));
-    if (frame !== currentFrameIdx) {
+    if (frame !== activeFrameRef.current) {
+      activeFrameRef.current = frame;
       setCurrentFrameIdx(frame);
+      if (frameCacheRef.current.has(frame)) {
+        setCurrentTracks(frameCacheRef.current.get(frame)!);
+      }
     }
   };
 

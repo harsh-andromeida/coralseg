@@ -3,8 +3,11 @@ fastapi>=0.110.0
 uvicorn>=0.28.0
 pydantic>=2.0.0
 
-# --- Vision & ONNX Inference Runtime (Zero PyTorch) ---
+# --- Vision & ONNX Inference Runtime ---
+# For CPU / Apple Silicon machines:
 onnxruntime>=1.17.0
+# For NVIDIA CUDA GPU acceleration (Google Colab / Linux / Windows NVIDIA):
+# Use: pip install -r backend/requirements-gpu.txt (or 'pip uninstall -y onnxruntime && pip install onnxruntime-gpu')
 pillow>=9.5.0
 numpy>=1.24.0
 opencv-python>=4.8.0

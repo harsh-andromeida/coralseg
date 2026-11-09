@@ -282,10 +282,21 @@ class VideoProcessor:
             sam_model = self.sam_loader()
             bioclip_bundle = self.bioclip_loader()
             bleaching_model = self.bleaching_loader()
+
+            sam_actual = sam_model["encoder"].get_providers()[0]
+            if sam_actual == "CUDAExecutionProvider":
+                load_msg = f"Foundation models active on NVIDIA CUDA GPU ({sam_actual})"
+            else:
+                import torch
+                if torch.cuda.is_available():
+                    load_msg = f"Foundation models loaded on CPU ({sam_actual}). Note: CUDA is available in PyTorch, but onnxruntime-gpu is required for ONNX GPU acceleration."
+                else:
+                    load_msg = f"Foundation models loaded on CPU ({sam_actual})"
+
             _set_stage(
                 stage="Foundation models loaded",
-                detail="Inference sessions active in system memory",
-                log_entry="Foundation models loaded successfully into RAM",
+                detail=f"Inference sessions active ({sam_actual})",
+                log_entry=load_msg,
             )
         except Exception as e:
             with self._lock:
@@ -585,12 +596,18 @@ class VideoProcessor:
 
                                 active_tracks = tracker.get_active_tracks()
                                 _record_frame_state(out_f, active_tracks)
-                        except Exception:
+                        except Exception as sam2_stream_err:
                             # Fallback to colony-level flow / homography on streaming error
-                            interv_prev_gray = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2GRAY) if kf_bgr is not None else None
+                            _set_stage(
+                                log_entry=f"SAM 2 frame tracking error: {str(sam2_stream_err)}; falling back to colony-level flow",
+                            )
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
+                            ret_k, kf_ref = cap.read()
+                            interv_prev_gray = cv2.cvtColor(kf_ref, cv2.COLOR_BGR2GRAY) if (ret_k and kf_ref is not None) else None
                             for cur_f in range(kf_frame_idx + 1, next_kf_idx):
                                 if job["cancel_requested"]:
                                     break
+                                cap.set(cv2.CAP_PROP_POS_FRAMES, cur_f)
                                 ret_c, cur_bgr = cap.read()
                                 cur_gray = cv2.cvtColor(cur_bgr, cv2.COLOR_BGR2GRAY) if (ret_c and cur_bgr is not None) else None
                                 m_meta = motion_metas.get(cur_f, {})
@@ -614,10 +631,13 @@ class VideoProcessor:
                             action="Independent colony optical flow with local depth compensation",
                             detail=f"Propagating {len(active_tracks)} colonies across {window_length - 1} intervening frames",
                         )
-                        interv_prev_gray = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2GRAY) if kf_bgr is not None else None
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
+                        ret_k, kf_ref = cap.read()
+                        interv_prev_gray = cv2.cvtColor(kf_ref, cv2.COLOR_BGR2GRAY) if (ret_k and kf_ref is not None) else None
                         for cur_f in range(kf_frame_idx + 1, next_kf_idx):
                             if job["cancel_requested"]:
                                 break
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, cur_f)
                             ret_c, cur_bgr = cap.read()
                             cur_gray = cv2.cvtColor(cur_bgr, cv2.COLOR_BGR2GRAY) if (ret_c and cur_bgr is not None) else None
                             m_meta = motion_metas.get(cur_f, {})

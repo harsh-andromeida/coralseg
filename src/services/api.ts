@@ -15,7 +15,37 @@ import {
   SaveAnnotationsResponse,
 } from "../types";
 
-const API_BASE = "/api";
+export function getApiBase(): string {
+  if (typeof window !== "undefined") {
+    const custom = localStorage.getItem("REEFVISION_API_URL");
+    if (custom && custom.trim()) {
+      const clean = custom.trim().replace(/\/+$/, "");
+      return clean.endsWith("/api") ? clean : `${clean}/api`;
+    }
+  }
+  return "/api";
+}
+
+export function getCustomApiUrl(): string {
+  if (typeof window !== "undefined") {
+    return localStorage.getItem("REEFVISION_API_URL") || "";
+  }
+  return "";
+}
+
+export function setCustomApiUrl(url: string | null) {
+  if (typeof window !== "undefined") {
+    if (url && url.trim()) {
+      localStorage.setItem("REEFVISION_API_URL", url.trim().replace(/\/+$/, ""));
+    } else {
+      localStorage.removeItem("REEFVISION_API_URL");
+    }
+  }
+}
+
+const API_BASE = {
+  toString: () => getApiBase(),
+};
 
 export async function checkHealth(): Promise<{ status: string; device: DeviceInfo }> {
   const res = await fetch(`${API_BASE}/health`);
@@ -574,6 +604,21 @@ export async function getVideoFrameAnnotations(
 }> {
   const res = await fetch(`${API_BASE}/video/frame/${jobId}/${frameIdx}`);
   if (!res.ok) throw new Error("Failed to fetch frame annotations");
+  return res.json();
+}
+
+export async function getVideoFramesBulk(
+  jobId: string,
+  startFrame = 0,
+  endFrame?: number
+): Promise<{
+  job_id: string;
+  total_frames_available: number;
+  frames: Record<string, { frame_idx: number; is_keyframe: boolean; tracks: import("../types").VideoTrackItem[] }>;
+}> {
+  const query = endFrame !== undefined ? `?start_frame=${startFrame}&end_frame=${endFrame}` : `?start_frame=${startFrame}`;
+  const res = await fetch(`${API_BASE}/video/frames/${jobId}${query}`);
+  if (!res.ok) throw new Error("Failed to fetch bulk frame annotations");
   return res.json();
 }
 

@@ -235,6 +235,13 @@ def test_video_api_endpoints():
         assert "tracks" in f_data
         print(f"  GET /api/video/frame/0 verified: {f_data['active_count']} active tracks.")
 
+        # 5b. Bulk frame annotations
+        bulk_resp = client.get(f"/api/video/frames/{job_id}?start_frame=0&end_frame=1")
+        assert bulk_resp.status_code == 200
+        bulk_data = bulk_resp.json()
+        assert "frames" in bulk_data
+        print(f"  GET /api/video/frames verified: {bulk_data['total_frames_available']} frames in bulk.")
+
         # 6. Export CSV
         exp_resp = client.get(f"/api/video/export/{job_id}?format=csv")
         assert exp_resp.status_code == 200

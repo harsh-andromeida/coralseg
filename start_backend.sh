@@ -17,8 +17,14 @@ else
         python3 -m venv --system-site-packages .venv || true
         if [ -f ".venv/bin/python3" ]; then
             PYTHON_EXEC=".venv/bin/python3"
-            echo "[backend] Ensuring backend requirements into .venv..."
-            "$PYTHON_EXEC" -m pip install -r backend/requirements.txt --quiet 2>/dev/null || true
+            if command -v nvidia-smi >/dev/null 2>&1; then
+                echo "[backend] NVIDIA GPU detected! Ensuring GPU-accelerated requirements into .venv..."
+                "$PYTHON_EXEC" -m pip uninstall -y onnxruntime >/dev/null 2>&1 || true
+                "$PYTHON_EXEC" -m pip install -r backend/requirements-gpu.txt --quiet 2>/dev/null || true
+            else
+                echo "[backend] Ensuring backend requirements into .venv..."
+                "$PYTHON_EXEC" -m pip install -r backend/requirements.txt --quiet 2>/dev/null || true
+            fi
             echo "[backend] Python environment successfully initialized."
         else
             PYTHON_EXEC="python3"

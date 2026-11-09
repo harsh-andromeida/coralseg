@@ -196,7 +196,10 @@ def get_device():
 def select_device(req: DevicePreferenceRequest):
     """Updates device preference (auto, cuda, cpu) and batch concurrency."""
     global _ACTIVE_DEVICE_PREF, _DEFAULT_CONCURRENCY
+    old_pref = _ACTIVE_DEVICE_PREF
     _ACTIVE_DEVICE_PREF = req.preference.lower().strip()
+    if old_pref != _ACTIVE_DEVICE_PREF:
+        unload_all_models_from_ram()
     if req.concurrency:
         _DEFAULT_CONCURRENCY = max(1, min(int(req.concurrency), 4))
     info = get_device_info(_ACTIVE_DEVICE_PREF)
@@ -1668,6 +1671,44 @@ def get_video_frame_annotations(job_id: str, frame_idx: int):
     if data is None:
         raise HTTPException(status_code=404, detail="Frame data not available.")
     return data
+
+
+@app.get("/api/video/frames/{job_id}")
+def get_video_all_frame_annotations(
+    job_id: str,
+    start_frame: int = 0,
+    end_frame: Optional[int] = None,
+):
+    """
+    Returns tracking detections and polygon boundaries for a range or all processed frames.
+    Allows frontend to pre-cache frame annotations in bulk for 60 FPS stutter-free playback.
+    """
+    job = _VIDEO_PROCESSOR.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found.")
+
+    frame_map = job.get("frame_tracks_map", {})
+    keyframes = set(job.get("keyframe_indices", []))
+
+    result = {}
+    if frame_map:
+        max_frame = max(frame_map.keys())
+        last_f = min(end_frame, max_frame) if end_frame is not None else max_frame
+
+        for f_idx in range(start_frame, last_f + 1):
+            if f_idx in frame_map:
+                tracks = frame_map[f_idx]
+                result[f_idx] = {
+                    "frame_idx": f_idx,
+                    "is_keyframe": f_idx in keyframes,
+                    "tracks": [t.to_dict() for t in tracks],
+                }
+
+    return {
+        "job_id": job_id,
+        "total_frames_available": len(result),
+        "frames": result,
+    }
 
 
 @app.get("/api/video/export/{job_id}")

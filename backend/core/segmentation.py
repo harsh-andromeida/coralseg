@@ -189,8 +189,8 @@ def run_segmentation(
     has_mask_input = np.array([0.0], dtype=np.float32)
     orig_im_size = np.array([float(orig_h), float(orig_w)], dtype=np.float32)
 
-    # 3. Batch decode masks for grid points
-    batch_size = 64
+    # 3. Batch decode masks for grid points (adaptive batch size to prevent OOM in constrained environments like Colab)
+    batch_size = 16 if total_pixels >= (1920 * 1080) else 32
     for i in range(0, len(scaled_pts), batch_size):
         batch_pts = scaled_pts[i:i + batch_size]
         batch_orig_pts = orig_pts[i:i + batch_size]
@@ -199,15 +199,19 @@ def run_segmentation(
         coords = batch_pts[:, np.newaxis, :].astype(np.float32)  # (B, 1, 2)
         labels = np.ones((n_pts, 1), dtype=np.float32)          # (B, 1)
 
-        with _SAM_LOCK:
-            dec_out = dec_sess.run(None, {
-                "image_embeddings": image_embeddings,
-                "point_coords": coords,
-                "point_labels": labels,
-                "mask_input": mask_input,
-                "has_mask_input": has_mask_input,
-                "orig_im_size": orig_im_size,
-            })
+        try:
+            with _SAM_LOCK:
+                dec_out = dec_sess.run(None, {
+                    "image_embeddings": image_embeddings,
+                    "point_coords": coords,
+                    "point_labels": labels,
+                    "mask_input": mask_input,
+                    "has_mask_input": has_mask_input,
+                    "orig_im_size": orig_im_size,
+                })
+        except Exception as dec_err:
+            print(f"[Segmentation] Warning: Mask decode batch failed ({dec_err}); continuing...")
+            continue
 
         batch_raw_masks = dec_out[0][:, 0]  # (B, H, W)
         batch_ious = dec_out[1][:, 0]       # (B,)

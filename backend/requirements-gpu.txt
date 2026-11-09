@@ -1,0 +1,24 @@
+# --- Fast Web Framework & ASGI Server ---
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.0.0
+
+# --- Vision & NVIDIA CUDA Hardware-Accelerated ONNX Runtime ---
+# Replaces CPU onnxruntime with GPU CUDA onnxruntime:
+onnxruntime-gpu>=1.17.0
+pillow>=9.5.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+pycocotools>=2.0.6
+pandas>=2.0.0
+huggingface_hub>=0.20.0
+
+# --- Video Object Tracking & Foundation Segmentation ---
+sam2>=1.1.0
+
+# --- Visualization & Utilities ---
+matplotlib>=3.7.0
+tqdm>=4.66.0
+
+# --- Testing ---
+httpx>=0.27.0
