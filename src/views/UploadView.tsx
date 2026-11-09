@@ -143,7 +143,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [videoDragActive, setVideoDragActive] = useState<boolean>(false);
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
   const [isStartingVideoJob, setIsStartingVideoJob] = useState<boolean>(false);
-  const [videoTrackerMode, setVideoTrackerMode] = useState<"sam2" | "optical_flow">("sam2");
+  const [videoTrackerMode, setVideoTrackerMode] = useState<"sam2" | "optical_flow">("optical_flow");
   const [videoError, setVideoError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
@@ -2007,6 +2007,29 @@ export const UploadView: React.FC<UploadViewProps> = ({
                           <div className="grid grid-cols-2 gap-2">
                             <button
                               type="button"
+                              onClick={() => setVideoTrackerMode("optical_flow")}
+                              className={`p-2 rounded-lg border text-left transition-all ${
+                                videoTrackerMode === "optical_flow"
+                                  ? "bg-emerald-50/80 border-emerald-500 ring-1 ring-emerald-500/30"
+                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                  Colony Flow + Re-ID
+                                </span>
+                                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
+                                  Fast (60-120 FPS)
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                Realtime Lucas-Kanade optical flow + SAM keyframes (Recommended)
+                              </div>
+                            </button>
+
+                            <button
+                              type="button"
                               onClick={() => setVideoTrackerMode("sam2")}
                               className={`p-2 rounded-lg border text-left transition-all ${
                                 videoTrackerMode === "sam2"
@@ -2014,30 +2037,17 @@ export const UploadView: React.FC<UploadViewProps> = ({
                                   : "bg-white/60 border-slate-200 hover:border-slate-300"
                               }`}
                             >
-                              <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
-                                SAM 2 Neural Tracker
+                              <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
+                                  SAM 2 Neural Tracker
+                                </span>
+                                <span className="text-[9px] bg-cyan-100 text-cyan-800 font-bold px-1.5 py-0.5 rounded">
+                                  Deep Neural
+                                </span>
                               </div>
                               <div className="text-[10px] text-slate-500 mt-0.5">
-                                Deformable masks with memory attention (Max Accuracy)
-                              </div>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setVideoTrackerMode("optical_flow")}
-                              className={`p-2 rounded-lg border text-left transition-all ${
-                                videoTrackerMode === "optical_flow"
-                                  ? "bg-cyan-50/80 border-cyan-500 ring-1 ring-cyan-500/30"
-                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
-                              }`}
-                            >
-                              <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                Colony Flow + Re-ID
-                              </div>
-                              <div className="text-[10px] text-slate-500 mt-0.5">
-                                Per-colony optical flow with depth compensation (High Speed)
+                                Frame-by-frame deformable mask propagation (Heavy compute)
                               </div>
                             </button>
                           </div>

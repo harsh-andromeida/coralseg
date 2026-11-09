@@ -61,7 +61,21 @@ class SAM2BenthicTracker:
         """Initializes the SAM 2 video predictor with extracted 25 FPS JPEG frames."""
         self.load()
         with torch.inference_mode(), _autocast_context(self.device):
-            self._inference_state = self._predictor.init_state(video_path=frames_dir)
+            # offload_video_to_cpu=True prevents SAM 2 from eating 14GB of VRAM for raw video frames.
+            # Keeps VRAM footprint under ~800MB so ONNX Runtime and keyframe models have full GPU access.
+            try:
+                self._inference_state = self._predictor.init_state(
+                    video_path=frames_dir,
+                    offload_video_to_cpu=True,
+                    offload_state_to_cpu=False,
+                )
+            except TypeError:
+                # Fallback for older sam2 versions without offload parameters
+                self._inference_state = self._predictor.init_state(video_path=frames_dir)
+
+        if self.device == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         self._tracks_meta.clear()
         self.initialized = True
 
@@ -161,7 +175,7 @@ class SAM2BenthicTracker:
                     if area_px < 15:
                         continue
 
-                    # Extract contour polygons
+                    # Extract contour polygons & bounding box using fast compiled OpenCV
                     contours, _ = cv2.findContours(
                         mask_bool.astype(np.uint8),
                         cv2.RETR_EXTERNAL,
@@ -169,21 +183,18 @@ class SAM2BenthicTracker:
                     )
 
                     poly = []
+                    bbox = [0, 0, 0, 0]
+                    cx, cy = 0, 0
                     if contours:
                         c = max(contours, key=cv2.contourArea)
-                        poly = [[int(pt[0][0]), int(pt[0][1])] for pt in c]
-
-                    # Bounding box
-                    y_indices, x_indices = np.where(mask_bool)
-                    if len(x_indices) > 0 and len(y_indices) > 0:
-                        xmin, xmax = int(np.min(x_indices)), int(np.max(x_indices))
-                        ymin, ymax = int(np.min(y_indices)), int(np.max(y_indices))
-                        bbox = [xmin, ymin, max(1, xmax - xmin), max(1, ymax - ymin)]
-                        cx = int((xmin + xmax) / 2)
-                        cy = int((ymin + ymax) / 2)
+                        if len(c) >= 3:
+                            poly = c[:, 0, :].tolist()
+                        bx, by, bw, bh = cv2.boundingRect(c)
+                        bbox = [int(bx), int(by), max(1, int(bw)), max(1, int(bh))]
+                        cx = int(bx + bw / 2)
+                        cy = int(by + bh / 2)
                     else:
-                        bbox = [0, 0, 0, 0]
-                        cx, cy = 0, 0
+                        continue
 
                     # Remap proxy coordinates back to raw video display coordinates
                     if scale_x != 1.0 or scale_y != 1.0:

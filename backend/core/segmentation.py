@@ -251,13 +251,18 @@ def run_segmentation(
             if area < min_mask_region_area or area > int(0.75 * total_pixels):
                 continue
 
-            y_idx, x_idx = np.where(bin_mask)
-            if len(y_idx) == 0:
-                continue
-
-            x0, x1 = float(np.min(x_idx)), float(np.max(x_idx))
-            y0, y1 = float(np.min(y_idx)), float(np.max(y_idx))
-            box = [x0, y0, x1, y1]
+            if _HAS_CV2:
+                bx, by, bw, bh = cv2.boundingRect(bin_mask.astype(np.uint8))
+                if bw <= 0 or bh <= 0:
+                    continue
+                box = [float(bx), float(by), float(bx + bw), float(by + bh)]
+            else:
+                y_idx, x_idx = np.where(bin_mask)
+                if len(y_idx) == 0:
+                    continue
+                x0, x1 = float(np.min(x_idx)), float(np.max(x_idx))
+                y0, y1 = float(np.min(y_idx)), float(np.max(y_idx))
+                box = [x0, y0, x1, y1]
 
             collected_masks.append(bin_mask)
             collected_ious.append(iou_score)

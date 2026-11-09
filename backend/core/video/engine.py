@@ -655,6 +655,14 @@ class VideoProcessor:
                             active_tracks = tracker.get_active_tracks()
                             _record_frame_state(cur_f, active_tracks)
 
+                # Periodically release PyTorch CUDA cache between keyframes to prevent VRAM accumulation
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
             # Processing finished successfully
             if not job["cancel_requested"]:
                 _set_stage(
