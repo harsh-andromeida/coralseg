@@ -1811,4 +1811,21 @@ def export_video_result(job_id: str, format: str = "mp4"):
         raise HTTPException(status_code=400, detail="Invalid format. Supported: mp4, csv, json")
 
 
+# If static production build directory exists, mount it to serve the single-bundle frontend directly
+from fastapi.staticfiles import StaticFiles
+DIST_DIR = os.path.join(BACKEND_DIR.parent, "dist")
+if os.path.isdir(DIST_DIR):
+    app.mount("/", StaticFiles(directory=DIST_DIR, html=True), name="static_frontend")
+else:
+    @app.get("/")
+    def index_fallback():
+        return {
+            "status": "online",
+            "message": "ReefVision Studio API Engine is running. Run 'npm run build' to bundle the web UI.",
+            "docs": "/docs",
+            "api_health": "/api/health",
+        }
+
+
+
 

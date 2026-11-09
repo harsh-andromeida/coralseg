@@ -2,7 +2,8 @@
 """
 ReefVision Studio - Google Colab & Kaggle GPU Cloud Runner.
 Configures NVIDIA CUDA hardware acceleration for ONNX Runtime and PyTorch,
-launches the FastAPI vision engine, and exposes it securely via Cloudflare Tunnel.
+ensures production static frontend is available, launches the FastAPI vision engine,
+and exposes it securely via Cloudflare Tunnel.
 """
 
 import subprocess
@@ -17,6 +18,7 @@ import shutil
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
+DIST_DIR = os.path.join(ROOT_DIR, "dist")
 
 
 def get_cloudflared_binary() -> str:
@@ -70,6 +72,8 @@ def setup_colab_gpu_environment():
             dev_name = torch.cuda.get_device_name(0)
             print(f"  ✅ NVIDIA GPU detected via PyTorch: {dev_name} (CUDA {torch.version.cuda})", flush=True)
             has_gpu = True
+        else:
+            print("  ℹ️ No CUDA GPU detected in PyTorch (running in CPU mode).", flush=True)
     except Exception as e:
         print(f"  ℹ️ PyTorch check: {e}", flush=True)
 
@@ -98,6 +102,35 @@ def setup_colab_gpu_environment():
         subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"], check=False)
 
 
+def ensure_production_frontend():
+    """
+    Ensures the production single-bundle frontend in dist/ is built.
+    Eliminates Vite dev-server network waterfalls over Cloudflare Tunnel (400+ sequential HTTP requests).
+    Serving dist/ directly via FastAPI gives sub-second instant page loads.
+    """
+    index_html = os.path.join(DIST_DIR, "index.html")
+    if os.path.isfile(index_html):
+        print("\n[2/4] Production frontend bundle verified in dist/ (instant sub-second loading).", flush=True)
+        return
+
+    print("\n[2/4] Building production single-bundle frontend (dist/)...", flush=True)
+    has_npm = shutil.which("npm") is not None
+    if has_npm and os.path.isfile(os.path.join(ROOT_DIR, "package.json")):
+        try:
+            # Install node_modules if missing
+            if not os.path.isdir(os.path.join(ROOT_DIR, "node_modules")):
+                print("  📦 Installing npm dependencies (one-time setup)...", flush=True)
+                subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--quiet"], cwd=ROOT_DIR, check=True)
+            # Build production bundle
+            print("  🔨 Building optimized bundle with 'npm run build'...", flush=True)
+            subprocess.run(["npm", "run", "build"], cwd=ROOT_DIR, check=True)
+            print("  ✅ Frontend build complete! Bundle ready in dist/.", flush=True)
+        except Exception as e:
+            print(f"  ⚠️ Warning: Frontend build failed ({e}). Backend will run API-only mode.", flush=True)
+    else:
+        print("  ℹ️ Node.js not detected. Backend will run in API server mode.", flush=True)
+
+
 def main():
     print("=" * 65, flush=True)
     print("🪸  Andromeida Reef Vision Studio - Colab / Cloud Runner", flush=True)
@@ -106,8 +139,11 @@ def main():
     # 1. GPU Acceleration setup
     setup_colab_gpu_environment()
 
-    # 2. Start FastAPI Vision Engine on Port 8000
-    print("\n[2/4] Starting ReefVision FastAPI Engine on port 8000...", flush=True)
+    # 2. Ensure optimized production frontend bundle in dist/
+    ensure_production_frontend()
+
+    # 3. Start Unified FastAPI Engine on Port 8000 (serves both API and UI)
+    print("\n[3/4] Starting Unified ReefVision Engine on port 8000...", flush=True)
     backend_script = os.path.join(BACKEND_DIR, "run_server.py")
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{BACKEND_DIR}:{env.get('PYTHONPATH', '')}"
@@ -132,37 +168,18 @@ def main():
     except Exception as err:
         print(f"  ⚠️ Warning: Health check pending ({err})", flush=True)
 
-    # 3. Check if frontend Vite dev server can be started
-    has_node = shutil.which("npm") is not None
-    frontend_proc = None
-    target_tunnel_port = 8000
-
-    if has_node and os.path.isfile(os.path.join(ROOT_DIR, "package.json")):
-        print("\n[3/4] Node.js detected. Launching Vite frontend on port 1425...", flush=True)
-        frontend_proc = subprocess.Popen(
-            ["npm", "run", "dev:frontend"],
-            cwd=ROOT_DIR,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(2)
-        target_tunnel_port = 1425
-    else:
-        print("\n[3/4] Exposing FastAPI backend directly on port 8000...", flush=True)
-
-    # 4. Expose public URL via Cloudflare Tunnel
+    # 4. Expose public URL via Cloudflare Tunnel on unified port 8000
     cf_bin = get_cloudflared_binary()
     if cf_bin:
-        print(f"\n[4/4] Exposing port {target_tunnel_port} via Cloudflare Tunnel (HTTPS / WebSockets)...", flush=True)
+        print("\n[4/4] Exposing port 8000 via Cloudflare Tunnel (HTTPS / WebSockets)...", flush=True)
         cf_proc = subprocess.Popen(
-            [cf_bin, "tunnel", "--url", f"http://127.0.0.1:{target_tunnel_port}"],
+            [cf_bin, "tunnel", "--url", "http://127.0.0.1:8000"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
         )
 
-        url_found = False
         try:
             for line in iter(cf_proc.stdout.readline, ""):
                 if not line:
@@ -171,18 +188,13 @@ def main():
                 if match:
                     url = match.group(0)
                     print("\n" + "=" * 65, flush=True)
-                    if target_tunnel_port == 1425:
-                        print(f"🚀 REEFVISION STUDIO IS READY IN YOUR BROWSER AT:", flush=True)
-                        print(f"👉 {url}", flush=True)
-                    else:
-                        print(f"🚀 YOUR COLAB GPU BACKEND IS READY AT:", flush=True)
-                        print(f"👉 {url}", flush=True)
-                        print("\n💡 IN REEFVISION DESKTOP APP:", flush=True)
-                        print(f"1. Click 'Remote/Colab' on the top status card.", flush=True)
-                        print(f"2. Paste: {url}", flush=True)
-                        print(f"3. Click 'Save & Connect' for instant GPU acceleration!", flush=True)
+                    print(f"🚀 REEFVISION STUDIO IS READY AT:", flush=True)
+                    print(f"👉 {url}", flush=True)
+                    print("\n💡 INSTANT USAGE OPTIONS:", flush=True)
+                    print(f"  A) Open in Browser: {url}", flush=True)
+                    print(f"     Loads in < 1 second using the pre-compiled production bundle.", flush=True)
+                    print(f"  B) In Desktop App: Click 'Remote/Colab' & paste {url}", flush=True)
                     print("=" * 65 + "\n", flush=True)
-                    url_found = True
                     break
 
             # Keep process alive
@@ -191,17 +203,12 @@ def main():
             print("\nStopping ReefVision servers...", flush=True)
         finally:
             server_proc.terminate()
-            if frontend_proc:
-                try:
-                    frontend_proc.terminate()
-                except Exception:
-                    pass
             try:
                 cf_proc.terminate()
             except Exception:
                 pass
     else:
-        print(f"❌ cloudflared binary not available. Backend is running on port {target_tunnel_port}.")
+        print("❌ cloudflared binary not available. Backend is running on port 8000.")
         try:
             server_proc.wait()
         except KeyboardInterrupt:
