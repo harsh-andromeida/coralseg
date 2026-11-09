@@ -77,8 +77,8 @@ def standardize_video_to_25fps(input_path: str, output_path: str) -> Dict[str, A
 def extract_video_frames_to_disk(
     video_path: str,
     frames_dir: str,
-    max_dim: int = 720,
-    jpeg_quality: int = 85,
+    max_dim: int = 480,
+    jpeg_quality: int = 80,
 ) -> Tuple[List[str], Dict[str, Any]]:
     """
     Extracts video frames to dual-resolution JPEG images in frames_dir (00000.jpg, 00001.jpg, ...)

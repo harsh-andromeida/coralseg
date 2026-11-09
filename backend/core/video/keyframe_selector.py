@@ -93,10 +93,10 @@ class EgoMotionKeyframeSelector:
         # Convert to grayscale for motion estimation
         curr_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
 
-        # Downscale proxy for optical flow (max_dim=640) to accelerate feature tracking 5-10x
+        # Downscale proxy for optical flow (max_dim=480) to accelerate feature tracking 5-10x
         proxy_scale = 1.0
-        if max(h, w) > 640:
-            proxy_scale = 640.0 / float(max(h, w))
+        if max(h, w) > 480:
+            proxy_scale = 480.0 / float(max(h, w))
             proxy_w = max(16, int(round(w * proxy_scale)))
             proxy_h = max(16, int(round(h * proxy_scale)))
             curr_motion_gray = cv2.resize(curr_gray, (proxy_w, proxy_h), interpolation=cv2.INTER_AREA)

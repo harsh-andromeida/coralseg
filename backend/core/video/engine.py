@@ -250,6 +250,23 @@ class VideoProcessor:
         video_fps = job["metadata"]["fps"]
         tracker_mode = opts.get("tracker_mode", "optical_flow")
 
+        # Configure 480p proxy resolution for deep neural inference & segmentation.
+        # Downscales 1080p frames to 480p (5.1x fewer pixels) during processing,
+        # then remaps all polygon boundaries and bounding boxes back to 1080p for full-res display.
+        target_proxy_h = 480
+        if height > target_proxy_h:
+            kf_proxy_h = target_proxy_h
+            kf_proxy_w = max(16, int(round(width * (target_proxy_h / float(height)))))
+            kf_scale_x = width / float(kf_proxy_w)
+            kf_scale_y = height / float(kf_proxy_h)
+            is_kf_proxy = True
+        else:
+            kf_proxy_w = width
+            kf_proxy_h = height
+            kf_scale_x = 1.0
+            kf_scale_y = 1.0
+            is_kf_proxy = False
+
         def _set_stage(
             stage: str,
             model: Optional[str] = None,
@@ -366,9 +383,9 @@ class VideoProcessor:
                 _set_stage(
                     stage="Extracting dual-resolution frames for SAM 2...",
                     model="SAM 2 Video Predictor",
-                    action="Writing 640p proxy frames to disk",
+                    action="Writing 480p proxy frames to disk",
                 )
-                _, proxy_meta = extract_video_frames_to_disk(video_path, frames_dir, max_dim=640, jpeg_quality=85)
+                _, proxy_meta = extract_video_frames_to_disk(video_path, frames_dir, max_dim=480, jpeg_quality=80)
                 _set_stage(
                     stage="Initializing SAM 2 inference state...",
                     model="Meta SAM 2.1 Video Predictor",
@@ -470,22 +487,50 @@ class VideoProcessor:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
                 ret, kf_bgr = cap.read()
                 if ret and kf_bgr is not None:
-                    kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
+                    # 480p proxy resizing for ultra-fast GPU SAM ViT-B segmentation
+                    if is_kf_proxy:
+                        kf_proc_bgr = cv2.resize(kf_bgr, (kf_proxy_w, kf_proxy_h), interpolation=cv2.INTER_AREA)
+                    else:
+                        kf_proc_bgr = kf_bgr
+                    kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
+
                     points_per_side = opts.get("points_per_side", 16)
                     _set_stage(
                         stage=f"Keyframe #{w_idx+1}/{len(keyframe_indices)} (Frame {kf_frame_idx}): Segmenting benthic colonies...",
                         model="CoralSCOP SAM ViT-B",
                         action=f"Prompt grid segmentation ({points_per_side}x{points_per_side} points)",
-                        detail=f"Analyzing full-resolution frame {kf_frame_idx} ({width}x{height})",
+                        detail=f"Analyzing 480p proxy frame {kf_frame_idx} ({kf_proc_w}x{kf_proc_h}) remapping to {width}x{height}",
                     )
                     masks_info, _ = run_segmentation(
                         model=sam_model,
-                        image=kf_rgb,
+                        image=kf_proc_rgb,
                         points_per_side=points_per_side,
                         pred_iou_thresh=opts.get("pred_iou_thresh", 0.50),
                         stability_score_thresh=opts.get("stability_thresh", 0.50),
-                        min_mask_region_area=100,
+                        min_mask_region_area=25,
                     )
+
+                    # Remap proxy coordinates back to raw 1080p video coordinates for crystal-clear overlay display
+                    if is_kf_proxy:
+                        for m in masks_info:
+                            if "polygon" in m and m["polygon"]:
+                                m["polygon"] = [
+                                    [int(round(pt[0] * kf_scale_x)), int(round(pt[1] * kf_scale_y))]
+                                    for pt in m["polygon"]
+                                ]
+                            if "bbox" in m:
+                                bx, by, bw, bh = m["bbox"]
+                                m["bbox"] = [
+                                    int(round(bx * kf_scale_x)),
+                                    int(round(by * kf_scale_y)),
+                                    max(1, int(round(bw * kf_scale_x))),
+                                    max(1, int(round(bh * kf_scale_y))),
+                                ]
+                            if "centroid" in m:
+                                cx, cy = m["centroid"]
+                                m["centroid"] = (int(round(cx * kf_scale_x)), int(round(cy * kf_scale_y)))
+                            if "area" in m:
+                                m["area"] = int(round(m["area"] * kf_scale_x * kf_scale_y))
 
                     tracker.match_keyframe_detections(
                         new_detections=masks_info,
