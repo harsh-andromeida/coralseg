@@ -8,6 +8,7 @@ import {
   Pause,
   StopCircle,
   CheckCircle2,
+  AlertTriangle,
   Activity,
 } from "lucide-react";
 import { TopBar } from "../components/TopBar";
@@ -489,20 +490,28 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                       </span>
                     ) : jobStatus.state === "paused" ? (
                       <span className="h-3 w-3 rounded-full bg-amber-500 shrink-0" />
+                    ) : jobStatus.state === "error" ? (
+                      <AlertTriangle size={16} className="text-rose-600 shrink-0" />
                     ) : (
                       <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
                     )}
 
                     <div className="flex items-center gap-2 truncate">
-                      <span className="text-xs font-bold text-slate-900 tracking-tight">
+                      <span className={`text-xs font-bold tracking-tight ${jobStatus.state === "error" ? "text-rose-700" : "text-slate-900"}`}>
                         {jobStatus.state === "processing"
                           ? "Autonomous Pipeline Active"
                           : jobStatus.state === "paused"
                           ? "Pipeline Paused"
+                          : jobStatus.state === "error"
+                          ? "Pipeline Execution Error"
                           : "Transect Processing Complete"}
                       </span>
 
-                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-md bg-cyan-50 border border-cyan-200 text-cyan-900 font-bold">
+                      <span className={`text-[11px] font-mono px-2 py-0.5 rounded-md font-bold ${
+                        jobStatus.state === "error"
+                          ? "bg-rose-50 border border-rose-200 text-rose-900"
+                          : "bg-cyan-50 border border-cyan-200 text-cyan-900"
+                      }`}>
                         Frame {jobStatus.current_frame} / {totalFrames} ({jobStatus.progress_pct}%)
                       </span>
 
@@ -579,11 +588,24 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                         ? "bg-emerald-500"
                         : jobStatus.state === "paused"
                         ? "bg-amber-500"
+                        : jobStatus.state === "error"
+                        ? "bg-rose-500"
                         : "bg-gradient-to-r from-cyan-600 via-teal-500 to-cyan-400"
                     }`}
                     style={{ width: `${Math.min(100, Math.max(0, jobStatus.progress_pct))}%` }}
                   />
                 </div>
+
+                {/* Explicit Error Diagnostic Display */}
+                {jobStatus.state === "error" && jobStatus.error && (
+                  <div className="rounded-xl bg-rose-50 border border-rose-200/80 p-3 text-xs text-rose-800 flex items-start gap-2.5">
+                    <AlertTriangle size={15} className="text-rose-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold text-rose-900">Pipeline Execution Error</p>
+                      <p className="text-rose-700 font-mono mt-0.5 text-[11px]">{jobStatus.error}</p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Sub-bar: Stage description & live colonies census */}
                 <div className="flex flex-wrap items-center justify-between text-xs text-slate-600 gap-2 pt-0.5">

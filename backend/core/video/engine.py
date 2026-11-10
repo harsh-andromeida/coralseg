@@ -487,19 +487,20 @@ class VideoProcessor:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
                 ret, kf_bgr = cap.read()
                 if ret and kf_bgr is not None:
+                    kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
                     # 480p proxy resizing for ultra-fast GPU SAM ViT-B segmentation
                     if is_kf_proxy:
                         kf_proc_bgr = cv2.resize(kf_bgr, (kf_proxy_w, kf_proxy_h), interpolation=cv2.INTER_AREA)
+                        kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
                     else:
-                        kf_proc_bgr = kf_bgr
-                    kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
+                        kf_proc_rgb = kf_rgb
 
                     points_per_side = opts.get("points_per_side", 16)
                     _set_stage(
                         stage=f"Keyframe #{w_idx+1}/{len(keyframe_indices)} (Frame {kf_frame_idx}): Segmenting benthic colonies...",
                         model="CoralSCOP SAM ViT-B",
                         action=f"Prompt grid segmentation ({points_per_side}x{points_per_side} points)",
-                        detail=f"Analyzing 480p proxy frame {kf_frame_idx} ({kf_proc_w}x{kf_proc_h}) remapping to {width}x{height}",
+                        detail=f"Analyzing 480p proxy frame {kf_frame_idx} ({kf_proxy_w}x{kf_proxy_h}) remapping to {width}x{height}",
                     )
                     masks_info, _ = run_segmentation(
                         model=sam_model,
@@ -589,8 +590,8 @@ class VideoProcessor:
                                                 color_hex=trk.color_hex,
                                                 predicted_iou=trk.predicted_iou,
                                             )
-                                        except Exception:
-                                            pass
+                                        except Exception as reg_err:
+                                            print(f"Warning registering coral {trk.track_id} into SAM 2: {reg_err}", flush=True)
 
                             genera = sorted(list(set(t.taxonomy.get('genus', 'Coral') for t in new_tracks)))
                             _set_stage(
@@ -762,9 +763,18 @@ class VideoProcessor:
                     }
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+            err_msg = f"Pipeline execution error: {str(e)}"
             with self._lock:
                 job["state"] = VideoJobState.ERROR
-                job["error"] = f"Pipeline execution error: {str(e)}"
+                job["error"] = err_msg
+            _set_stage(
+                stage="Pipeline execution halted on error",
+                model="Error",
+                detail=err_msg,
+                log_entry=f"ERROR: {err_msg}",
+            )
         finally:
             cap.release()
             if isinstance(frames_dir, str) and os.path.isdir(frames_dir):
