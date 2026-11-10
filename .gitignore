@@ -81,3 +81,4 @@ backend/exports/video/
 *.avi
 *.mkv
 *.webm
+!demo_images/*.mp4

@@ -1492,24 +1492,28 @@ async def upload_video(file: UploadFile = File(...)):
 @app.get("/api/video/sample")
 def get_sample_video():
     """Loads a pre-packaged underwater coral reef transect video standardized to 25 FPS."""
+    sample_25fps = os.path.join(BACKEND_DIR.parent, "demo_images", "sample_reef_transect_25fps.mp4")
     sample_src = os.path.join(BACKEND_DIR.parent, "demo_images", "sample_reef_transect.mp4")
-    if not os.path.isfile(sample_src):
-        sample_src = os.path.join(BACKEND_DIR, "demo_images", "sample_reef_transect.mp4")
-    if not os.path.isfile(sample_src):
-        raise HTTPException(status_code=404, detail="Sample video not found on disk.")
 
     clean_name = "sample_reef_transect_25fps.mp4"
     dest_path = os.path.join(VIDEO_STORAGE_DIR, clean_name)
+    import shutil
 
-    if not os.path.isfile(dest_path):
-        try:
-            metadata = standardize_video_to_25fps(sample_src, dest_path)
-        except Exception:
-            import shutil
-            shutil.copyfile(sample_src, dest_path)
+    if os.path.isfile(sample_25fps):
+        if not os.path.isfile(dest_path) or os.path.getmtime(sample_25fps) > os.path.getmtime(dest_path):
+            shutil.copyfile(sample_25fps, dest_path)
+        metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+    elif os.path.isfile(sample_src):
+        if not os.path.isfile(dest_path) or os.path.getmtime(sample_src) > os.path.getmtime(dest_path):
+            try:
+                metadata = standardize_video_to_25fps(sample_src, dest_path)
+            except Exception:
+                shutil.copyfile(sample_src, dest_path)
+                metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+        else:
             metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
     else:
-        metadata = _VIDEO_PROCESSOR.probe_video(dest_path)
+        raise HTTPException(status_code=404, detail="Sample video not found in demo_images directory.")
 
     return {
         "status": "success",
