@@ -61,13 +61,13 @@ class SAM2BenthicTracker:
         """Initializes the SAM 2 video predictor with extracted 25 FPS JPEG frames."""
         self.load()
         with torch.inference_mode(), _autocast_context(self.device):
-            # offload_video_to_cpu=True prevents SAM 2 from eating 14GB of VRAM for raw video frames.
-            # Keeps VRAM footprint under ~800MB so ONNX Runtime and keyframe models have full GPU access.
+            # offload_video_to_cpu=True and offload_state_to_cpu=True prevent SAM 2 from eating
+            # all GPU VRAM when propagating through video frames in constrained environments like Colab.
             try:
                 self._inference_state = self._predictor.init_state(
                     video_path=frames_dir,
                     offload_video_to_cpu=True,
-                    offload_state_to_cpu=False,
+                    offload_state_to_cpu=True,
                 )
             except TypeError:
                 # Fallback for older sam2 versions without offload parameters

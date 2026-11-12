@@ -272,14 +272,15 @@ class VideoProcessor:
             is_kf_proxy = False
 
         def _set_stage(
-            stage: str,
+            stage: Optional[str] = None,
             model: Optional[str] = None,
             action: Optional[str] = None,
             detail: Optional[str] = None,
             log_entry: Optional[str] = None,
         ):
             with self._lock:
-                job["current_stage"] = stage
+                if stage is not None:
+                    job["current_stage"] = stage
                 if model is not None:
                     job["current_model"] = model
                 if action is not None:
@@ -623,6 +624,9 @@ class VideoProcessor:
                             detail=f"Streaming {window_length - 1} frames across {sam2_tracker.total_tracks_count} colonies",
                         )
                         try:
+                            import torch
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
                             for out_f, det_tracks in sam2_tracker.propagate_stream(
                                 start_frame_idx=kf_frame_idx + 1,
                                 num_frames=window_length - 1,
@@ -647,8 +651,15 @@ class VideoProcessor:
                                 active_tracks = tracker.get_active_tracks()
                                 _record_frame_state(out_f, active_tracks)
                         except Exception as sam2_stream_err:
+                            import torch
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
                             # Fallback to colony-level flow / homography on streaming error
                             _set_stage(
+                                stage=f"Tracking frames {kf_frame_idx+1}-{next_kf_idx-1} (Flow Fallback)...",
+                                model="Lucas-Kanade Flow (Fallback)",
+                                action="Tracking colonies with optical flow",
+                                detail="Falling back to optical flow due to SAM 2 error",
                                 log_entry=f"SAM 2 frame tracking error: {str(sam2_stream_err)}; falling back to colony-level flow",
                             )
                             cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)

@@ -196,6 +196,7 @@ def main():
     backend_script = os.path.join(BACKEND_DIR, "run_server.py")
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{BACKEND_DIR}:{env.get('PYTHONPATH', '')}"
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     # Prepend CUDA and cuDNN shared libraries to LD_LIBRARY_PATH so dynamic linker maps them cleanly
     cuda_paths = get_cuda_library_paths()

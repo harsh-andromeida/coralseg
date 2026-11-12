@@ -4,8 +4,12 @@ Andromeida Reef Vision Studio - Standalone FastAPI Server Launcher
 """
 
 import sys
+import os
 import argparse
 from pathlib import Path
+
+# Prevent CUDA memory fragmentation in PyTorch / SAM 2
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # Add backend directory to sys.path
 BACKEND_DIR = Path(__file__).resolve().parent

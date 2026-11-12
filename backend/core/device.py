@@ -150,8 +150,8 @@ def get_cuda_provider_options() -> Dict[str, Any]:
     """Returns production-tuned CUDAExecutionProvider options for ONNX Runtime."""
     return {
         "device_id": 0,
-        "arena_extend_strategy": "kNextPowerOfTwo",
-        "cudnn_conv_algo_search": "DEFAULT",
+        "arena_extend_strategy": "kSameAsRequested",
+        "cudnn_conv_algo_search": "HEURISTIC",
         "do_copy_in_default_stream": True,
     }
 
