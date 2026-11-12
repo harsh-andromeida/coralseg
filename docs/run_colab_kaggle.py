@@ -22,16 +22,58 @@ BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
 DIST_DIR = os.path.join(ROOT_DIR, "dist")
 
 
+def _can_execute_binary(bin_path: str) -> bool:
+    """Verifies that a binary actually executes and is not blocked by noexec filesystem flags."""
+    try:
+        res = subprocess.run(
+            [bin_path, "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def get_cloudflared_binary() -> str:
-    """Download cloudflared binary if not present."""
+    """
+    Finds, stages, or downloads cloudflared binary to an executable local filesystem.
+    Handles Google Drive (/content/drive/) noexec mount restrictions in Google Colab.
+    """
+    # 1. System PATH
     sys_cf = shutil.which("cloudflared")
-    if sys_cf:
+    if sys_cf and _can_execute_binary(sys_cf):
         return sys_cf
 
-    local_bin = os.path.join(ROOT_DIR, "cloudflared")
-    if os.path.exists(local_bin):
-        return local_bin
+    # Candidate executable destinations (never inside /content/drive/ which is mounted with noexec)
+    exec_targets = [
+        "/usr/local/bin/cloudflared",
+        "/tmp/cloudflared",
+        os.path.expanduser("~/.local/bin/cloudflared"),
+    ]
 
+    # 2. Check if cloudflared is already in one of the executable target locations
+    for target in exec_targets:
+        if os.path.isfile(target) and _can_execute_binary(target):
+            return target
+
+    # 3. Check if a non-executable copy exists in ROOT_DIR (e.g. from Google Drive mount)
+    root_cf = os.path.join(ROOT_DIR, "cloudflared")
+    if os.path.isfile(root_cf):
+        for target in exec_targets:
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copyfile(root_cf, target)
+                st = os.stat(target)
+                os.chmod(target, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+                if _can_execute_binary(target):
+                    print(f"  🔗 Staged cloudflared to executable path: {target}", flush=True)
+                    return target
+            except Exception:
+                continue
+
+    # 4. Download appropriate architecture binary directly to an executable location
     system = platform.system().lower()
     machine = platform.machine().lower()
 
@@ -48,14 +90,18 @@ def get_cloudflared_binary() -> str:
             url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-amd64"
 
     if url:
-        try:
-            print("📦 Downloading Cloudflare Tunnel binary...", flush=True)
-            urllib.request.urlretrieve(url, local_bin)
-            st = os.stat(local_bin)
-            os.chmod(local_bin, st.st_mode | stat.S_IEXEC)
-            return local_bin
-        except Exception as e:
-            print(f"⚠️ Failed to download cloudflared: {e}", flush=True)
+        for target in exec_targets:
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                print(f"📦 Downloading Cloudflare Tunnel binary to {target}...", flush=True)
+                urllib.request.urlretrieve(url, target)
+                st = os.stat(target)
+                os.chmod(target, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+                if _can_execute_binary(target):
+                    print(f"  ✅ Cloudflare Tunnel ready at: {target}", flush=True)
+                    return target
+            except Exception as e:
+                continue
 
     return ""
 

@@ -52,6 +52,8 @@ onnx_models/*.npy
 *.msi
 *.zip
 *.tar.gz
+cloudflared
+cloudflared-*
 build/
 **/build/
 
