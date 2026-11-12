@@ -1,7 +1,7 @@
 """
 Asynchronous Video Inference Engine and Transect Processor for ReefVision.
 Coordinates bounded frame ingestion, ego-motion discovery scheduling, SAM-based benthic tracking,
-on-demand BioCLIP/YOLO enrichment, and durable status tracking.
+on-demand BioCLIP/YOLO enrichment, and durable status tracking with SQLite persistence.
 Optical-flow inference and automatic fallbacks to it have been completely removed.
 """
 
@@ -9,9 +9,10 @@ import os
 import time
 import shutil
 import queue
+import tempfile
 import threading
 import traceback
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 from PIL import Image
 import numpy as np
 
@@ -27,11 +28,18 @@ from core.models import (
     release_active_job,
     reserve_memory_for_auxiliary_models,
 )
-from core.video.preprocessor import standardize_video_to_25fps, extract_video_frames_to_disk
+from core.video.preprocessor import (
+    standardize_video_to_25fps,
+    extract_video_frames_to_disk,
+    prepare_bounded_chunk_frames,
+    cleanup_chunk_dir,
+)
 from core.video.keyframe_selector import EgoMotionKeyframeSelector
 from core.video.tracker import BenthicColonyTracker, CoralTrack
 from core.video.sam2_tracker import SAM2BenthicTracker
+from core.video.efficienttam_tracker import EfficientTAMBenthicTracker
 from core.video.export import export_annotated_video, export_transect_csv, export_coco_video
+from core.video.store import VideoJobStore
 from core.segmentation import run_segmentation
 from core.taxonomy import classify_coral_taxonomy, detect_coral_bleaching
 
@@ -45,16 +53,55 @@ class VideoJobState:
     CANCELLING = "cancelling"
     CANCELLED = "cancelled"
     ERROR = "error"
-
-    # Compatibility aliases
-    IDLE = "queued"
     PAUSED = "paused"
+
+    # Compatibility alias
+    IDLE = "queued"
+
+
+class StoreFrameMapAdapter:
+    """Lazy dictionary-like adapter exposing VideoJobStore frames for video export."""
+
+    def __init__(self, store: VideoJobStore, job_id: str):
+        self.store = store
+        self.job_id = job_id
+
+    def get(self, frame_idx: int, default=None):
+        f = self.store.get_frame(self.job_id, frame_idx)
+        if f and "tracks" in f:
+            return f["tracks"]
+        return default if default is not None else []
+
+    def __getitem__(self, frame_idx: int):
+        return self.get(frame_idx, [])
+
+    def __contains__(self, frame_idx: int):
+        return self.store.get_frame(self.job_id, frame_idx) is not None
+
+    def items(self):
+        committed = sorted(list(self.store.get_committed_frame_indices(self.job_id)))
+        batch_size = 64
+        for i in range(0, len(committed), batch_size):
+            chunk = committed[i : i + batch_size]
+            start_f = chunk[0]
+            end_f = chunk[-1]
+            frames_map = self.store.get_frames_range(self.job_id, start_f, end_f)
+            for f_idx in chunk:
+                if f_idx in frames_map:
+                    yield f_idx, frames_map[f_idx].get("tracks", [])
+
+    def keys(self):
+        return self.store.get_committed_frame_indices(self.job_id)
+
+    def values(self):
+        for _, tracks in self.items():
+            yield tracks
 
 
 class VideoProcessor:
     """
     Manages asynchronous underwater video processing pipelines with bounded concurrency,
-    strict SAM-only execution, snapshot configuration, and isolated error reporting.
+    strict SAM-only execution, snapshot configuration, durable SQLite storage, and isolated error reporting.
     """
 
     def __init__(
@@ -70,6 +117,7 @@ class VideoProcessor:
         self.cache_dir = cache_dir or os.path.join(os.path.dirname(__file__), "..", "..", "exports", "video")
         os.makedirs(self.cache_dir, exist_ok=True)
 
+        self.store = VideoJobStore(db_path=os.path.join(self.cache_dir, "video_jobs.sqlite3"))
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
 
@@ -78,6 +126,10 @@ class VideoProcessor:
         self._queue_worker_thread = threading.Thread(target=self._process_queue_loop, daemon=True)
         self._queue_worker_thread.start()
 
+    def close(self):
+        """Cleanly releases storage and worker threads."""
+        self.store.close()
+
     def _process_queue_loop(self):
         """Sequential job coordinator running one active video job at a time."""
         while True:
@@ -85,42 +137,66 @@ class VideoProcessor:
                 job_id, video_path, opts = self._job_queue.get()
                 with self._lock:
                     job = self._jobs.get(job_id)
-                    if not job or job["cancel_requested"]:
+                    if not job or job.get("cancel_requested"):
                         if job:
                             job["state"] = VideoJobState.CANCELLED
+                        self.store.set_job_state(job_id, VideoJobState.CANCELLED)
                         self._job_queue.task_done()
                         continue
                     job["state"] = VideoJobState.PREPARING
 
+                self.store.set_job_state(job_id, VideoJobState.PREPARING)
                 acquire_active_job()
                 try:
                     self._run_job_pipeline(job_id, video_path, opts)
                 finally:
                     release_active_job()
                     self._job_queue.task_done()
-            except Exception as e:
+            except Exception:
                 traceback.print_exc()
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves unified job information from durable SQLite store, augmented with active in-memory state."""
+        db_job = self.store.get_job(job_id)
+        if not db_job:
+            with self._lock:
+                return self._jobs.get(job_id)
+
         with self._lock:
-            return self._jobs.get(job_id)
+            active_info = self._jobs.get(job_id)
+            if active_info:
+                for k in (
+                    "current_stage", "current_model", "current_action", "stage_detail",
+                    "stage_progress_pct", "logs", "cancel_requested", "pause_requested",
+                ):
+                    if k in active_info:
+                        db_job[k] = active_info[k]
+
+        db_job["time_series"] = self.store.get_time_series(job_id)
+        db_job["frame_tracks_map"] = StoreFrameMapAdapter(self.store, job_id)
+        return db_job
 
     def get_active_job(self) -> Optional[Dict[str, Any]]:
         """Retrieves currently running job, or the most recent video job."""
         with self._lock:
-            if not self._jobs:
-                return None
-            for j in reversed(list(self._jobs.values())):
-                if j.get("state") in (
-                    VideoJobState.QUEUED,
-                    VideoJobState.PREPARING,
-                    VideoJobState.PROCESSING,
-                    VideoJobState.FINALIZING,
-                    VideoJobState.PAUSED,
-                ):
-                    return j
-            sorted_jobs = sorted(self._jobs.values(), key=lambda j: j.get("created_at", 0), reverse=True)
-            return sorted_jobs[0] if sorted_jobs else None
+            if self._jobs:
+                for j in reversed(list(self._jobs.values())):
+                    if j.get("state") in (
+                        VideoJobState.QUEUED,
+                        VideoJobState.PREPARING,
+                        VideoJobState.PROCESSING,
+                        VideoJobState.FINALIZING,
+                        VideoJobState.PAUSED,
+                    ):
+                        return self.get_job(j["job_id"])
+                sorted_jobs = sorted(self._jobs.values(), key=lambda j: j.get("created_at", 0), reverse=True)
+                if sorted_jobs:
+                    return self.get_job(sorted_jobs[0]["job_id"])
+
+        db_active = self.store.get_active_job()
+        if db_active:
+            return self.get_job(db_active["job_id"])
+        return None
 
     def probe_video(self, video_path: str) -> Dict[str, Any]:
         """Probes video metadata using OpenCV."""
@@ -233,9 +309,6 @@ class VideoProcessor:
             "failed_frame_range": None,
             "cancel_requested": False,
             "pause_requested": False,
-            "time_series": [],
-            "frame_tracks_map": {},
-            "all_tracks": {},
             "created_at": time.time(),
             "started_at": None,
             "completed_at": None,
@@ -253,6 +326,19 @@ class VideoProcessor:
             "tracker_mode": tracker_profile,
         }
 
+        # Persist to durable SQLite database
+        self.store.create_job(
+            job_id=job_id,
+            video_path=active_video_path,
+            raw_video_path=video_path,
+            filename=probe["filename"],
+            metadata=probe,
+            effective_options=opts,
+            tracker_mode=tracker_profile,
+            state=VideoJobState.QUEUED,
+            logs=job_info["logs"],
+        )
+
         with self._lock:
             self._jobs[job_id] = job_info
 
@@ -260,6 +346,7 @@ class VideoProcessor:
         return job_id
 
     def pause_job(self, job_id: str) -> bool:
+        self.store.request_job_pause(job_id)
         with self._lock:
             job = self._jobs.get(job_id)
             if job and job["state"] in (VideoJobState.PREPARING, VideoJobState.PROCESSING):
@@ -269,6 +356,7 @@ class VideoProcessor:
         return False
 
     def resume_job(self, job_id: str) -> bool:
+        self.store.request_job_resume(job_id)
         with self._lock:
             job = self._jobs.get(job_id)
             if job and job["state"] == VideoJobState.PAUSED:
@@ -278,6 +366,7 @@ class VideoProcessor:
         return False
 
     def cancel_job(self, job_id: str) -> bool:
+        self.store.request_job_cancel(job_id)
         with self._lock:
             job = self._jobs.get(job_id)
             if job:
@@ -290,37 +379,57 @@ class VideoProcessor:
         return False
 
     def get_frame_annotation(self, job_id: str, frame_idx: int) -> Optional[Dict[str, Any]]:
-        """Retrieves tracking results for a specific frame."""
-        job = self.get_job(job_id)
-        if not job:
+        """Retrieves tracking results for a specific frame from durable store."""
+        frame = self.store.get_frame(job_id, frame_idx)
+        if not frame:
             return None
-
-        tracks = job["frame_tracks_map"].get(frame_idx, [])
         return {
             "job_id": job_id,
             "frame_idx": frame_idx,
-            "is_keyframe": frame_idx in job["keyframe_indices"],
-            "tracks": [t.to_dict() if hasattr(t, "to_dict") else t for t in tracks],
-            "active_count": len(tracks),
+            "is_keyframe": frame.get("is_keyframe", False),
+            "tracks": frame.get("tracks", []),
+            "active_count": len(frame.get("tracks", [])),
         }
 
+    def get_frame_annotations_range(
+        self,
+        job_id: str,
+        start_frame: int,
+        end_frame: Optional[int] = None,
+    ) -> Dict[int, Dict[str, Any]]:
+        """Returns range of frame annotations from durable store."""
+        return self.store.get_frames_range(job_id, start_frame, end_frame)
+
+    def get_frames_delta(
+        self,
+        job_id: str,
+        since_seq: int = 0,
+        limit: int = 100,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Delta polling for real-time frontend playback and streaming."""
+        return self.store.get_frames_delta(job_id, since_seq, limit)
+
     def _run_job_pipeline(self, job_id: str, video_path: str, opts: Dict[str, Any]):
-        """Main worker execution loop with strict SAM execution and no optical flow fallback."""
-        job = self.get_job(job_id)
+        """Main worker execution loop with strict SAM execution and durable SQLite persistence."""
+        with self._lock:
+            job = self._jobs.get(job_id)
         if not job:
             return
 
         with self._lock:
             job["state"] = VideoJobState.PREPARING
             job["started_at"] = time.time()
+        self.store.set_job_state(job_id, VideoJobState.PREPARING, started_at=time.time())
 
         frames_dir: Optional[str] = None
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
+            err_msg = f"Failed to open video file: {video_path}"
             with self._lock:
                 job["state"] = VideoJobState.ERROR
-                job["error"] = f"Failed to open video file: {video_path}"
+                job["error"] = err_msg
                 job["failed_stage"] = "video_demux"
+            self.store.set_job_state(job_id, VideoJobState.ERROR, error=err_msg, failed_stage="video_demux")
             return
 
         total_frames = job["metadata"]["total_frames"]
@@ -392,10 +501,12 @@ class VideoProcessor:
                 log_entry=f"Foundation models active ({sam_prov})",
             )
         except Exception as e:
+            err_msg = f"Model loading failed: {str(e)}"
             with self._lock:
                 job["state"] = VideoJobState.ERROR
-                job["error"] = f"Model loading failed: {str(e)}"
+                job["error"] = err_msg
                 job["failed_stage"] = "model_load"
+            self.store.set_job_state(job_id, VideoJobState.ERROR, error=err_msg, failed_stage="model_load")
             cap.release()
             return
 
@@ -429,6 +540,7 @@ class VideoProcessor:
                 cap.release()
                 with self._lock:
                     job["state"] = VideoJobState.CANCELLED
+                self.store.set_job_state(job_id, VideoJobState.CANCELLED)
                 return
 
             ret, f_bgr = scan_cap.read()
@@ -436,7 +548,6 @@ class VideoProcessor:
                 break
             f_rgb = cv2.cvtColor(f_bgr, cv2.COLOR_BGR2RGB)
             is_kf, m_meta = selector.evaluate_frame(f_rgb)
-            # Store only scalar camera motion parameters, not full images
             motion_metas[f_scan] = {
                 "motion_dx": m_meta.get("motion_dx", 0.0),
                 "motion_dy": m_meta.get("motion_dy", 0.0),
@@ -460,12 +571,10 @@ class VideoProcessor:
             log_entry=f"Camera motion scan complete: detected {len(keyframe_indices)} keyframes",
         )
 
-        # 3. Setup SAM 2 Video Predictor (strict SAM execution)
-        storage_dir = os.path.dirname(os.path.abspath(video_path))
-        frames_dir = os.path.join(storage_dir, f"frames_{job_id}")
+        # 3. Setup SAM 2 Video Predictor with bounded temporary frame storage
+        frames_dir = os.path.join(tempfile.gettempdir(), f"reefvision_frames_{job_id}_{os.getpid()}")
 
         sam2_tracker = None
-        # Attempt initialization with single retry on recoverable failure
         init_attempts = 0
         while init_attempts < 2:
             try:
@@ -487,13 +596,21 @@ class VideoProcessor:
                     model="Meta SAM 2.1 Video Predictor",
                     action="Building temporal memory bank",
                 )
-                sam2_tracker = SAM2BenthicTracker(
-                    device=device_pref,
-                    model_id="facebook/sam2.1-hiera-tiny",
-                    model_size=model_size,
-                    precision=precision,
-                    offload_to_cpu=True,
-                )
+                if model_profile == "efficienttam":
+                    sam2_tracker = EfficientTAMBenthicTracker(
+                        device=device_pref,
+                        model_size=model_size,
+                        precision=precision,
+                        offload_to_cpu=True,
+                    )
+                else:
+                    sam2_tracker = SAM2BenthicTracker(
+                        device=device_pref,
+                        model_id="facebook/sam2.1-hiera-tiny",
+                        model_size=model_size,
+                        precision=precision,
+                        offload_to_cpu=True,
+                    )
                 sam2_tracker.init_video(frames_dir)
                 _set_stage(
                     stage="SAM Video Tracker ready",
@@ -502,13 +619,14 @@ class VideoProcessor:
                 break
             except Exception as init_err:
                 if init_attempts >= 2:
+                    err_msg = f"SAM tracker initialization failed: {str(init_err)}"
                     with self._lock:
                         job["state"] = VideoJobState.ERROR
-                        job["error"] = f"SAM tracker initialization failed: {str(init_err)}"
+                        job["error"] = err_msg
                         job["failed_stage"] = "sam_init"
+                    self.store.set_job_state(job_id, VideoJobState.ERROR, error=err_msg, failed_stage="sam_init")
                     cap.release()
-                    if isinstance(frames_dir, str) and os.path.isdir(frames_dir):
-                        shutil.rmtree(frames_dir, ignore_errors=True)
+                    cleanup_chunk_dir(frames_dir)
                     return
                 time.sleep(1.0)
 
@@ -516,12 +634,13 @@ class VideoProcessor:
             job["state"] = VideoJobState.PROCESSING
             job["keyframe_indices"] = list(keyframe_indices)
             job["keyframes_count"] = len(keyframe_indices)
+        self.store.set_job_state(job_id, VideoJobState.PROCESSING)
 
         pipeline_start_t = time.time()
         committed_frames = set()
 
         def _record_frame_state(cur_f: int, current_active_tracks: List[Any]):
-            """Records and commits logical output frame state exactly once."""
+            """Records and commits logical output frame state exactly once into durable store."""
             if cur_f in committed_frames or job["cancel_requested"]:
                 return
             committed_frames.add(cur_f)
@@ -538,9 +657,12 @@ class VideoProcessor:
 
             timestamp_sec = round(cur_f / max(video_fps, 1.0), 2)
             m_meta = motion_metas.get(cur_f, {})
+            cov_pct = round(sum(t.area_pct for t in current_active_tracks), 2)
+
             record = {
                 "frame_index": cur_f,
                 "timestamp_sec": timestamp_sec,
+                "coral_coverage_pct": cov_pct,
                 "active_corals_count": len(current_active_tracks),
                 "cumulative_unique_corals": tracker.total_unique_colonies,
                 "bleached_corals_count": bleached_count,
@@ -555,11 +677,38 @@ class VideoProcessor:
             elapsed = max(0.001, time.time() - pipeline_start_t)
             cur_analysis_fps = round(len(committed_frames) / elapsed, 1)
 
-            # Retrieve pure model propagation FPS from tracker
             tracker_timings = sam2_tracker.get_timings()
             prop_sec = tracker_timings.get("propagation_sec", 0.0)
             tracker_fps = round(len(committed_frames) / max(0.001, prop_sec), 1) if prop_sec > 0 else cur_analysis_fps
 
+            # Persist frame geometry and survey metrics into SQLite
+            track_snapshots = [t.to_dict() if hasattr(t, "to_dict") else t for t in current_active_tracks]
+            self.store.save_frame(
+                job_id=job_id,
+                frame_idx=cur_f,
+                timestamp_sec=timestamp_sec,
+                is_keyframe=record["is_keyframe"],
+                tracks=track_snapshots,
+                metrics=record,
+            )
+
+            # Update job progress in SQLite
+            self.store.update_job_progress(
+                job_id=job_id,
+                current_frame=cur_f + 1,
+                progress_pct=round((len(committed_frames) / max(total_frames, 1)) * 100.0, 1),
+                fps_realtime=cur_analysis_fps,
+                tracker_fps=tracker_fps,
+                analysis_fps=cur_analysis_fps,
+                elapsed_sec=round(elapsed, 2),
+                active_corals_count=len(current_active_tracks),
+                total_unique_corals=tracker.total_unique_colonies,
+                bleaching_prevalence_pct=round(bleach_pct, 1),
+                keyframes_count=len(keyframe_indices),
+                keyframe_indices=keyframe_indices,
+            )
+
+            # Keep in-memory job state bounded (scalars only)
             with self._lock:
                 job["current_frame"] = cur_f + 1
                 job["progress_pct"] = round((len(committed_frames) / max(total_frames, 1)) * 100.0, 1)
@@ -570,9 +719,6 @@ class VideoProcessor:
                 job["tracker_fps"] = tracker_fps
                 job["fps_realtime"] = cur_analysis_fps
                 job["elapsed_sec"] = round(elapsed, 2)
-                # Store lightweight snapshot without dense 2D masks in RAM
-                job["frame_tracks_map"][cur_f] = [t.snapshot() for t in current_active_tracks]
-                job["time_series"].append(record)
 
         try:
             scale_x = proxy_meta.get("scale_x", 1.0)
@@ -583,6 +729,7 @@ class VideoProcessor:
                 if job["cancel_requested"]:
                     with self._lock:
                         job["state"] = VideoJobState.CANCELLED
+                    self.store.set_job_state(job_id, VideoJobState.CANCELLED)
                     break
 
                 while job["pause_requested"] and not job["cancel_requested"]:
@@ -681,6 +828,22 @@ class VideoProcessor:
                                 trk.bleaching = bleach_results[k]
                                 trk.needs_enrichment = False
 
+                                # Save track metadata to SQLite
+                                self.store.save_track(
+                                    job_id=job_id,
+                                    track_id=trk.track_id,
+                                    global_colony_id=trk.track_id,
+                                    first_frame=kf_frame_idx,
+                                    last_frame=kf_frame_idx,
+                                    genus=trk.taxonomy.get("genus", "Coral"),
+                                    growth_form=trk.taxonomy.get("growth_form", "-"),
+                                    taxon_conf=float(trk.taxonomy.get("confidence_pct", 85.0)),
+                                    condition=str(trk.bleaching.get("status", "Healthy")),
+                                    condition_conf=float(trk.bleaching.get("confidence_pct", 90.0)),
+                                    color_rgb=trk.color_rgb,
+                                    metadata={"color_hex": trk.color_hex, "predicted_iou": trk.predicted_iou},
+                                )
+
                                 # Register newly discovered coral into SAM 2 tracker
                                 m_reg = getattr(trk, "mask", None)
                                 if m_reg is None and trk.polygon:
@@ -776,6 +939,7 @@ class VideoProcessor:
             if not job["cancel_requested"]:
                 with self._lock:
                     job["state"] = VideoJobState.FINALIZING
+                self.store.set_job_state(job_id, VideoJobState.FINALIZING)
 
                 _set_stage(
                     stage="Finalizing survey deliverables...",
@@ -788,10 +952,13 @@ class VideoProcessor:
                 coco_json = os.path.join(self.cache_dir, f"{job_id}_coco_video.json")
                 annotated_mp4 = os.path.join(self.cache_dir, f"{job_id}_annotated.mp4")
 
+                time_series_data = self.store.get_time_series(job_id)
+                frame_adapter = StoreFrameMapAdapter(self.store, job_id)
+
                 try:
                     export_transect_csv(
                         output_csv_path=transect_csv,
-                        time_series_records=job["time_series"],
+                        time_series_records=time_series_data,
                     )
                     export_coco_video(
                         output_json_path=coco_json,
@@ -801,12 +968,12 @@ class VideoProcessor:
                         total_frames=total_frames,
                         fps=video_fps,
                         all_tracks=list(tracker._tracks.values()),
-                        frame_tracks_map=job["frame_tracks_map"],
+                        frame_tracks_map=frame_adapter,
                     )
                 except Exception as export_err:
                     _set_stage(log_entry=f"Deliverable export warning: {export_err}")
 
-                # Optional MP4 overlay generation (default True, can be disabled for pure throughput)
+                # Optional MP4 overlay generation
                 if opts.get("export_mp4", True):
                     try:
                         _set_stage(
@@ -816,7 +983,7 @@ class VideoProcessor:
                         export_annotated_video(
                             input_video_path=video_path,
                             output_mp4_path=annotated_mp4,
-                            frame_tracks_map=job["frame_tracks_map"],
+                            frame_tracks_map=frame_adapter,
                         )
                     except Exception as mp4_err:
                         _set_stage(log_entry=f"MP4 export warning: {mp4_err}")
@@ -830,15 +997,25 @@ class VideoProcessor:
                     log_entry=f"Survey finished: {tracker.total_unique_colonies} corals, {job['bleaching_prevalence_pct']}% bleaching across {len(committed_frames)} frames in {elapsed_total}s",
                 )
 
+                export_paths = {
+                    "annotated_mp4": annotated_mp4 if os.path.exists(annotated_mp4) else None,
+                    "transect_csv": transect_csv if os.path.exists(transect_csv) else None,
+                    "coco_json": coco_json if os.path.exists(coco_json) else None,
+                }
+
                 with self._lock:
                     job["state"] = VideoJobState.COMPLETED
                     job["completed_at"] = time.time()
                     job["export_status"] = "ready"
-                    job["export_paths"] = {
-                        "annotated_mp4": annotated_mp4 if os.path.exists(annotated_mp4) else None,
-                        "transect_csv": transect_csv if os.path.exists(transect_csv) else None,
-                        "coco_json": coco_json if os.path.exists(coco_json) else None,
-                    }
+                    job["export_paths"] = export_paths
+
+                self.store.set_job_state(
+                    job_id=job_id,
+                    state=VideoJobState.COMPLETED,
+                    completed_at=time.time(),
+                    export_paths=export_paths,
+                    export_status="ready",
+                )
 
         except Exception as e:
             traceback.print_exc()
@@ -846,6 +1023,13 @@ class VideoProcessor:
             with self._lock:
                 job["state"] = VideoJobState.ERROR
                 job["error"] = err_msg
+            self.store.set_job_state(
+                job_id=job_id,
+                state=VideoJobState.ERROR,
+                error=err_msg,
+                failed_stage=job.get("failed_stage"),
+                failed_frame_range=str(job.get("failed_frame_range")),
+            )
             _set_stage(
                 stage="Pipeline execution halted on error",
                 model="Error",
@@ -856,5 +1040,4 @@ class VideoProcessor:
             cap.release()
             if sam2_tracker:
                 sam2_tracker.close()
-            if isinstance(frames_dir, str) and os.path.isdir(frames_dir):
-                shutil.rmtree(frames_dir, ignore_errors=True)
+            cleanup_chunk_dir(frames_dir)

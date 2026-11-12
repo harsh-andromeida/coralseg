@@ -16,6 +16,137 @@ from core.video.keyframe_selector import EgoMotionKeyframeSelector
 from core.video.tracker import BenthicColonyTracker, CoralTrack, compute_box_iou
 from core.video.sam2_tracker import SAM2BenthicTracker, BaseVideoTracker
 from core.video.export import export_transect_csv, export_coco_video, render_video_overlay
+from core.video.store import VideoJobStore
+from core.video.preprocessor import prepare_bounded_chunk_frames, cleanup_chunk_dir
+
+
+def test_video_job_store():
+    print("Testing VideoJobStore durable SQLite persistence and LRU cache...")
+    temp_dir = tempfile.mkdtemp()
+    db_path = os.path.join(temp_dir, "test_jobs.sqlite3")
+    store = VideoJobStore(db_path=db_path, max_cache_frames=4)
+
+    # 1. Create job
+    meta = {"width": 1920, "height": 1080, "fps": 25.0, "total_frames": 100}
+    opts = {"model_size": 512, "model_profile": "sam2"}
+    job = store.create_job(
+        job_id="job_001",
+        video_path="/path/test.mp4",
+        filename="test.mp4",
+        metadata=meta,
+        effective_options=opts,
+    )
+    assert job["job_id"] == "job_001"
+    assert job["state"] == "queued"
+    assert job["metadata"]["total_frames"] == 100
+
+    # 2. Register chunks & update status
+    store.register_chunks("job_001", [(0, 0, 50), (1, 50, 100)])
+    chunks = store.get_chunks("job_001")
+    assert len(chunks) == 2
+    assert chunks[0]["status"] == "pending"
+
+    store.update_chunk_status("job_001", 0, "completed", worker_id="w1")
+    completed = store.get_completed_chunk_indices("job_001")
+    assert 0 in completed
+    assert 1 not in completed
+
+    # 3. Save tracks
+    store.save_track(
+        job_id="job_001",
+        track_id=1,
+        global_colony_id=1,
+        first_frame=0,
+        last_frame=25,
+        genus="Acropora",
+        condition="Healthy",
+    )
+    tracks = store.get_tracks("job_001")
+    assert 1 in tracks
+    assert tracks[1]["genus"] == "Acropora"
+
+    # 4. Save frame batches & LRU caching
+    frames_batch = []
+    for f in range(10):
+        frames_batch.append({
+            "frame_idx": f,
+            "timestamp_sec": round(f / 25.0, 2),
+            "is_keyframe": f == 0,
+            "tracks": [{"track_id": 1, "bbox": [10, 10, 20, 20], "area_px": 400}],
+            "metrics": {
+                "coral_coverage_pct": 5.5,
+                "bleaching_prevalence_pct": 0.0,
+                "active_corals_count": 1,
+            },
+        })
+    store.save_frames_batch("job_001", frames_batch)
+
+    # Frame retrieval
+    f0 = store.get_frame("job_001", 0)
+    assert f0 is not None
+    assert f0["is_keyframe"] is True
+    assert len(f0["tracks"]) == 1
+
+    # Range query
+    frange = store.get_frames_range("job_001", 2, 5)
+    assert len(frange) == 4
+    assert 2 in frange and 5 in frange
+
+    # Delta query
+    delta_frames, max_seq = store.get_frames_delta("job_001", since_seq=0, limit=5)
+    assert len(delta_frames) == 5
+    delta_frames2, max_seq2 = store.get_frames_delta("job_001", since_seq=max_seq, limit=10)
+    assert len(delta_frames2) == 5
+    assert max_seq2 > max_seq
+
+    # Fast time-series query
+    ts = store.get_time_series("job_001")
+    assert len(ts) == 10
+    assert ts[0]["coral_coverage_pct"] == 5.5
+
+    store.close()
+    cleanup_chunk_dir(temp_dir)
+    print("  VideoJobStore verified successfully.")
+
+
+def test_chunk_scheduler():
+    print("Testing VideoChunkScheduler planning and reconciliation...")
+    from core.video.scheduler import calculate_chunk_plan, reconcile_chunk_identities, admit_workers_for_device
+
+    # 1. Chunk planning for 202 frames with chunk_size=128, overlap=16
+    plan = calculate_chunk_plan(202, chunk_size=128, overlap_frames=16)
+    assert len(plan) == 2
+    c0, c1 = plan[0], plan[1]
+    assert c0.start_frame == 0 and c0.end_frame == 128
+    assert c0.commit_start == 0 and c0.commit_end == 128
+    assert c1.start_frame == 112 and c1.end_frame == 202
+    assert c1.reconcile_start == 112 and c1.reconcile_end == 128
+    assert c1.commit_start == 128 and c1.commit_end == 202
+
+    # Verify every frame from 0 to 201 is committed exactly once
+    committed_ranges = set()
+    for c in plan:
+        for f in range(c.commit_start, c.commit_end):
+            assert f not in committed_ranges, f"Frame {f} committed multiple times"
+            committed_ranges.add(f)
+    assert len(committed_ranges) == 202
+
+    # 2. Identity reconciliation across overlap
+    ex_overlap = {
+        112: [{"track_id": 5, "global_colony_id": 5, "bbox": [100, 100, 50, 50]}],
+        113: [{"track_id": 5, "global_colony_id": 5, "bbox": [102, 100, 50, 50]}],
+    }
+    inc_overlap = {
+        112: [{"track_id": 1, "bbox": [101, 100, 50, 50]}],
+        113: [{"track_id": 1, "bbox": [103, 100, 50, 50]}],
+    }
+    recon = reconcile_chunk_identities(ex_overlap, inc_overlap, iou_threshold=0.50)
+    assert recon.get(1) == 5, f"Expected incoming track 1 to reconcile to global 5, got {recon}"
+
+    # 3. Worker admission
+    workers = admit_workers_for_device("auto", 4)
+    assert workers >= 1
+    print("  VideoChunkScheduler verified successfully.")
 
 
 def test_sam2_tracker_adapter():
@@ -290,7 +421,14 @@ def test_video_api_endpoints():
         assert "frames" in bulk_data
         print(f"  GET /api/video/frames verified: {bulk_data['total_frames_available']} frames in bulk.")
 
-        # 9. Export CSV
+        # 9. Delta polling endpoint
+        delta_resp = client.get(f"/api/video/delta/{job_id}?since_seq=0&limit=5")
+        assert delta_resp.status_code == 200
+        delta_data = delta_resp.json()
+        assert "frames" in delta_data
+        print(f"  GET /api/video/delta verified: {len(delta_data['frames'])} frames polled.")
+
+        # 10. Export CSV
         exp_resp = client.get(f"/api/video/export/{job_id}?format=csv")
         assert exp_resp.status_code == 200
         assert len(exp_resp.content) > 0
@@ -365,6 +503,8 @@ def test_real_video_sample_pipeline():
 
 
 if __name__ == "__main__":
+    test_video_job_store()
+    test_chunk_scheduler()
     test_keyframe_selector()
     test_benthic_colony_tracker_lifecycle()
     test_sam2_tracker_adapter()

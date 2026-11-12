@@ -90,25 +90,22 @@ class EgoMotionKeyframeSelector:
                 "keyframe_index": self._keyframe_count,
             }
 
-        # Convert to grayscale for motion estimation
-        curr_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-
-        # Downscale proxy for optical flow (max_dim=480) to accelerate feature tracking 5-10x
+        # Downscale directly to small proxy (max_dim=480) for lightweight motion estimation
+        # Discards full-resolution grayscale copies to bound host RAM
         proxy_scale = 1.0
         if max(h, w) > 480:
             proxy_scale = 480.0 / float(max(h, w))
             proxy_w = max(16, int(round(w * proxy_scale)))
             proxy_h = max(16, int(round(h * proxy_scale)))
-            curr_motion_gray = cv2.resize(curr_gray, (proxy_w, proxy_h), interpolation=cv2.INTER_AREA)
+            curr_motion_rgb = cv2.resize(frame_rgb, (proxy_w, proxy_h), interpolation=cv2.INTER_AREA)
+            curr_motion_gray = cv2.cvtColor(curr_motion_rgb, cv2.COLOR_RGB2GRAY)
         else:
-            curr_motion_gray = curr_gray
+            curr_motion_gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
 
         # 1. First frame is always a Keyframe
-        if self._keyframe_gray is None or self._total_frames == 1 or force_keyframe:
-            self._keyframe_gray = curr_gray.copy()
-            self._prev_gray = curr_gray.copy()
+        if self._prev_motion_gray is None or self._total_frames == 1 or force_keyframe:
             self._prev_motion_gray = curr_motion_gray.copy()
-            self._prev_hist = self._compute_hist(curr_gray)
+            self._prev_hist = self._compute_hist(curr_motion_gray)
             self._cumulative_H = np.eye(3, dtype=np.float32)
             self._frames_since_keyframe = 0
             self._keyframe_count += 1
@@ -126,8 +123,8 @@ class EgoMotionKeyframeSelector:
 
         self._frames_since_keyframe += 1
 
-        # 2. Check scene cut / turbidity burst via histogram correlation
-        curr_hist = self._compute_hist(curr_gray)
+        # 2. Check scene cut / turbidity burst via histogram correlation on proxy resolution
+        curr_hist = self._compute_hist(curr_motion_gray)
         is_scene_cut = False
         if self._prev_hist is not None:
             hist_sim = cv2.compareHist(self._prev_hist, curr_hist, cv2.HISTCMP_CORREL)
@@ -177,7 +174,6 @@ class EgoMotionKeyframeSelector:
                     dx = float(affine[0, 2])
                     dy = float(affine[1, 2])
 
-        self._prev_gray = curr_gray.copy()
         self._prev_motion_gray = curr_motion_gray.copy()
 
         # Accumulate homography relative to current keyframe anchor
@@ -214,7 +210,6 @@ class EgoMotionKeyframeSelector:
 
         if is_keyframe:
             # Reset anchor to current frame
-            self._keyframe_gray = curr_gray.copy()
             self._cumulative_H = np.eye(3, dtype=np.float32)
             self._frames_since_keyframe = 0
             self._keyframe_count += 1

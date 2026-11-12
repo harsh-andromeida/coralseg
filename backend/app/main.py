@@ -1731,27 +1731,46 @@ def get_video_all_frame_annotations(
     if not job:
         raise HTTPException(status_code=404, detail="Video job not found.")
 
-    frame_map = job.get("frame_tracks_map", {})
+    frames_map = _VIDEO_PROCESSOR.get_frame_annotations_range(job_id, start_frame, end_frame)
     keyframes = set(job.get("keyframe_indices", []))
 
     result = {}
-    if frame_map:
-        max_frame = max(frame_map.keys())
-        last_f = min(end_frame, max_frame) if end_frame is not None else max_frame
-
-        for f_idx in range(start_frame, last_f + 1):
-            if f_idx in frame_map:
-                tracks = frame_map[f_idx]
-                result[f_idx] = {
-                    "frame_idx": f_idx,
-                    "is_keyframe": f_idx in keyframes,
-                    "tracks": [t.to_dict() for t in tracks],
-                }
+    for f_idx, f_data in frames_map.items():
+        raw_tracks = f_data.get("tracks", [])
+        result[f_idx] = {
+            "frame_idx": f_idx,
+            "is_keyframe": f_idx in keyframes or bool(f_data.get("is_keyframe", False)),
+            "tracks": [t.to_dict() if hasattr(t, "to_dict") else t for t in raw_tracks],
+        }
 
     return {
         "job_id": job_id,
         "total_frames_available": len(result),
         "frames": result,
+    }
+
+
+@app.get("/api/video/delta/{job_id}")
+def get_video_frames_delta(
+    job_id: str,
+    since_seq: int = 0,
+    limit: int = 100,
+):
+    """
+    Returns frame annotations committed since sequence `since_seq`.
+    Provides low-overhead streaming updates for real-time frontend playback.
+    """
+    job = _VIDEO_PROCESSOR.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Video job not found.")
+
+    frames, max_seq = _VIDEO_PROCESSOR.get_frames_delta(job_id, since_seq, limit)
+    return {
+        "job_id": job_id,
+        "since_seq": since_seq,
+        "max_seq": max_seq,
+        "count": len(frames),
+        "frames": frames,
     }
 
 
@@ -1830,7 +1849,8 @@ def export_video_result(job_id: str, format: str = "mp4"):
                     all_tracks_dict = {}
                     for f_tracks in job["frame_tracks_map"].values():
                         for tr in f_tracks:
-                            all_tracks_dict[tr.track_id] = tr
+                            tid = getattr(tr, "track_id", None) or (tr.get("track_id") if isinstance(tr, dict) else 0)
+                            all_tracks_dict[tid] = tr
 
                     export_coco_video(
                         output_json_path=candidate,

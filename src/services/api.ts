@@ -553,6 +553,11 @@ export async function processVideo(req: {
   points_per_side?: number;
   iou_match_threshold?: number;
   tracker_mode?: string;
+  model_profile?: "sam2" | "efficienttam";
+  model_size?: 512 | 1024;
+  worker_count?: number;
+  precision?: string | null;
+  export_mp4?: boolean;
 }): Promise<{
   status: string;
   job_id: string;
@@ -628,6 +633,28 @@ export async function getVideoFramesBulk(
   const query = endFrame !== undefined ? `?start_frame=${startFrame}&end_frame=${endFrame}` : `?start_frame=${startFrame}`;
   const res = await fetch(`${API_BASE}/video/frames/${jobId}${query}`);
   if (!res.ok) throw new Error("Failed to fetch bulk frame annotations");
+  return res.json();
+}
+
+export async function getVideoFramesDelta(
+  jobId: string,
+  sinceSeq = 0,
+  limit = 100
+): Promise<{
+  job_id: string;
+  since_seq: number;
+  max_seq: number;
+  count: number;
+  frames: Array<{
+    seq: number;
+    frame_idx: number;
+    timestamp_sec: number;
+    is_keyframe: boolean;
+    tracks: import("../types").VideoTrackItem[];
+  }>;
+}> {
+  const res = await fetch(`${API_BASE}/video/delta/${jobId}?since_seq=${sinceSeq}&limit=${limit}`);
+  if (!res.ok) throw new Error("Failed to fetch delta frame annotations");
   return res.json();
 }
 

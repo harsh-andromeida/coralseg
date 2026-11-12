@@ -83,4 +83,8 @@ backend/exports/video/
 *.avi
 *.mkv
 *.webm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+exports/benchmark_cache/
 !demo_images/*.mp4

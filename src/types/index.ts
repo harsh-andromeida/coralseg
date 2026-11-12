@@ -1,6 +1,11 @@
 export interface DeviceInfo {
   device: string;
   device_type: "gpu" | "cpu";
+  device_name?: string;
+  native_precision?: string;
+  compute_capability?: string | null;
+  mps_available?: boolean;
+  coreml_available?: boolean;
   mode?: "gpu" | "multithread_cpu" | "cpu";
   mode_label?: string;
   cuda_available: boolean;
@@ -250,11 +255,14 @@ export interface TransectMetricPoint {
 export interface VideoJobStatus {
   job_id: string;
   filename: string;
-  state: "idle" | "processing" | "paused" | "completed" | "cancelled" | "error";
+  state: "queued" | "preparing" | "processing" | "finalizing" | "completed" | "cancelling" | "cancelled" | "error" | "paused";
   current_frame: number;
   total_frames: number;
   progress_pct: number;
   fps_realtime: number;
+  tracker_fps?: number;
+  analysis_fps?: number;
+  elapsed_sec?: number;
   active_corals_count: number;
   total_unique_corals: number;
   bleaching_prevalence_pct: number;
@@ -267,12 +275,17 @@ export interface VideoJobStatus {
     transect_csv?: string | null;
     coco_json?: string | null;
   };
+  export_status?: "pending" | "ready" | "failed";
   current_stage?: string;
   current_model?: string;
   current_action?: string;
   stage_detail?: string;
+  stage_progress_pct?: number;
   logs?: string[];
   tracker_mode?: string;
+  model_profile?: "sam2" | "efficienttam";
+  model_size?: 512 | 1024;
+  worker_count?: number;
 }
 
 export interface VideoProcessParams {
@@ -284,7 +297,11 @@ export interface VideoProcessParams {
   iou_match_threshold?: number;
   pred_iou_thresh?: number;
   stability_thresh?: number;
-  tracker_mode?: string;
+  model_profile?: "sam2" | "efficienttam";
+  model_size?: 512 | 1024;
+  worker_count?: number;
+  precision?: string | null;
+  export_mp4?: boolean;
 }
 
 export interface UploadedVideoItem {

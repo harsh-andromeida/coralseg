@@ -105,10 +105,16 @@ def classify_coral_taxonomy(
         norm = (arr - clip_mean) / clip_std
         batch_tensors.append(norm.transpose(2, 0, 1))
 
-    batch_np = np.stack(batch_tensors, axis=0).astype(np.float32)
-
-    with _BIOCLIP_LOCK:
-        image_features = session.run(None, {"image": batch_np})[0]  # (B, 512)
+    # Batch inference up to 8 crops per sub-batch to bound peak memory
+    batch_size = 8
+    all_features = []
+    for chunk_start in range(0, len(batch_tensors), batch_size):
+        chunk_tensors = batch_tensors[chunk_start : chunk_start + batch_size]
+        sub_batch = np.stack(chunk_tensors, axis=0).astype(np.float32)
+        with _BIOCLIP_LOCK:
+            feats = session.run(None, {"image": sub_batch})[0]
+        all_features.append(feats)
+    image_features = np.concatenate(all_features, axis=0) if len(all_features) > 1 else all_features[0]
 
     # Normalization
     norms = np.linalg.norm(image_features, axis=-1, keepdims=True)
@@ -178,11 +184,17 @@ def detect_coral_bleaching(
             arr = (np.array(resized, dtype=np.float32) / 255.0).transpose(2, 0, 1)
         batch_tensors.append(arr)
 
-    batch_np = np.stack(batch_tensors, axis=0).astype(np.float32)
-
+    # Batch inference up to 8 crops per sub-batch to bound peak memory
+    batch_size = 8
+    all_logits = []
+    inp_name = bleaching_model.get_inputs()[0].name
     with _BLEACHING_LOCK:
-        inp_name = bleaching_model.get_inputs()[0].name
-        logits = bleaching_model.run(None, {inp_name: batch_np})[0]  # (B, 2)
+        for chunk_start in range(0, len(batch_tensors), batch_size):
+            chunk_tensors = batch_tensors[chunk_start : chunk_start + batch_size]
+            sub_batch = np.stack(chunk_tensors, axis=0).astype(np.float32)
+            sub_logits = bleaching_model.run(None, {inp_name: sub_batch})[0]
+            all_logits.append(sub_logits)
+    logits = np.concatenate(all_logits, axis=0) if len(all_logits) > 1 else all_logits[0]
 
     exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
     probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)

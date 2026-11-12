@@ -47,12 +47,13 @@ def render_video_overlay(
     if draw_polygons:
         overlay = out.copy()
         for track in active_tracks:
-            if not track.polygon or len(track.polygon) < 3:
+            poly = getattr(track, "polygon", None) or (track.get("polygon") if isinstance(track, dict) else None)
+            if not poly or len(poly) < 3:
                 continue
 
-            pts = np.array(track.polygon, dtype=np.int32).reshape((-1, 1, 2))
-            # Track color is RGB; convert to BGR for OpenCV
-            color_bgr = (int(track.color_rgb[2]), int(track.color_rgb[1]), int(track.color_rgb[0]))
+            pts = np.array(poly, dtype=np.int32).reshape((-1, 1, 2))
+            color_rgb = getattr(track, "color_rgb", None) or (track.get("color_rgb") if isinstance(track, dict) else None) or [46, 204, 113]
+            color_bgr = (int(color_rgb[2]), int(color_rgb[1]), int(color_rgb[0]))
 
             cv2.fillPoly(overlay, [pts], color_bgr)
             cv2.polylines(out, [pts], isClosed=True, color=color_bgr, thickness=2, lineType=cv2.LINE_AA)
@@ -61,17 +62,23 @@ def render_video_overlay(
 
     # 2. Render Bounding Boxes & Labels
     for track in active_tracks:
-        x, y, bw, bh = track.bbox
-        color_bgr = (int(track.color_rgb[2]), int(track.color_rgb[1]), int(track.color_rgb[0]))
+        bbox = getattr(track, "bbox", None) or (track.get("bbox") if isinstance(track, dict) else None) or [0, 0, 0, 0]
+        x, y, bw, bh = bbox
+        color_rgb = getattr(track, "color_rgb", None) or (track.get("color_rgb") if isinstance(track, dict) else None) or [46, 204, 113]
+        color_bgr = (int(color_rgb[2]), int(color_rgb[1]), int(color_rgb[0]))
 
         if draw_boxes:
             cv2.rectangle(out, (x, y), (x + bw, y + bh), color_bgr, thickness=2, lineType=cv2.LINE_AA)
 
         if draw_labels:
-            genus = track.taxonomy.get("genus", "Coral")
-            is_bleached = track.bleaching.get("is_bleached", False)
+            taxonomy = getattr(track, "taxonomy", None) or (track.get("taxonomy") if isinstance(track, dict) else None) or {}
+            bleaching = getattr(track, "bleaching", None) or (track.get("bleaching") if isinstance(track, dict) else None) or {}
+            track_id = getattr(track, "track_id", None) or (track.get("track_id") if isinstance(track, dict) else None) or 0
+
+            genus = taxonomy.get("genus", "Coral")
+            is_bleached = bleaching.get("is_bleached", False)
             cond_str = "Bleached" if is_bleached else "Healthy"
-            label = f"#{track.track_id} {genus} [{cond_str}]"
+            label = f"#{track_id} {genus} [{cond_str}]"
 
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.45
@@ -172,7 +179,11 @@ def export_annotated_video(
                 break
 
             tracks = frame_tracks_map.get(frame_idx, [])
-            bleached_count = sum(1 for t in tracks if t.bleaching.get("is_bleached", False))
+            bleached_count = 0
+            for t in tracks:
+                b_dict = getattr(t, "bleaching", None) or (t.get("bleaching") if isinstance(t, dict) else {}) or {}
+                if b_dict.get("is_bleached", False):
+                    bleached_count += 1
             bleach_pct = (bleached_count / max(len(tracks), 1)) * 100.0
 
             rendered = render_video_overlay(
@@ -292,19 +303,26 @@ def export_coco_video(
     ann_id = 1
     for frame_idx, tracks in frame_tracks_map.items():
         for t in tracks:
+            tid = getattr(t, "track_id", None) or (t.get("track_id") if isinstance(t, dict) else 0)
+            bbox = getattr(t, "bbox", None) or (t.get("bbox") if isinstance(t, dict) else [0, 0, 0, 0])
+            area_px = getattr(t, "area_px", None) or (t.get("area_px") if isinstance(t, dict) else 0)
+            pred_iou = getattr(t, "predicted_iou", None) if hasattr(t, "predicted_iou") else (t.get("predicted_iou") if isinstance(t, dict) else None)
+            tax = getattr(t, "taxonomy", None) or (t.get("taxonomy") if isinstance(t, dict) else {}) or {}
+            bl = getattr(t, "bleaching", None) or (t.get("bleaching") if isinstance(t, dict) else {}) or {}
+
             annotations.append({
                 "id": ann_id,
                 "video_id": 1,
                 "frame_id": frame_idx + 1,
-                "track_id": t.track_id,
+                "track_id": tid,
                 "category_id": 1,
-                "bbox": t.bbox,
-                "area": t.area_px,
-                "predicted_iou": t.predicted_iou,
-                "taxonomy": t.taxonomy.get("genus", "Coral"),
-                "growth_form": t.taxonomy.get("growth_form", "-"),
-                "condition": t.bleaching.get("status", "Healthy"),
-                "is_bleached": t.bleaching.get("is_bleached", False),
+                "bbox": bbox,
+                "area": area_px,
+                "predicted_iou": pred_iou,
+                "taxonomy": tax.get("genus", "Coral"),
+                "growth_form": tax.get("growth_form", "-"),
+                "condition": bl.get("status", "Healthy"),
+                "is_bleached": bl.get("is_bleached", False),
             })
             ann_id += 1
 

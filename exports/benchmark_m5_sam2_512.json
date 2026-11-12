@@ -1,0 +1,52 @@
+{
+  "timestamp": "2026-11-12 20:17:33",
+  "hardware": {
+    "torch_available": true,
+    "cuda_available": false,
+    "mps_available": true,
+    "gpu_name": "Apple Silicon (arm)",
+    "compute_capability": null,
+    "native_precision": {
+      "cuda_bf16_native": false,
+      "cuda_fp16": false,
+      "mps_fp32": true,
+      "mps_fp16_profile": true,
+      "recommended_sam_precision": "float32"
+    }
+  },
+  "configuration": {
+    "model_profile": "sam2",
+    "model_size": 512,
+    "worker_count": 1,
+    "device": "auto",
+    "precision": null,
+    "video_filename": "sample_reef_transect_25fps.mp4",
+    "export_mp4": false
+  },
+  "metrics": {
+    "mean_source_fps": 0.96,
+    "std_source_fps": 0.0,
+    "mean_tracker_fps": 2.5,
+    "mean_duration_sec": 211.01,
+    "peak_rss_mib": 5482.67
+  },
+  "trials": [
+    {
+      "trial_index": 1,
+      "wall_duration_sec": 211.013,
+      "total_frames": 202,
+      "source_fps": 0.96,
+      "tracker_fps": 2.5,
+      "keyframes_count": 5,
+      "unique_corals": 17,
+      "peak_rss_mib": 5482.67,
+      "accelerator_allocated_mib": 0.0,
+      "accelerator_peak_mib": 0.0,
+      "export_paths": {
+        "annotated_mp4": null,
+        "transect_csv": "/Users/harsh/Code/auv/CoralSeg/backend/../exports/benchmark_cache/vjob_1794494642157_transect.csv",
+        "coco_json": "/Users/harsh/Code/auv/CoralSeg/backend/../exports/benchmark_cache/vjob_1794494642157_coco_video.json"
+      }
+    }
+  ]
+}

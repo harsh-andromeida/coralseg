@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Activity,
+  Zap,
 } from "lucide-react";
 import { TopBar } from "../components/TopBar";
 import { Sidebar } from "../components/Sidebar";
@@ -29,7 +30,7 @@ import {
 import {
   getVideoStatus,
   getVideoFrameAnnotations,
-  getVideoFramesBulk,
+  getVideoFramesDelta,
   getDevice,
   setDevicePreference,
   pauseVideoJob,
@@ -52,7 +53,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const frameCacheRef = useRef<Map<number, VideoTrackItem[]>>(new Map());
   const activeFrameRef = useRef<number>(0);
-  const lastBulkFetchedFrameRef = useRef<number>(-1);
+  const lastCommittedSeqRef = useRef<number>(0);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState<boolean>(false);
 
   const [jobId] = useState<string>(initialJobId || videoItem.job_id || "");
@@ -113,16 +114,18 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
-  // Load initial batch of frame annotations on mount
+  // Load initial batch of frame annotations on mount using delta query
   useEffect(() => {
     if (!jobId) return;
-    getVideoFramesBulk(jobId, 0)
-      .then((bulkRes) => {
-        if (bulkRes && bulkRes.frames) {
-          Object.entries(bulkRes.frames).forEach(([fStr, item]) => {
-            frameCacheRef.current.set(Number(fStr), item.tracks);
+    getVideoFramesDelta(jobId, 0, 64)
+      .then((deltaRes) => {
+        if (deltaRes && deltaRes.frames) {
+          deltaRes.frames.forEach((item) => {
+            frameCacheRef.current.set(item.frame_idx, item.tracks);
           });
-          lastBulkFetchedFrameRef.current = bulkRes.total_frames_available;
+          if (deltaRes.max_seq > lastCommittedSeqRef.current) {
+            lastCommittedSeqRef.current = deltaRes.max_seq;
+          }
           if (frameCacheRef.current.has(currentFrameIdx)) {
             setCurrentTracks(frameCacheRef.current.get(currentFrameIdx)!);
           }
@@ -142,24 +145,22 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
         if (isMounted) {
           setJobStatus(s);
 
-          // Fetch newly available processed frames in bulk for smooth playback
-          const currentProcessed = s.current_frame || 0;
-          if (currentProcessed > lastBulkFetchedFrameRef.current) {
-            const startF = Math.max(0, lastBulkFetchedFrameRef.current);
-            lastBulkFetchedFrameRef.current = currentProcessed;
-            getVideoFramesBulk(jobId, startF, currentProcessed + 5)
-              .then((bulkRes) => {
-                if (bulkRes && bulkRes.frames) {
-                  Object.entries(bulkRes.frames).forEach(([fStr, item]) => {
-                    frameCacheRef.current.set(Number(fStr), item.tracks);
-                  });
-                  if (frameCacheRef.current.has(activeFrameRef.current)) {
-                    setCurrentTracks(frameCacheRef.current.get(activeFrameRef.current)!);
-                  }
+          // Fetch newly available processed frames via bounded delta query (up to 64 frames per query)
+          getVideoFramesDelta(jobId, lastCommittedSeqRef.current, 64)
+            .then((deltaRes) => {
+              if (deltaRes && deltaRes.frames && deltaRes.frames.length > 0) {
+                deltaRes.frames.forEach((item) => {
+                  frameCacheRef.current.set(item.frame_idx, item.tracks);
+                });
+                if (deltaRes.max_seq > lastCommittedSeqRef.current) {
+                  lastCommittedSeqRef.current = deltaRes.max_seq;
                 }
-              })
-              .catch(() => {});
-          }
+                if (frameCacheRef.current.has(activeFrameRef.current)) {
+                  setCurrentTracks(frameCacheRef.current.get(activeFrameRef.current)!);
+                }
+              }
+            })
+            .catch(() => {});
 
           // ONLY auto-advance player to follow live stream if user is NOT playing and is following live
           if (s.state === "processing" && isFollowingLive && !isPlaying && s.current_frame > 0) {
@@ -515,21 +516,52 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                         Frame {jobStatus.current_frame} / {totalFrames} ({jobStatus.progress_pct}%)
                       </span>
 
-                      {jobStatus.fps_realtime > 0 && (
-                        <span className="text-[10px] font-mono font-bold text-cyan-800 bg-cyan-100/70 border border-cyan-200/60 px-1.5 py-0.5 rounded">
-                          {jobStatus.fps_realtime} FPS
+                      {((jobStatus.analysis_fps ?? jobStatus.fps_realtime) > 0) && (
+                        <span className="text-[10px] font-mono font-bold text-cyan-800 bg-cyan-100/70 border border-cyan-200/60 px-1.5 py-0.5 rounded" title="Total pipeline source throughput">
+                          {(jobStatus.analysis_fps ?? jobStatus.fps_realtime).toFixed(1)} Source FPS
                         </span>
                       )}
+
+                      {jobStatus.tracker_fps && jobStatus.tracker_fps > 0 ? (
+                        <span className="text-[10px] font-mono font-bold text-teal-800 bg-teal-100/70 border border-teal-200/60 px-1.5 py-0.5 rounded" title="Pure SAM tracker inference throughput">
+                          {jobStatus.tracker_fps.toFixed(1)} Tracker FPS
+                        </span>
+                      ) : null}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
+                    {/* Device & Precision Pill */}
+                    {deviceInfo && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 text-white text-[11px] font-semibold shadow-xs" title={`Accelerator: ${deviceInfo.device_name || deviceInfo.gpu_name || deviceInfo.device}`}>
+                        <Zap size={12} className="text-cyan-400" />
+                        <span className="text-slate-300 font-mono uppercase">{deviceInfo.device}</span>
+                        {deviceInfo.native_precision && (
+                          <span className="text-cyan-300 font-mono text-[10px]">
+                            {deviceInfo.native_precision.toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {/* Active Model Pill */}
                     {jobStatus.current_model && (
                       <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 text-white text-[11px] font-semibold shadow-xs">
                         <Cpu size={12} className="text-cyan-400" />
-                        <span className="text-slate-300">Model:</span>
                         <span className="text-cyan-300 font-bold">{jobStatus.current_model}</span>
+                      </div>
+                    )}
+
+                    {/* Export Status Pill */}
+                    {jobStatus.export_status && (
+                      <div className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border ${
+                        jobStatus.export_status === "ready"
+                          ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                          : jobStatus.export_status === "pending"
+                          ? "bg-amber-50 border-amber-300 text-amber-800 animate-pulse"
+                          : "bg-rose-50 border-rose-300 text-rose-800"
+                      }`} title="Background export state">
+                        <span>EXPORT: {jobStatus.export_status.toUpperCase()}</span>
                       </div>
                     )}
 
@@ -725,6 +757,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
               videoName={videoItem.video_name}
               hasResults={!isJobProcessing || segments.length > 0}
               exportPaths={jobStatus?.export_paths as any}
+              exportStatus={jobStatus?.export_status}
               isProcessing={isProcessingState}
               rawJsonData={{
                 job_id: jobId,

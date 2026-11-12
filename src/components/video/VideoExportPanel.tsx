@@ -22,6 +22,7 @@ interface VideoExportPanelProps {
   hasResults: boolean;
   rawJsonData: any;
   exportPaths?: Record<string, string | null>;
+  exportStatus?: "pending" | "ready" | "failed";
   isProcessing?: boolean;
 }
 
@@ -31,6 +32,7 @@ export const VideoExportPanel: React.FC<VideoExportPanelProps> = ({
   hasResults,
   rawJsonData,
   exportPaths = {},
+  exportStatus,
   isProcessing = false,
 }) => {
   const [downloadingFormat, setDownloadingFormat] = useState<string | null>(null);
@@ -88,6 +90,25 @@ export const VideoExportPanel: React.FC<VideoExportPanelProps> = ({
       </CardHeader>
 
       <CardContent className="p-6 flex flex-col gap-4">
+        {exportStatus === "pending" && (
+          <div className="p-2.5 rounded-lg flex items-center gap-2 text-xs font-medium bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20">
+            <Loader2 className="size-3.5 animate-spin shrink-0" />
+            <span>Background export generation in progress (annotated MP4, CSV, COCO JSON)...</span>
+          </div>
+        )}
+        {exportStatus === "ready" && (
+          <div className="p-2.5 rounded-lg flex items-center gap-2 text-xs font-medium bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
+            <CheckCircle2 className="size-3.5 shrink-0" />
+            <span>Transect exports ready for download.</span>
+          </div>
+        )}
+        {exportStatus === "failed" && (
+          <div className="p-2.5 rounded-lg flex items-center gap-2 text-xs font-medium bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20">
+            <AlertCircle className="size-3.5 shrink-0" />
+            <span>Automatic export generation encountered an issue; on-demand download will generate on request.</span>
+          </div>
+        )}
+
         {feedback && (
           <div
             className={`p-3 rounded-lg flex items-center gap-2 text-xs font-medium ${

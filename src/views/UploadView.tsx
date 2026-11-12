@@ -143,7 +143,9 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [videoDragActive, setVideoDragActive] = useState<boolean>(false);
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
   const [isStartingVideoJob, setIsStartingVideoJob] = useState<boolean>(false);
-  const [videoTrackerMode, setVideoTrackerMode] = useState<"sam2" | "optical_flow">("optical_flow");
+  const [modelProfile, setModelProfile] = useState<"sam2" | "efficienttam">("sam2");
+  const [modelSize, setModelSize] = useState<512 | 1024>(512);
+  const [workerCount, setWorkerCount] = useState<number>(1);
   const [videoError, setVideoError] = useState<string | null>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
 
@@ -681,7 +683,9 @@ export const UploadView: React.FC<UploadViewProps> = ({
         min_stride: cfg.min_stride,
         max_stride: cfg.max_stride,
         points_per_side: cfg.points_per_side,
-        tracker_mode: videoTrackerMode,
+        model_profile: modelProfile,
+        model_size: modelSize,
+        worker_count: workerCount,
       });
 
       onSetActiveVideo?.(uploadedVideo);
@@ -1994,22 +1998,45 @@ export const UploadView: React.FC<UploadViewProps> = ({
                           </div>
                         </div>
 
-                        {/* Tracker Engine Selector */}
+                        {/* SAM Video Model Profile */}
                         <div className="space-y-1.5 pt-1 border-t border-cyan-100">
                           <div className="flex items-center justify-between">
                             <span className="text-[11px] font-semibold text-slate-700">
-                              Tracking Engine
+                              SAM Video Model Profile
                             </span>
                             <span className="text-[10px] text-cyan-700 font-mono">
-                              {videoTrackerMode === "sam2" ? "Neural Spatio-Temporal Masks" : "Colony-Level Flow + Re-ID"}
+                              {modelProfile === "sam2" ? "SAM 2.1 Tiny (Hiera)" : "EfficientTAM Tiny (Fast)"}
                             </span>
                           </div>
                           <div className="grid grid-cols-2 gap-2">
                             <button
                               type="button"
-                              onClick={() => setVideoTrackerMode("optical_flow")}
+                              onClick={() => setModelProfile("sam2")}
                               className={`p-2 rounded-lg border text-left transition-all ${
-                                videoTrackerMode === "optical_flow"
+                                modelProfile === "sam2"
+                                  ? "bg-cyan-50/80 border-cyan-500 ring-1 ring-cyan-500/30"
+                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
+                              }`}
+                            >
+                              <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
+                                  SAM 2.1 Tiny
+                                </span>
+                                <span className="text-[9px] bg-cyan-100 text-cyan-800 font-bold px-1.5 py-0.5 rounded">
+                                  Reference
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                Spatio-temporal memory attention (Golden reference)
+                              </div>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setModelProfile("efficienttam")}
+                              className={`p-2 rounded-lg border text-left transition-all ${
+                                modelProfile === "efficienttam"
                                   ? "bg-emerald-50/80 border-emerald-500 ring-1 ring-emerald-500/30"
                                   : "bg-white/60 border-slate-200 hover:border-slate-300"
                               }`}
@@ -2017,39 +2044,79 @@ export const UploadView: React.FC<UploadViewProps> = ({
                               <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
                                 <span className="flex items-center gap-1.5">
                                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                  Colony Flow + Re-ID
+                                  EfficientTAM Tiny
                                 </span>
                                 <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
-                                  Fast (60-120 FPS)
+                                  Experimental
                                 </span>
                               </div>
                               <div className="text-[10px] text-slate-500 mt-0.5">
-                                Realtime Lucas-Kanade optical flow + SAM keyframes (Recommended)
+                                Ultra-fast tracking profile for high throughput
                               </div>
                             </button>
+                          </div>
+                        </div>
 
-                            <button
-                              type="button"
-                              onClick={() => setVideoTrackerMode("sam2")}
-                              className={`p-2 rounded-lg border text-left transition-all ${
-                                videoTrackerMode === "sam2"
-                                  ? "bg-cyan-50/80 border-cyan-500 ring-1 ring-cyan-500/30"
-                                  : "bg-white/60 border-slate-200 hover:border-slate-300"
-                              }`}
-                            >
-                              <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                                <span className="flex items-center gap-1.5">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-pulse" />
-                                  SAM 2 Neural Tracker
-                                </span>
-                                <span className="text-[9px] bg-cyan-100 text-cyan-800 font-bold px-1.5 py-0.5 rounded">
-                                  Deep Neural
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-slate-500 mt-0.5">
-                                Frame-by-frame deformable mask propagation (Heavy compute)
-                              </div>
-                            </button>
+                        {/* Model Input Size & Worker Concurrency */}
+                        <div className="grid grid-cols-2 gap-3 pt-1 border-t border-cyan-100">
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-semibold text-slate-700">
+                              Input Resolution
+                            </span>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setModelSize(512)}
+                                className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
+                                  modelSize === 512
+                                    ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
+                                    : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
+                                }`}
+                              >
+                                512 px (Fast)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setModelSize(1024)}
+                                className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
+                                  modelSize === 1024
+                                    ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
+                                    : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
+                                }`}
+                              >
+                                1024 px (Full)
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <span className="text-[11px] font-semibold text-slate-700">
+                              Inference Workers
+                            </span>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setWorkerCount(1)}
+                                className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
+                                  workerCount === 1
+                                    ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
+                                    : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
+                                }`}
+                              >
+                                1 (Apple/T4)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setWorkerCount(2)}
+                                className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
+                                  workerCount === 2
+                                    ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
+                                    : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
+                                }`}
+                              >
+                                2 (Parallel)
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>

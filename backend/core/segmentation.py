@@ -92,6 +92,7 @@ def run_segmentation(
     box_nms_thresh: float = 0.70,
     image_name: Optional[str] = None,
     custom_prompt_points: Optional[np.ndarray] = None,
+    discovery_mask: Optional[np.ndarray] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Executes CoralSCOP SAM dense instance segmentation using pure ONNX Runtime & NumPy.
@@ -172,6 +173,18 @@ def run_segmentation(
         c_pts = np.asarray(custom_prompt_points, dtype=np.float32)
         raw_grid_x = np.concatenate([c_pts[:, 0], raw_grid_x])
         raw_grid_y = np.concatenate([c_pts[:, 1], raw_grid_y])
+
+    # Filter prompt grid to discovery regions if a mask is provided
+    if discovery_mask is not None and discovery_mask.shape[:2] == (orig_h, orig_w):
+        keep_indices = []
+        for p_i, (px, py) in enumerate(zip(raw_grid_x, raw_grid_y)):
+            ix = min(orig_w - 1, max(0, int(round(px))))
+            iy = min(orig_h - 1, max(0, int(round(py))))
+            if discovery_mask[iy, ix]:
+                keep_indices.append(p_i)
+        if len(keep_indices) >= 4:
+            raw_grid_x = raw_grid_x[keep_indices]
+            raw_grid_y = raw_grid_y[keep_indices]
 
     # Scale prompt points to the prepadded coordinate frame for SAM prompt encoder
     scale_x = new_w / orig_w
