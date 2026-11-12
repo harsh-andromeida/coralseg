@@ -528,70 +528,23 @@ class VideoProcessor:
             grace_period_sec=2.0,
         )
 
-        detected_kfs = [0]
-        motion_metas = {}
-        t_motion_scan_start = time.perf_counter()
-        scan_cap = cv2.VideoCapture(video_path)
-        f_scan = 0
-
-        _set_stage(
-            stage="Analyzing camera ego-motion & seafloor overlap...",
-            model="Camera Ego-Motion Estimator",
-            action="Computing camera translation & benthic scene overlap",
-            detail=f"Scanning frame 0/{total_frames}",
-        )
-
-        while True:
-            if job["cancel_requested"]:
-                scan_cap.release()
-                cap.release()
-                with self._lock:
-                    job["state"] = VideoJobState.CANCELLED
-                self.store.set_job_state(job_id, VideoJobState.CANCELLED)
-                return
-
-            ret, f_bgr = scan_cap.read()
-            if not ret or f_bgr is None:
-                break
-            f_rgb = cv2.cvtColor(f_bgr, cv2.COLOR_BGR2RGB)
-            is_kf, m_meta = selector.evaluate_frame(f_rgb)
-            motion_metas[f_scan] = {
-                "motion_dx": m_meta.get("motion_dx", 0.0),
-                "motion_dy": m_meta.get("motion_dy", 0.0),
-                "is_scene_cut": m_meta.get("is_scene_cut", False),
-            }
-            if is_kf and f_scan > 0:
-                detected_kfs.append(f_scan)
-            f_scan += 1
-
-            if f_scan % 50 == 0 or f_scan == total_frames:
-                _set_stage(
-                    stage=f"Analyzing camera motion: {f_scan}/{total_frames} frames ({int(f_scan / max(total_frames, 1) * 100)}%)...",
-                    detail=f"Detected {len(detected_kfs)} candidate keyframes",
-                )
-        scan_cap.release()
-        t_motion_scan_sec = max(0.001, time.perf_counter() - t_motion_scan_start)
-
-        t_chunk_prep_sec = 0.0
-        t_discovery_sec = 0.0
-        t_classification_sec = 0.0
-        t_persistence_sec = 0.0
-        t_export_deliv_sec = 0.0
-        t_export_mp4_sec = 0.0
-
-        keyframe_indices = sorted(list(set(detected_kfs)))
-        _set_stage(
-            stage="Motion scan complete",
-            detail=f"Found {len(keyframe_indices)} keyframes across {total_frames} frames",
-            log_entry=f"Camera motion scan complete: detected {len(keyframe_indices)} keyframes",
-        )
-
         # 3. Worker Admission and Bounded Temporal Chunk Planning
         requested_workers = opts.get("worker_count", 1)
         effective_workers = admit_workers_for_device(device_pref, requested_workers)
         chunk_size = opts.get("chunk_size", 128)
         overlap_frames = opts.get("overlap_frames", 16)
         chunk_plan = calculate_chunk_plan(total_frames, chunk_size=chunk_size, overlap_frames=overlap_frames)
+
+        detected_kfs = [0]
+        motion_metas = {}
+        keyframe_indices = set(detected_kfs)
+        t_motion_scan_sec = 0.0
+        t_chunk_prep_sec = 0.0
+        t_discovery_sec = 0.0
+        t_classification_sec = 0.0
+        t_persistence_sec = 0.0
+        t_export_deliv_sec = 0.0
+        t_export_mp4_sec = 0.0
 
         with self._lock:
             job["worker_count"] = effective_workers
@@ -681,6 +634,17 @@ class VideoProcessor:
                     })
             saved_overlap_start_tracks[f_idx] = snaps
 
+        pending_frame_writes: List[Dict[str, Any]] = []
+        last_progress_update_t = 0.0
+
+        def _flush_pending_frames():
+            nonlocal t_persistence_sec
+            if pending_frame_writes:
+                t_pers_start = time.perf_counter()
+                self.store.save_frames_batch(job_id=job_id, frames_data=pending_frame_writes)
+                t_persistence_sec += (time.perf_counter() - t_pers_start)
+                pending_frame_writes.clear()
+
         def _record_frame_state(cur_f: int, current_active_tracks: List[Any]):
             """Records and commits logical output frame state exactly once into durable store."""
             if cur_f in committed_frames or job["cancel_requested"]:
@@ -725,35 +689,39 @@ class VideoProcessor:
             cur_prop_frames = accumulated_prop_frames + tracker_timings.get("frames_propagated", 0)
             tracker_fps = round(cur_prop_frames / max(0.001, cur_prop_sec), 1) if cur_prop_sec > 0 else cur_analysis_fps
 
-            # Persist frame geometry and survey metrics into SQLite
-            t_pers_start = time.perf_counter()
+            # Persist frame geometry and survey metrics into SQLite in batches
             track_snapshots = [t.to_dict() if hasattr(t, "to_dict") else t for t in current_active_tracks]
-            self.store.save_frame(
-                job_id=job_id,
-                frame_idx=cur_f,
-                timestamp_sec=timestamp_sec,
-                is_keyframe=record["is_keyframe"],
-                tracks=track_snapshots,
-                metrics=record,
-            )
+            pending_frame_writes.append({
+                "frame_idx": cur_f,
+                "timestamp_sec": timestamp_sec,
+                "is_keyframe": record["is_keyframe"],
+                "tracks": track_snapshots,
+                "metrics": record,
+            })
 
-            # Update job progress in SQLite
-            self.store.update_job_progress(
-                job_id=job_id,
-                current_frame=cur_f + 1,
-                progress_pct=round((len(committed_frames) / max(total_frames, 1)) * 100.0, 1),
-                fps_realtime=cur_analysis_fps,
-                tracker_fps=tracker_fps,
-                analysis_fps=cur_analysis_fps,
-                elapsed_sec=round(elapsed, 2),
-                active_corals_count=len(current_active_tracks),
-                total_unique_corals=tracker.total_unique_colonies,
-                bleaching_prevalence_pct=round(bleach_pct, 1),
-                keyframes_count=len(keyframe_indices),
-                keyframe_indices=keyframe_indices,
-            )
-            nonlocal t_persistence_sec
-            t_persistence_sec += (time.perf_counter() - t_pers_start)
+            # Flush batch every 32 frames, on keyframes, or on final frame
+            if len(pending_frame_writes) >= 32 or record["is_keyframe"] or cur_f == total_frames - 1:
+                _flush_pending_frames()
+
+            # Throttle SQLite progress writes (at most 4Hz, on keyframes, or on final frame)
+            nonlocal last_progress_update_t
+            now_t = time.time()
+            if (now_t - last_progress_update_t >= 0.25) or record["is_keyframe"] or cur_f == total_frames - 1:
+                self.store.update_job_progress(
+                    job_id=job_id,
+                    current_frame=cur_f + 1,
+                    progress_pct=round((len(committed_frames) / max(total_frames, 1)) * 100.0, 1),
+                    fps_realtime=cur_analysis_fps,
+                    tracker_fps=tracker_fps,
+                    analysis_fps=cur_analysis_fps,
+                    elapsed_sec=round(elapsed, 2),
+                    active_corals_count=len(current_active_tracks),
+                    total_unique_corals=tracker.total_unique_colonies,
+                    bleaching_prevalence_pct=round(bleach_pct, 1),
+                    keyframes_count=len(keyframe_indices),
+                    keyframe_indices=sorted(list(keyframe_indices)),
+                )
+                last_progress_update_t = now_t
 
             # Keep in-memory job state bounded (scalars only)
             with self._lock:
@@ -768,6 +736,8 @@ class VideoProcessor:
                 job["elapsed_sec"] = round(elapsed, 2)
 
         prefetch_executor = ThreadPoolExecutor(max_workers=1)
+        enrichment_executor = ThreadPoolExecutor(max_workers=1)
+        pending_enrichment_futures: List[Any] = []
         next_chunk_future = None
         next_chunk_dir = None
         if chunk_plan:
@@ -781,6 +751,7 @@ class VideoProcessor:
                 end_frame=c0.end_frame,
                 max_dim=480,
                 jpeg_quality=80,
+                keyframe_selector=selector,
             )
             next_chunk_dir = c0_dir
 
@@ -811,6 +782,10 @@ class VideoProcessor:
                 t_chunk_prep_sec += (time.perf_counter() - t_c_wait)
                 scale_x = proxy_meta.get("scale_x", 1.0)
                 scale_y = proxy_meta.get("scale_y", 1.0)
+                if "chunk_keyframes" in proxy_meta:
+                    keyframe_indices.update(proxy_meta["chunk_keyframes"])
+                if "chunk_motion_metas" in proxy_meta:
+                    motion_metas.update(proxy_meta["chunk_motion_metas"])
 
                 # Prefetch next chunk in background thread while this chunk runs SAM inference
                 if chunk_idx + 1 < len(chunk_plan):
@@ -824,6 +799,7 @@ class VideoProcessor:
                         end_frame=next_c.end_frame,
                         max_dim=480,
                         jpeg_quality=80,
+                        keyframe_selector=selector,
                     )
                 else:
                     next_chunk_future = None
@@ -908,17 +884,29 @@ class VideoProcessor:
                     if job["cancel_requested"]:
                         break
 
-                    # Step 1: Keyframe discovery & correction
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
-                    ret, kf_bgr = cap.read()
-                    if ret and kf_bgr is not None:
-                        kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
-                        if is_kf_proxy:
-                            kf_proc_bgr = cv2.resize(kf_bgr, (kf_proxy_w, kf_proxy_h), interpolation=cv2.INTER_AREA)
-                            kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
-                        else:
-                            kf_proc_rgb = kf_rgb
+                    # Step 1: Keyframe discovery & correction (reuse proxy frame if available)
+                    kf_proc_rgb = None
+                    kf_rgb = None
+                    rel_f = kf_frame_idx - chunk.start_frame
+                    chunk_frame_jpg = os.path.join(chunk_dir, f"{rel_f:05d}.jpg")
 
+                    if is_kf_proxy and os.path.isfile(chunk_frame_jpg):
+                        kf_proc_bgr = cv2.imread(chunk_frame_jpg)
+                        if kf_proc_bgr is not None:
+                            kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
+
+                    if kf_proc_rgb is None:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
+                        ret, kf_bgr = cap.read()
+                        if ret and kf_bgr is not None:
+                            kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
+                            if is_kf_proxy:
+                                kf_proc_bgr = cv2.resize(kf_bgr, (kf_proxy_w, kf_proxy_h), interpolation=cv2.INTER_AREA)
+                                kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
+                            else:
+                                kf_proc_rgb = kf_rgb
+
+                    if kf_proc_rgb is not None:
                         points_per_side = opts.get("points_per_side", 16)
                         _set_stage(
                             stage=f"Keyframe at Frame {kf_frame_idx}: Segmenting benthic colonies...",
@@ -999,18 +987,59 @@ class VideoProcessor:
                                 except Exception as corr_err:
                                     _set_stage(log_entry=f"Warning registering correction for coral {trk.track_id}: {corr_err}")
 
-                        # Enrich newly spawned tracks
+                        # Register new masks immediately into SAM; enrich taxonomy/bleaching asynchronously
                         new_tracks = tracker.get_tracks_needing_enrichment()
                         if new_tracks:
                             _set_stage(
-                                stage=f"Keyframe at Frame {kf_frame_idx}: Classifying {len(new_tracks)} new corals...",
+                                stage=f"Keyframe at Frame {kf_frame_idx}: Registering & classifying {len(new_tracks)} new corals...",
                                 model="BioCLIP ViT & YOLO11n Bleaching",
-                                action="Taxonomy and bleaching health inference",
+                                action="Registering masks immediately & scheduling async taxonomy inference",
                                 detail=f"Extracting {len(new_tracks)} crops",
                             )
+
+                            for trk in new_tracks:
+                                m_reg = getattr(trk, "mask", None)
+                                if m_reg is None and trk.polygon:
+                                    m_poly = np.zeros((height, width), dtype=np.uint8)
+                                    pts = np.array(trk.polygon, dtype=np.int32).reshape((-1, 1, 2))
+                                    cv2.fillPoly(m_poly, [pts], 1)
+                                    m_reg = m_poly.astype(bool)
+                                if m_reg is not None:
+                                    try:
+                                        sam2_tracker.register_mask(
+                                            frame_idx=kf_frame_idx,
+                                            obj_id=trk.track_id,
+                                            binary_mask=m_reg,
+                                            is_correction=False,
+                                            metadata={
+                                                "track_id": trk.track_id,
+                                                "genus": trk.taxonomy.get("genus", "Coral"),
+                                                "growth_form": trk.taxonomy.get("growth_form", "-"),
+                                                "taxon_conf": trk.taxonomy.get("confidence_pct", 85.0),
+                                                "condition": trk.bleaching.get("status", "Healthy"),
+                                                "condition_conf": trk.bleaching.get("confidence_pct", 90.0),
+                                                "is_bleached": trk.bleaching.get("is_bleached", False),
+                                                "color_hex": trk.color_hex,
+                                                "first_seen_frame": kf_frame_idx,
+                                                "predicted_iou": trk.predicted_iou,
+                                            },
+                                        )
+                                    except Exception as reg_err:
+                                        _set_stage(log_entry=f"Warning registering coral {trk.track_id} into SAM: {reg_err}")
+
+                            # Read full frame for crops if not loaded
+                            if kf_rgb is None:
+                                cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
+                                ret, kf_bgr = cap.read()
+                                if ret and kf_bgr is not None:
+                                    kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
+                                else:
+                                    kf_rgb = kf_proc_rgb
+
                             pil_img = Image.fromarray(kf_rgb)
                             crops = []
-                            for trk in new_tracks:
+                            task_tracks = list(new_tracks)
+                            for trk in task_tracks:
                                 x, y, bw, bh = trk.bbox
                                 x0 = max(0, x - int(bw * 0.1))
                                 y0 = max(0, y - int(bh * 0.1))
@@ -1022,61 +1051,33 @@ class VideoProcessor:
                                     crops.append(pil_img.crop((x, y, max(x + 10, x + bw), max(y + 10, y + bh))))
 
                             if crops:
-                                t_cl_start = time.perf_counter()
-                                tax_results = classify_coral_taxonomy(crops, bioclip_bundle=bioclip_bundle, top_k=3)
-                                bleach_results = detect_coral_bleaching(crops, bleaching_model=bleaching_model)
-                                t_classification_sec += (time.perf_counter() - t_cl_start)
+                                def _enrich_worker(c_crops, c_tracks, f_idx):
+                                    t_c0 = time.perf_counter()
+                                    t_res = classify_coral_taxonomy(c_crops, bioclip_bundle=bioclip_bundle, top_k=3)
+                                    b_res = detect_coral_bleaching(c_crops, bleaching_model=bleaching_model)
+                                    c_dur = time.perf_counter() - t_c0
+                                    for k_idx, trk_item in enumerate(c_tracks):
+                                        trk_item.taxonomy = t_res[k_idx]
+                                        trk_item.bleaching = b_res[k_idx]
+                                        trk_item.needs_enrichment = False
+                                        self.store.save_track(
+                                            job_id=job_id,
+                                            track_id=trk_item.track_id,
+                                            global_colony_id=trk_item.track_id,
+                                            first_frame=f_idx,
+                                            last_frame=f_idx,
+                                            genus=trk_item.taxonomy.get("genus", "Coral"),
+                                            growth_form=trk_item.taxonomy.get("growth_form", "-"),
+                                            taxon_conf=float(trk_item.taxonomy.get("confidence_pct", 85.0)),
+                                            condition=str(trk_item.bleaching.get("status", "Healthy")),
+                                            condition_conf=float(trk_item.bleaching.get("confidence_pct", 90.0)),
+                                            color_rgb=trk_item.color_rgb,
+                                            metadata={"color_hex": trk_item.color_hex, "predicted_iou": trk_item.predicted_iou},
+                                        )
+                                    return c_dur
 
-                                for k, trk in enumerate(new_tracks):
-                                    trk.taxonomy = tax_results[k]
-                                    trk.bleaching = bleach_results[k]
-                                    trk.needs_enrichment = False
-
-                                    t_p_trk = time.perf_counter()
-                                    self.store.save_track(
-                                        job_id=job_id,
-                                        track_id=trk.track_id,
-                                        global_colony_id=trk.track_id,
-                                        first_frame=kf_frame_idx,
-                                        last_frame=kf_frame_idx,
-                                        genus=trk.taxonomy.get("genus", "Coral"),
-                                        growth_form=trk.taxonomy.get("growth_form", "-"),
-                                        taxon_conf=float(trk.taxonomy.get("confidence_pct", 85.0)),
-                                        condition=str(trk.bleaching.get("status", "Healthy")),
-                                        condition_conf=float(trk.bleaching.get("confidence_pct", 90.0)),
-                                        color_rgb=trk.color_rgb,
-                                        metadata={"color_hex": trk.color_hex, "predicted_iou": trk.predicted_iou},
-                                    )
-                                    t_persistence_sec += (time.perf_counter() - t_p_trk)
-
-                                    m_reg = getattr(trk, "mask", None)
-                                    if m_reg is None and trk.polygon:
-                                        m_reg = np.zeros((height, width), dtype=np.uint8)
-                                        pts = np.array(trk.polygon, dtype=np.int32).reshape((-1, 1, 2))
-                                        cv2.fillPoly(m_reg, [pts], 1)
-                                        m_reg = m_reg.astype(bool)
-                                    if m_reg is not None:
-                                        try:
-                                            sam2_tracker.register_mask(
-                                                frame_idx=kf_frame_idx,
-                                                obj_id=trk.track_id,
-                                                binary_mask=m_reg,
-                                                is_correction=False,
-                                                metadata={
-                                                    "track_id": trk.track_id,
-                                                    "genus": trk.taxonomy.get("genus", "Coral"),
-                                                    "growth_form": trk.taxonomy.get("growth_form", "-"),
-                                                    "taxon_conf": trk.taxonomy.get("confidence_pct", 85.0),
-                                                    "condition": trk.bleaching.get("status", "Healthy"),
-                                                    "condition_conf": trk.bleaching.get("confidence_pct", 90.0),
-                                                    "is_bleached": trk.bleaching.get("is_bleached", False),
-                                                    "color_hex": trk.color_hex,
-                                                    "first_seen_frame": kf_frame_idx,
-                                                    "predicted_iou": trk.predicted_iou,
-                                                },
-                                            )
-                                        except Exception as reg_err:
-                                            _set_stage(log_entry=f"Warning registering coral {trk.track_id} into SAM: {reg_err}")
+                                fut = enrichment_executor.submit(_enrich_worker, crops, task_tracks, kf_frame_idx)
+                                pending_enrichment_futures.append(fut)
 
                         # Retire absent colonies (Fixes P1 Issue 5)
                         retired_ids = tracker.pop_retired_ids()
@@ -1154,6 +1155,16 @@ class VideoProcessor:
                 self.store.update_chunk_status(job_id, chunk.chunk_idx, "completed")
                 cleanup_chunk_dir(chunk_dir)
                 current_chunk_dir = None
+
+            # Flush any remaining batched frame writes
+            _flush_pending_frames()
+
+            # Await all background classification tasks before generating deliverables
+            for fut in pending_enrichment_futures:
+                try:
+                    t_classification_sec += fut.result()
+                except Exception as ef:
+                    _set_stage(log_entry=f"Async classification task error: {ef}")
 
             if not job["cancel_requested"]:
                 # Strict frame coverage verification (Fixes P1 Issue 4)
@@ -1358,6 +1369,10 @@ class VideoProcessor:
             cap.release()
             try:
                 prefetch_executor.shutdown(wait=False)
+            except Exception:
+                pass
+            try:
+                enrichment_executor.shutdown(wait=False)
             except Exception:
                 pass
             if sam2_tracker:
