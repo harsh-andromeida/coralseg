@@ -1,5 +1,5 @@
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DevicePreferenceRequest(BaseModel):
@@ -178,11 +178,52 @@ class VideoProcessRequest(BaseModel):
     overlap_threshold: float = Field(default=0.75, ge=0.40, le=0.95, description="Scene overlap threshold triggering a keyframe")
     min_stride: int = Field(default=15, ge=1, le=60, description="Minimum frame spacing between keyframes")
     max_stride: int = Field(default=45, ge=5, le=120, description="Maximum frame spacing between keyframes")
-    points_per_side: int = Field(default=16, ge=8, le=32, description="SAM prompt grid density for keyframes (Image Studio default: 16)")
+    points_per_side: int = Field(default=16, ge=8, le=32, description="SAM prompt grid density for keyframes")
     iou_match_threshold: float = Field(default=0.30, ge=0.10, le=0.80, description="IoU threshold for tracking association")
-    pred_iou_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM predicted IoU threshold (Image Studio default: 0.50)")
-    stability_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM stability score threshold (Image Studio default: 0.50)")
-    tracker_mode: Optional[str] = Field(default="sam2", description="Tracking engine: 'sam2' (deep neural deformable) or 'optical_flow' (60-120 FPS high-speed)")
+    pred_iou_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM predicted IoU threshold")
+    stability_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM stability score threshold")
+    tracker_mode: Optional[str] = Field(default="sam2", description="Compatibility tracker mode ('sam2')")
+    model_profile: str = Field(default="sam2", description="Video tracker profile: 'sam2' (default reference) or 'efficienttam' (fast profile)")
+    model_size: int = Field(default=1024, description="Model input resolution: 1024 (reference) or 512 (fast)")
+    precision: Optional[str] = Field(default=None, description="Precision: 'float16', 'bfloat16', 'float32', or auto (None)")
+    worker_count: Union[int, str] = Field(default="auto", description="Inference worker instances: 'auto' or 1-8")
+    export_mp4: bool = Field(default=True, description="Whether to render annotated MP4 video deliverable")
+
+    @field_validator("tracker_mode")
+    @classmethod
+    def validate_tracker_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v_clean = v.strip().lower()
+            if v_clean in ("optical_flow", "flow", "lucas_kanade"):
+                raise ValueError(
+                    "Optical flow inference engine has been removed. "
+                    "Use 'sam2' (default reference) or 'efficienttam' (experimental fast profile)."
+                )
+            if v_clean not in ("sam2", "efficienttam"):
+                raise ValueError(f"Unsupported tracker mode '{v}'. Allowed: 'sam2', 'efficienttam'")
+            return v_clean
+        return "sam2"
+
+    @field_validator("model_profile")
+    @classmethod
+    def validate_model_profile(cls, v: str) -> str:
+        v_clean = v.strip().lower()
+        if v_clean not in ("sam2", "efficienttam"):
+            raise ValueError(f"Unsupported model profile '{v}'. Allowed: 'sam2', 'efficienttam'")
+        return v_clean
+
+    @field_validator("model_size")
+    @classmethod
+    def validate_model_size(cls, v: int) -> int:
+        if v not in (512, 1024):
+            raise ValueError(f"Unsupported model_size {v}. Allowed: 512, 1024")
+        return v
+
+    @model_validator(mode="after")
+    def validate_strides(self) -> "VideoProcessRequest":
+        if self.min_stride > self.max_stride:
+            raise ValueError(f"min_stride ({self.min_stride}) cannot exceed max_stride ({self.max_stride})")
+        return self
 
 
 class VideoTrackItem(BaseModel):
@@ -207,6 +248,9 @@ class VideoStatusResponse(BaseModel):
     total_frames: int
     progress_pct: float
     fps_realtime: float
+    tracker_fps: float = 0.0
+    analysis_fps: float = 0.0
+    elapsed_sec: float = 0.0
     active_corals_count: int
     total_unique_corals: int
     bleaching_prevalence_pct: float
@@ -215,12 +259,13 @@ class VideoStatusResponse(BaseModel):
     error: Optional[str] = None
     time_series: Optional[List[Dict[str, Any]]] = None
     export_paths: Optional[Dict[str, Optional[str]]] = None
+    export_status: Optional[str] = "pending"
     current_stage: Optional[str] = "Processing"
     current_model: Optional[str] = None
     current_action: Optional[str] = None
     stage_detail: Optional[str] = None
     logs: Optional[List[str]] = None
-    tracker_mode: Optional[str] = "optical_flow"
+    tracker_mode: Optional[str] = "sam2"
 
 
 

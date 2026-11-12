@@ -13,13 +13,46 @@ from tqdm.auto import tqdm
 from huggingface_hub import hf_hub_download, try_to_load_from_cache, constants
 from huggingface_hub.file_download import repo_folder_name
 
-from core.device import get_optimal_device, get_device_mode, get_session_options, get_cuda_provider_options
+from core.device import (
+    get_optimal_device,
+    get_device_mode,
+    get_session_options,
+    get_cuda_provider_options,
+    get_memory_budget,
+    can_admit_worker,
+)
 
 # Model-specific inference locks for high-throughput concurrency
 _SAM_LOCK = threading.Lock()
 _BIOCLIP_LOCK = threading.Lock()
 _BLEACHING_LOCK = threading.Lock()
 _INFERENCE_LOCK = _SAM_LOCK  # Backwards compatibility alias
+
+# Active job reference counter to protect loaded sessions during active jobs
+_ACTIVE_JOBS_COUNT = 0
+_ACTIVE_JOBS_LOCK = threading.Lock()
+
+
+def acquire_active_job() -> int:
+    """Registers an active job holding model references."""
+    global _ACTIVE_JOBS_COUNT
+    with _ACTIVE_JOBS_LOCK:
+        _ACTIVE_JOBS_COUNT += 1
+        return _ACTIVE_JOBS_COUNT
+
+
+def release_active_job() -> int:
+    """Unregisters an active job holding model references."""
+    global _ACTIVE_JOBS_COUNT
+    with _ACTIVE_JOBS_LOCK:
+        _ACTIVE_JOBS_COUNT = max(0, _ACTIVE_JOBS_COUNT - 1)
+        return _ACTIVE_JOBS_COUNT
+
+
+def has_active_jobs() -> bool:
+    """Checks whether any active jobs currently hold model references."""
+    with _ACTIVE_JOBS_LOCK:
+        return _ACTIVE_JOBS_COUNT > 0
 
 # Official Hugging Face ONNX repository
 HF_ONNX_REPO_ID = "harsh-awasthi/Andromeida-ReefVision-ONNX"
@@ -137,7 +170,13 @@ def unload_all_models_from_ram() -> Dict[str, Any]:
     """
     Safely closes and unloads all active ONNX Runtime sessions,
     releases text embeddings, and triggers garbage collection to free RAM.
+    Fails safely if active jobs hold model references.
     """
+    if has_active_jobs():
+        return {
+            "unloaded": False,
+            "message": "Cannot unload models while active video or batch processing jobs are running.",
+        }
     reset_cached_sessions()
     import gc
     gc.collect()
@@ -307,7 +346,17 @@ def delete_model_weights(target_files: Optional[List[str]] = None) -> Dict[str, 
     Deletes specified local and cached Hugging Face model weights.
     If target_files is None or contains all models, clears all cached weights and HF repo cache.
     Releases all active in-memory ONNX Runtime sessions.
+    Fails safely if active jobs hold model references.
     """
+    if has_active_jobs():
+        all_ready, status_list = check_models_download_status()
+        return {
+            "deleted_files": [],
+            "freed_bytes": 0,
+            "all_downloaded": all_ready,
+            "models": status_list,
+            "error": "Cannot delete models while active video or batch processing jobs are running.",
+        }
     reset_cached_sessions()
 
     specs = FOUNDATION_MODEL_SPECS
@@ -593,6 +642,16 @@ def load_bleaching_model(
     actual_prov = _BLEACHING_SESSION.get_providers()[0]
     print(f"[Model] Bleaching YOLO11n session initialized with provider: {actual_prov} (requested: {active_provider})")
     return _BLEACHING_SESSION
+
+
+def reserve_memory_for_auxiliary_models(device_pref: str = "auto") -> Tuple[bool, str]:
+    """
+    Ensures sufficient host and device memory is reserved for discovery (CoralSCOP SAM)
+    and classification (BioCLIP + YOLO Bleaching) before admitting tracking workers.
+    Est. discovery + classification footprint: ~1.8 GiB device / host RAM.
+    """
+    est_bytes = int(1.8 * 1024**3)
+    return can_admit_worker(worker_peak_bytes=est_bytes)
 
 
 def preload_all_foundation_models(device: Optional[str] = None) -> Dict[str, Any]:

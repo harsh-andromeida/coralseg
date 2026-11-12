@@ -1,26 +1,55 @@
 """
-Unit tests for ReefVision High-FPS Video Processing and Benthic Tracking Pipeline.
+Unit tests for ReefVision Video Processing and Benthic Tracking Pipeline.
+Tests SAM 2.1 Video Predictor adapter, camera motion scheduling, colony tracking,
+durable geometries, hardware reporting, optical-flow mode rejection, and API endpoints.
 """
 
 import os
 import tempfile
+import time
 import numpy as np
 import cv2
 from PIL import Image
 
+from core.device import check_torch_capabilities, get_memory_budget, resolve_hardware_tier
 from core.video.keyframe_selector import EgoMotionKeyframeSelector
 from core.video.tracker import BenthicColonyTracker, CoralTrack, compute_box_iou
-from core.video.sam2_tracker import SAM2BenthicTracker
+from core.video.sam2_tracker import SAM2BenthicTracker, BaseVideoTracker
 from core.video.export import export_transect_csv, export_coco_video, render_video_overlay
 
 
-def test_sam2_tracker_initialization():
-    print("Testing SAM2BenthicTracker initialization & methods...")
-    tracker = SAM2BenthicTracker(device="cpu")
+def test_sam2_tracker_adapter():
+    print("Testing SAM2BenthicTracker adapter boundary & methods...")
+    tracker = SAM2BenthicTracker(device="cpu", model_size=512)
     assert tracker.device == "cpu"
     assert tracker.initialized is False
     assert tracker.total_tracks_count == 0
-    print("  SAM2BenthicTracker initialization verified.")
+    assert isinstance(tracker, BaseVideoTracker)
+    assert tracker.model_size == 512
+
+    timings = tracker.get_timings()
+    assert "initialization_sec" in timings
+    assert "propagation_sec" in timings
+    assert "geometry_sec" in timings
+    print("  SAM2BenthicTracker adapter and timings verified.")
+
+
+def test_device_capabilities_and_precision():
+    print("Testing device capabilities and precision detection...")
+    caps = check_torch_capabilities()
+    assert "torch_available" in caps
+    assert "native_precision" in caps
+    native = caps["native_precision"]
+    assert "cuda_bf16_native" in native
+    assert "mps_fp32" in native
+
+    budget = get_memory_budget()
+    assert "host_total_bytes" in budget
+    assert "host_available_bytes" in budget
+    assert "min_device_reservation_bytes" in budget
+    assert "min_host_reservation_bytes" in budget
+    assert budget["min_host_reservation_bytes"] >= 2 * 1024**3
+    print("  Hardware introspection and memory budget verified.")
 
 
 def test_keyframe_selector():
@@ -59,9 +88,9 @@ def test_keyframe_selector():
     print("  Keyframe selector passed.")
 
 
-def test_benthic_tracker():
-    print("Testing BenthicColonyTracker...")
-    tracker = BenthicColonyTracker(iou_match_threshold=0.30)
+def test_benthic_colony_tracker_lifecycle():
+    print("Testing BenthicColonyTracker canonical geometry & retirement...")
+    tracker = BenthicColonyTracker(iou_match_threshold=0.30, fps=25.0, grace_period_sec=2.0)
 
     # Keyframe 1: 2 coral detections
     dets_f1 = [
@@ -69,7 +98,6 @@ def test_benthic_tracker():
             "bbox": [10, 10, 30, 30],
             "polygon": [[10, 10], [40, 10], [40, 40], [10, 40]],
             "area_px": 900,
-            "area_pct": 5.0,
             "predicted_iou": 0.92,
             "centroid": (25, 25),
         },
@@ -77,58 +105,57 @@ def test_benthic_tracker():
             "bbox": [60, 60, 20, 20],
             "polygon": [[60, 60], [80, 60], [80, 80], [60, 80]],
             "area_px": 400,
-            "area_pct": 2.5,
             "predicted_iou": 0.88,
             "centroid": (70, 70),
         },
     ]
 
-    tracks_f1 = tracker.match_keyframe_detections(dets_f1, frame_idx=0, frame_w=100, frame_h=100)
+    tracks_f1 = tracker.match_keyframe_detections(dets_f1, frame_idx=0, frame_w=1920, frame_h=1080)
     assert len(tracks_f1) == 2
     assert tracks_f1[0].track_id == 1
     assert tracks_f1[1].track_id == 2
-    print(f"  Spawned {len(tracks_f1)} tracks on frame 0.")
+    assert tracks_f1[0].area_px == 900
+    assert tracks_f1[0].area_pct > 0.0
+    print(f"  Spawned {len(tracks_f1)} tracks on frame 0 with canonical area/percentage.")
 
-    # Intervening frame: camera shifts by dx=2, dy=1
-    step_H = np.array([
-        [1.0, 0.0, 2.0],
-        [0.0, 1.0, 1.0],
-        [0.0, 0.0, 1.0],
-    ], dtype=np.float32)
-
-    tracker.warp_tracks_with_motion(step_H, frame_w=100, frame_h=100, frame_idx=1)
-    tracks_f2 = tracker.get_active_tracks()
-    assert len(tracks_f2) == 2
-    assert tracks_f2[0].track_id == 1
-    # Check warped bbox shifted
-    assert tracks_f2[0].bbox[0] >= 11, f"Expected x shifted from 10, got {tracks_f2[0].bbox[0]}"
-    print("  Inter-frame homography warping verified.")
-
-    # Keyframe 2: Refined detections matched with persistent IDs
+    # Keyframe 2: Matched-object correction (track 1 shifted slightly, track 2 temporarily disappears)
     dets_f2 = [
         {
             "bbox": [12, 11, 30, 30],
             "polygon": [[12, 11], [42, 11], [42, 41], [12, 41]],
             "area_px": 900,
-            "area_pct": 5.0,
             "predicted_iou": 0.94,
             "centroid": (27, 26),
         },
-        {
-            "bbox": [62, 61, 20, 20],
-            "polygon": [[62, 61], [82, 61], [82, 81], [62, 81]],
-            "area_px": 400,
-            "area_pct": 2.5,
-            "predicted_iou": 0.90,
-            "centroid": (72, 71),
-        },
     ]
 
-    tracks_f3 = tracker.match_keyframe_detections(dets_f2, frame_idx=2, frame_w=100, frame_h=100)
-    assert len(tracks_f3) == 2
-    assert tracks_f3[0].track_id == 1, "Track ID 1 must persist"
-    assert tracks_f3[1].track_id == 2, "Track ID 2 must persist"
-    print("  Track persistence & Hungarian IoU matching verified.")
+    tracks_f2 = tracker.match_keyframe_detections(dets_f2, frame_idx=25, frame_w=1920, frame_h=1080)
+    # Track 2 is absent at frame 25, but 25 frames <= grace period (50 frames at 25fps)
+    assert tracks_f2[0].track_id == 1, "Track ID 1 must persist"
+    assert len(tracks_f2) == 2, "Track 2 must remain active during 2s grace period"
+    print("  Grace period persistence verified.")
+
+    # Keyframe 3: Frame 75 (50 frames after last seen) -> Track 2 must retire
+    dets_f3 = [
+        {
+            "bbox": [14, 12, 30, 30],
+            "polygon": [[14, 12], [44, 12], [44, 42], [14, 42]],
+            "area_px": 900,
+            "predicted_iou": 0.95,
+            "centroid": (29, 27),
+        },
+    ]
+    tracks_f3 = tracker.match_keyframe_detections(dets_f3, frame_idx=75, frame_w=1920, frame_h=1080)
+    active_ids = [t.track_id for t in tracks_f3]
+    assert 2 not in active_ids, "Track 2 must retire after grace period expires"
+    assert 1 in active_ids
+    print("  Colony retirement after grace period verified.")
+
+    # Test global ID mapping without spurious increment
+    tracker.map_local_id_to_global(local_id=1, global_id=10)
+    assert 10 in tracker._tracks
+    assert 1 not in tracker._tracks
+    print("  Deterministic global ID mapping verified.")
 
 
 def test_export_utilities():
@@ -171,13 +198,30 @@ def test_export_utilities():
 
 
 def test_video_api_endpoints():
-    print("Testing Video FastAPI Endpoints...")
+    print("Testing Video FastAPI Endpoints & Rejection Gates...")
     from fastapi.testclient import TestClient
     from app.main import app
 
     client = TestClient(app)
 
-    # 1. Create a tiny synthetic 5-frame MP4
+    # 1. Test rejection of optical_flow mode
+    resp_reject = client.post("/api/video/process", json={
+        "video_name": "non_existent.mp4",
+        "tracker_mode": "optical_flow",
+    })
+    assert resp_reject.status_code == 422, f"Expected 422 for optical_flow rejection, got {resp_reject.status_code}"
+    print("  Rejected optical_flow tracker mode verified with 422.")
+
+    # 2. Test rejection of invalid strides
+    resp_stride = client.post("/api/video/process", json={
+        "video_name": "non_existent.mp4",
+        "min_stride": 50,
+        "max_stride": 20,
+    })
+    assert resp_stride.status_code == 422, f"Expected 422 for min_stride > max_stride, got {resp_stride.status_code}"
+    print("  Rejected invalid min_stride > max_stride verified with 422.")
+
+    # 3. Create a synthetic 5-frame MP4 to test execution lifecycle
     temp_dir = tempfile.mkdtemp(prefix="test_mp4_")
     test_vid_path = os.path.join(temp_dir, "test_synthetic.mp4")
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -189,7 +233,7 @@ def test_video_api_endpoints():
     writer.release()
 
     try:
-        # 2. Upload video
+        # 4. Upload video
         with open(test_vid_path, "rb") as f:
             resp = client.post("/api/video/upload", files={"file": ("test_synthetic.mp4", f, "video/mp4")})
         assert resp.status_code == 200, f"Video upload failed: {resp.text}"
@@ -199,21 +243,23 @@ def test_video_api_endpoints():
         assert upload_data["metadata"]["total_frames"] > 0
         print("  POST /api/video/upload verified (standardized to 25 FPS).")
 
-        # 3. Process video
+        # 5. Process video with SAM 2 mode
         resp = client.post("/api/video/process", json={
             "video_name": upload_data["video_name"],
             "overlap_threshold": 0.75,
             "min_stride": 2,
             "max_stride": 5,
+            "tracker_mode": "sam2",
+            "model_size": 1024,
         })
         assert resp.status_code == 200, f"Process video failed: {resp.text}"
         job_data = resp.json()
         job_id = job_data["job_id"]
         print(f"  POST /api/video/process verified. Job ID: {job_id}")
 
-        # 4. Status polling (wait for completion)
-        import time
+        # 6. Status polling (wait for completion)
         completed = False
+        s_data = {}
         for _ in range(250):
             time.sleep(0.5)
             s_resp = client.get(f"/api/video/status/{job_id}")
@@ -226,23 +272,25 @@ def test_video_api_endpoints():
         assert completed is True, f"Job did not finish in time: {s_data}"
         assert s_data["state"] == "completed", f"Job failed: {s_data.get('error')}"
         assert s_data["current_frame"] == s_data["total_frames"]
-        print(f"  GET /api/video/status verified: completed {s_data['current_frame']} frames at 25 FPS.")
+        assert "tracker_fps" in s_data
+        assert "analysis_fps" in s_data
+        print(f"  GET /api/video/status verified: completed {s_data['current_frame']} frames at {s_data['analysis_fps']} FPS.")
 
-        # 5. Frame annotations
+        # 7. Frame annotations
         f_resp = client.get(f"/api/video/frame/{job_id}/0")
         assert f_resp.status_code == 200
         f_data = f_resp.json()
         assert "tracks" in f_data
         print(f"  GET /api/video/frame/0 verified: {f_data['active_count']} active tracks.")
 
-        # 5b. Bulk frame annotations
+        # 8. Bulk frame annotations
         bulk_resp = client.get(f"/api/video/frames/{job_id}?start_frame=0&end_frame=1")
         assert bulk_resp.status_code == 200
         bulk_data = bulk_resp.json()
         assert "frames" in bulk_data
         print(f"  GET /api/video/frames verified: {bulk_data['total_frames_available']} frames in bulk.")
 
-        # 6. Export CSV
+        # 9. Export CSV
         exp_resp = client.get(f"/api/video/export/{job_id}?format=csv")
         assert exp_resp.status_code == 200
         assert len(exp_resp.content) > 0
@@ -253,7 +301,7 @@ def test_video_api_endpoints():
 
 
 def test_real_video_sample_pipeline():
-    """Verifies end-to-end ingestion, tracking, keyframing, and export on real underwater reef footage."""
+    """Verifies end-to-end SAM 2 tracking, keyframing, and export on real underwater reef footage."""
     print("\n--- Testing Real Underwater Video Sample Pipeline ---")
     from fastapi.testclient import TestClient
     from app.main import app
@@ -270,33 +318,34 @@ def test_real_video_sample_pipeline():
     assert meta["fps"] == 25.0
     assert meta["total_frames"] > 0
 
-    # 2. Launch processing job with fast optical flow mode for unit test suite
+    # 2. Launch processing job with SAM 2 Tiny 512 mode
     p_resp = client.post("/api/video/process", json={
         "video_name": video_name,
         "overlap_threshold": 0.70,
         "min_stride": 15,
         "max_stride": 45,
         "points_per_side": 8,
-        "tracker_mode": "optical_flow",
+        "tracker_mode": "sam2",
+        "model_size": 512,
     })
     assert p_resp.status_code == 200, f"Start job failed: {p_resp.text}"
     job_id = p_resp.json()["job_id"]
     print(f"  Launched processing job '{job_id}'")
 
     # 3. Poll until completion
-    import time
+    s_data = {}
     for poll_idx in range(600):
         time.sleep(1.0)
         s_resp = client.get(f"/api/video/status/{job_id}")
         assert s_resp.status_code == 200
         s_data = s_resp.json()
         if poll_idx % 15 == 0:
-            print(f"    Progress: frame {s_data.get('current_frame', 0)}/{s_data.get('total_frames', 0)} ({s_data.get('progress_pct', 0.0):.1f}%) | state={s_data.get('state')}")
+            print(f"    Progress: frame {s_data.get('current_frame', 0)}/{s_data.get('total_frames', 0)} ({s_data.get('progress_pct', 0.0):.1f}%) | state={s_data.get('state')} | analysis_fps={s_data.get('analysis_fps', 0.0)}")
         if s_data["state"] in ("completed", "error"):
             break
 
     assert s_data["state"] == "completed", f"Job failed: {s_data.get('error')}"
-    print(f"  Completed! Processed {s_data['current_frame']} frames | Keyframes: {s_data['keyframes_count']} | Total corals: {s_data['total_unique_corals']}")
+    print(f"  Completed! Processed {s_data['current_frame']} frames | Keyframes: {s_data['keyframes_count']} | Total corals: {s_data['total_unique_corals']} | Tracker FPS: {s_data.get('tracker_fps', 0.0)}")
     assert s_data["keyframes_count"] >= 1
     assert s_data["total_unique_corals"] >= 1
 
@@ -317,8 +366,9 @@ def test_real_video_sample_pipeline():
 
 if __name__ == "__main__":
     test_keyframe_selector()
-    test_benthic_tracker()
-    test_sam2_tracker_initialization()
+    test_benthic_colony_tracker_lifecycle()
+    test_sam2_tracker_adapter()
+    test_device_capabilities_and_precision()
     test_export_utilities()
     test_video_api_endpoints()
     test_real_video_sample_pipeline()

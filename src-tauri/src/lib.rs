@@ -1,3 +1,4 @@
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command};
@@ -7,12 +8,28 @@ use tauri::Manager;
 
 struct BackendProcess(Mutex<Option<Child>>);
 
-fn is_backend_running() -> bool {
-    TcpStream::connect_timeout(
+fn is_backend_healthy() -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(
         &"127.0.0.1:8000".parse().unwrap(),
-        Duration::from_millis(300),
-    )
-    .is_ok()
+        Duration::from_millis(500),
+    ) else {
+        return false;
+    };
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+
+    let request = "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:8000\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut buf = [0u8; 256];
+    if let Ok(n) = stream.read(&mut buf) {
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        return resp.contains("200 OK") || resp.contains("HTTP/1.1 200") || resp.contains("HTTP/1.0 200");
+    }
+    false
 }
 
 fn get_project_root() -> PathBuf {
@@ -260,13 +277,13 @@ pub fn run() {
         ])
         .setup(|app| {
             let root = get_project_root();
-            if !is_backend_running() {
+            if !is_backend_healthy() {
                 if let Some(c) = spawn_backend(&root) {
                     app.manage(BackendProcess(Mutex::new(Some(c))));
                 }
             } else {
                 app.manage(BackendProcess(Mutex::new(None)));
-                println!("[Tauri] Backend is already running on port 8000.");
+                println!("[Tauri] Backend is already running and healthy on port 8000.");
             }
             Ok(())
         })
@@ -275,8 +292,14 @@ pub fn run() {
                 if let Some(state) = window.try_state::<BackendProcess>() {
                     if let Ok(mut lock) = state.0.lock() {
                         if let Some(mut child) = lock.take() {
-                            println!("[Tauri] Terminating backend process...");
-                            let _ = child.kill();
+                            let pid = child.id();
+                            println!("[Tauri] Terminating backend process (PID: {})...", pid);
+                            let kill_res = child.kill();
+                            let wait_res = child.wait();
+                            println!(
+                                "[Tauri] Backend process (PID: {}) terminated. kill_result: {:?}, exit_status: {:?}",
+                                pid, kill_res, wait_res
+                            );
                         }
                     }
                 }
