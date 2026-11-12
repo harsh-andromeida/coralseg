@@ -26,10 +26,10 @@ On completion of every development step, task, bug fix, or milestone:
 ### 3. Binary & Weight Handling
 Never commit heavy machine learning model weights (`*.onnx`, `*.pth`, `*.pt`, `*.bin`), installers (`*.dmg`, `*.pkg`, `*.exe`), or virtual environments/dependencies (`node_modules/`, `.venv/`, `target/`). Keep `.gitignore` strictly maintained.
 
-### 4. GPU usage for testing
+### 4. GPU usage for local inference and testing
 NOTE: use Colab GPU as default you can use it anytime.. but use modal only when asked. 
 
-### 4. Remote Cloud GPU Testing via Google Colab CLI (`colab`)
+### 5. Remote Cloud GPU Testing via Google Colab CLI (`colab`)
 The Google Colab CLI allows provisioning cloud runtimes with GPU accelerators (T4) and running remote tests/benchmarks directly from the terminal without manual browser interaction.
 
 - **Binary Location**: `/Users/harsh/.local/bin/colab` (or `colab`).

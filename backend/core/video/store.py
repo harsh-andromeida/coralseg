@@ -83,9 +83,16 @@ class VideoJobStore:
                 stage_detail TEXT,
                 stage_progress_pct REAL DEFAULT 0.0,
                 logs_json TEXT,
-                tracker_mode TEXT
+                tracker_mode TEXT,
+                timings_json TEXT
             );
             """)
+
+            # Migration check: timings_json
+            cur.execute("PRAGMA table_info(jobs);")
+            job_cols = [col[1] for col in cur.fetchall()]
+            if "timings_json" not in job_cols:
+                cur.execute("ALTER TABLE jobs ADD COLUMN timings_json TEXT;")
 
             # 2. Chunks Table (Milestone 4 parallelism / replay)
             cur.execute("""
@@ -325,6 +332,7 @@ class VideoJobStore:
         started_at: Optional[float] = None,
         export_paths: Optional[Dict[str, str]] = None,
         export_status: Optional[str] = None,
+        timings: Optional[Dict[str, Any]] = None,
     ):
         """Updates job lifecycle state and error records."""
         with self._lock:
@@ -353,6 +361,9 @@ class VideoJobStore:
             if export_status is not None:
                 updates.append("export_status = ?")
                 params.append(export_status)
+            if timings is not None:
+                updates.append("timings_json = ?")
+                params.append(json.dumps(timings))
 
             params.append(job_id)
             cur.execute(f"UPDATE jobs SET {', '.join(updates)} WHERE job_id = ?;", params)
@@ -799,6 +810,7 @@ class VideoJobStore:
             "stage_progress_pct": float(r["stage_progress_pct"] or 0.0),
             "logs": json.loads(r["logs_json"]) if r["logs_json"] else [],
             "tracker_mode": r["tracker_mode"] or "sam2",
+            "timings": json.loads(r["timings_json"]) if ("timings_json" in r.keys() and r["timings_json"]) else None,
         }
 
     def close(self):

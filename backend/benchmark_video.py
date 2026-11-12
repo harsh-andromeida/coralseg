@@ -140,8 +140,40 @@ def run_benchmark_trial(
     tracker_fps = completed_job.get("tracker_fps", 0.0)
     keyframes_count = completed_job.get("keyframes_count", 0)
     unique_corals = completed_job.get("total_unique_corals", 0)
+    timings = completed_job.get("timings") or {}
 
-    print(f"[Trial {trial_index}] Done in {wall_duration}s | Source FPS: {source_fps} | Tracker FPS: {tracker_fps} | Corals: {unique_corals} | Peak RSS: {peak_rss} MiB")
+    t_gpu = timings.get("synchronized_gpu_inference_sec", 0.0)
+    t_disc = timings.get("keyframe_discovery_sec", 0.0)
+    t_class = timings.get("keyframe_classification_sec", 0.0)
+    t_prep = timings.get("video_decode_prep_sec", 0.0)
+    t_geom = timings.get("geometry_extraction_sec", 0.0) + timings.get("mask_transfer_sec", 0.0)
+    t_pers = timings.get("persistence_sec", 0.0)
+    t_deliv = timings.get("export_deliverables_sec", 0.0)
+    t_mp4 = timings.get("export_annotated_mp4_sec", 0.0)
+    t_idle = timings.get("unaccounted_idle_sec", 0.0)
+
+    print(f"\n[Trial {trial_index}] Done in {wall_duration}s | Source FPS: {source_fps} | Tracker FPS: {tracker_fps} | Corals: {unique_corals} | Peak RSS: {peak_rss} MiB")
+    if timings:
+        print("=" * 88)
+        print(f"Stage Latency Breakdown for {total_frames} frames (Wall Duration: {wall_duration}s | {source_fps} FPS)")
+        print("=" * 88)
+        print(f"{'Stage':<45} | {'Latency (s)':<12} | {'% Share':<10} | {'Effective FPS'}")
+        print("-" * 88)
+        print(f"{'1. Synchronized GPU Inference (SAM/TAM)':<45} | {t_gpu:>10.2f} s | {(t_gpu/max(wall_duration, 0.001))*100:>8.1f} % | {total_frames/max(t_gpu, 0.001):>8.1f} FPS")
+        print(f"{'2. Keyframe Discovery (CoralSCOP ViT-B)':<45} | {t_disc:>10.2f} s | {(t_disc/max(wall_duration, 0.001))*100:>8.1f} % | {keyframes_count/max(t_disc, 0.001):>8.1f} keyframes/s")
+        print(f"{'3. Keyframe Classification (BioCLIP + Bleach)':<45} | {t_class:>10.2f} s | {(t_class/max(wall_duration, 0.001))*100:>8.1f} % | {unique_corals/max(t_class, 0.001):>8.1f} corals/s")
+        print(f"{'4. Video Decoding & Chunk Frame Preparation':<45} | {t_prep:>10.2f} s | {(t_prep/max(wall_duration, 0.001))*100:>8.1f} % | {total_frames/max(t_prep, 0.001):>8.1f} FPS")
+        print(f"{'5. Mask CPU Transfer & Geometry Extraction':<45} | {t_geom:>10.2f} s | {(t_geom/max(wall_duration, 0.001))*100:>8.1f} % | {total_frames/max(t_geom, 0.001):>8.1f} FPS")
+        print(f"{'6. SQLite Persistence & Progress Updates':<45} | {t_pers:>10.2f} s | {(t_pers/max(wall_duration, 0.001))*100:>8.1f} % | {total_frames/max(t_pers, 0.001):>8.1f} FPS")
+        print(f"{'7. Deliverables Export (CSV + COCO JSON)':<45} | {t_deliv:>10.2f} s | {(t_deliv/max(wall_duration, 0.001))*100:>8.1f} % | -")
+        print(f"{'8. Annotated MP4 Video Export (CPU libx264)':<45} | {t_mp4:>10.2f} s | {(t_mp4/max(wall_duration, 0.001))*100:>8.1f} % | {total_frames/max(t_mp4, 0.001):>8.1f} FPS")
+        print(f"{'9. Unaccounted Gaps / Overhead':<45} | {t_idle:>10.2f} s | {(t_idle/max(wall_duration, 0.001))*100:>8.1f} % | -")
+        print("=" * 88)
+        print("Target Throughput Constraint for 202 frames:")
+        print(f"  - 10 FPS Target : Max allowed time = {total_frames / 10.0:.1f}s | Current gap: {wall_duration - (total_frames / 10.0):+.1f}s")
+        print(f"  - 15 FPS Target : Max allowed time = {total_frames / 15.0:.1f}s | Current gap: {wall_duration - (total_frames / 15.0):+.1f}s")
+        print(f"  - 20 FPS Target : Max allowed time = {total_frames / 20.0:.1f}s | Current gap: {wall_duration - (total_frames / 20.0):+.1f}s")
+        print("=" * 88)
 
     return {
         "trial_index": trial_index,
@@ -155,6 +187,7 @@ def run_benchmark_trial(
         "accelerator_allocated_mib": accel_mem.get("allocated_mib", 0.0),
         "accelerator_peak_mib": accel_mem.get("peak_mib", 0.0),
         "export_paths": completed_job.get("export_paths", {}),
+        "timings": timings,
     }
 
 
@@ -258,7 +291,46 @@ def main():
             json.dump(summary, f, indent=2)
         print(f"\nStructured benchmark results saved to: {args.output_json}")
 
-    # 6. Output Markdown Summary Table
+    # 6. Output Markdown Summary Table & Latency Breakdown
+    latest_timings = trial_results[-1].get("timings", {}) if trial_results else {}
+    breakdown_section = ""
+    if latest_timings:
+        t_gpu = latest_timings.get("synchronized_gpu_inference_sec", 0.0)
+        t_disc = latest_timings.get("keyframe_discovery_sec", 0.0)
+        t_class = latest_timings.get("keyframe_classification_sec", 0.0)
+        t_prep = latest_timings.get("video_decode_prep_sec", 0.0)
+        t_geom = latest_timings.get("geometry_extraction_sec", 0.0) + latest_timings.get("mask_transfer_sec", 0.0)
+        t_pers = latest_timings.get("persistence_sec", 0.0)
+        t_deliv = latest_timings.get("export_deliverables_sec", 0.0)
+        t_mp4 = latest_timings.get("export_annotated_mp4_sec", 0.0)
+        t_idle = latest_timings.get("unaccounted_idle_sec", 0.0)
+        t_wall = trial_results[-1].get("wall_duration_sec", 0.001)
+        tot_f = trial_results[-1].get("total_frames", 202)
+
+        breakdown_section = f"""
+### Per-Stage Latency Breakdown ({tot_f} frames, {t_wall:.2f}s total)
+
+| Pipeline Stage | Wall Time (s) | Share (%) | Effective Stage Rate |
+|---|---:|---:|---:|
+| **1. Synchronized GPU Inference (SAM/TAM)** | {t_gpu:.2f}s | {(t_gpu/t_wall)*100:.1f}% | {tot_f/max(t_gpu, 0.001):.1f} FPS |
+| **2. Keyframe Discovery (CoralSCOP SAM ViT-B)** | {t_disc:.2f}s | {(t_disc/t_wall)*100:.1f}% | - |
+| **3. Keyframe Classification (BioCLIP + Bleach)** | {t_class:.2f}s | {(t_class/t_wall)*100:.1f}% | - |
+| **4. Video Decoding & Chunk Frame Preparation** | {t_prep:.2f}s | {(t_prep/t_wall)*100:.1f}% | {tot_f/max(t_prep, 0.001):.1f} FPS |
+| **5. Mask CPU Transfer & Geometry Extraction** | {t_geom:.2f}s | {(t_geom/t_wall)*100:.1f}% | {tot_f/max(t_geom, 0.001):.1f} FPS |
+| **6. SQLite Persistence & Progress Overhead** | {t_pers:.2f}s | {(t_pers/t_wall)*100:.1f}% | {tot_f/max(t_pers, 0.001):.1f} FPS |
+| **7. Deliverables Export (CSV + COCO JSON)** | {t_deliv:.2f}s | {(t_deliv/t_wall)*100:.1f}% | - |
+| **8. Annotated MP4 Video Export (CPU libx264)** | {t_mp4:.2f}s | {(t_mp4/t_wall)*100:.1f}% | {tot_f/max(t_mp4, 0.001):.1f} FPS |
+| **9. Unaccounted Gaps / Scheduling Idle** | {t_idle:.2f}s | {(t_idle/t_wall)*100:.1f}% | - |
+
+### Target Throughput Budget for {tot_f} frames
+
+| Target FPS | Max Allowed Total Time | Actual Measured Time | Throughput Gap | Feasible with GPU alone? |
+|---|---:|---:|---:|---|
+| **10 FPS** | {tot_f / 10.0:.1f} seconds | **{t_wall:.1f} seconds** | {t_wall - tot_f / 10.0:+.1f}s | {'Yes (if GPU accelerated)' if t_wall <= tot_f / 10.0 else 'Requires CPU pipelining + GPU'} |
+| **15 FPS** | {tot_f / 15.0:.1f} seconds | **{t_wall:.1f} seconds** | {t_wall - tot_f / 15.0:+.1f}s | Requires asynchronous classification & queue overlap |
+| **20 FPS** | {tot_f / 20.0:.1f} seconds | **{t_wall:.1f} seconds** | {t_wall - tot_f / 20.0:+.1f}s | Requires all 5 backend pipeline fixes |
+"""
+
     md_table = f"""
 # ReefVision Video Pipeline Benchmark Report
 
@@ -270,7 +342,7 @@ def main():
 |---|---|---:|---:|---:|---:|---:|
 | {args.model_profile.upper()} ({args.device}) | {args.model_size} | {args.worker_count} | **{summary['metrics']['mean_source_fps']}** | {summary['metrics']['mean_tracker_fps']} | {summary['metrics']['mean_duration_sec']}s | {peak_rss} MiB |
 
-*Target threshold: 10 FPS minimum, 15-20 FPS production target.*
+{breakdown_section}
 """
     print(md_table)
 

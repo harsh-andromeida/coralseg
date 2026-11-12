@@ -261,6 +261,7 @@ class VideoStatusResponse(BaseModel):
     stage_detail: Optional[str] = None
     logs: Optional[List[str]] = None
     tracker_mode: Optional[str] = "sam2"
+    timings: Optional[Dict[str, Any]] = None
 
 
 

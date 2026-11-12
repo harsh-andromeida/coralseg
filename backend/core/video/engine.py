@@ -530,6 +530,7 @@ class VideoProcessor:
 
         detected_kfs = [0]
         motion_metas = {}
+        t_motion_scan_start = time.perf_counter()
         scan_cap = cv2.VideoCapture(video_path)
         f_scan = 0
 
@@ -569,6 +570,14 @@ class VideoProcessor:
                     detail=f"Detected {len(detected_kfs)} candidate keyframes",
                 )
         scan_cap.release()
+        t_motion_scan_sec = max(0.001, time.perf_counter() - t_motion_scan_start)
+
+        t_chunk_prep_sec = 0.0
+        t_discovery_sec = 0.0
+        t_classification_sec = 0.0
+        t_persistence_sec = 0.0
+        t_export_deliv_sec = 0.0
+        t_export_mp4_sec = 0.0
 
         keyframe_indices = sorted(list(set(detected_kfs)))
         _set_stage(
@@ -717,6 +726,7 @@ class VideoProcessor:
             tracker_fps = round(cur_prop_frames / max(0.001, cur_prop_sec), 1) if cur_prop_sec > 0 else cur_analysis_fps
 
             # Persist frame geometry and survey metrics into SQLite
+            t_pers_start = time.perf_counter()
             track_snapshots = [t.to_dict() if hasattr(t, "to_dict") else t for t in current_active_tracks]
             self.store.save_frame(
                 job_id=job_id,
@@ -742,6 +752,8 @@ class VideoProcessor:
                 keyframes_count=len(keyframe_indices),
                 keyframe_indices=keyframe_indices,
             )
+            nonlocal t_persistence_sec
+            t_persistence_sec += (time.perf_counter() - t_pers_start)
 
             # Keep in-memory job state bounded (scalars only)
             with self._lock:
@@ -794,7 +806,9 @@ class VideoProcessor:
                 chunk_dir = next_chunk_dir
                 current_chunk_dir = chunk_dir
 
+                t_c_wait = time.perf_counter()
                 _, proxy_meta = next_chunk_future.result()
+                t_chunk_prep_sec += (time.perf_counter() - t_c_wait)
                 scale_x = proxy_meta.get("scale_x", 1.0)
                 scale_y = proxy_meta.get("scale_y", 1.0)
 
@@ -912,6 +926,7 @@ class VideoProcessor:
                             action=f"Prompt grid segmentation ({points_per_side}x{points_per_side} points)",
                             detail=f"Frame {kf_frame_idx} ({kf_proxy_w}x{kf_proxy_h})",
                         )
+                        t_disc_start = time.perf_counter()
                         masks_info, _ = run_segmentation(
                             model=sam_model,
                             image=kf_proc_rgb,
@@ -920,6 +935,7 @@ class VideoProcessor:
                             stability_score_thresh=opts.get("stability_thresh", 0.50),
                             min_mask_region_area=25,
                         )
+                        t_discovery_sec += (time.perf_counter() - t_disc_start)
 
                         if is_kf_proxy:
                             for m in masks_info:
@@ -1006,14 +1022,17 @@ class VideoProcessor:
                                     crops.append(pil_img.crop((x, y, max(x + 10, x + bw), max(y + 10, y + bh))))
 
                             if crops:
+                                t_cl_start = time.perf_counter()
                                 tax_results = classify_coral_taxonomy(crops, bioclip_bundle=bioclip_bundle, top_k=3)
                                 bleach_results = detect_coral_bleaching(crops, bleaching_model=bleaching_model)
+                                t_classification_sec += (time.perf_counter() - t_cl_start)
 
                                 for k, trk in enumerate(new_tracks):
                                     trk.taxonomy = tax_results[k]
                                     trk.bleaching = bleach_results[k]
                                     trk.needs_enrichment = False
 
+                                    t_p_trk = time.perf_counter()
                                     self.store.save_track(
                                         job_id=job_id,
                                         track_id=trk.track_id,
@@ -1028,6 +1047,7 @@ class VideoProcessor:
                                         color_rgb=trk.color_rgb,
                                         metadata={"color_hex": trk.color_hex, "predicted_iou": trk.predicted_iou},
                                     )
+                                    t_persistence_sec += (time.perf_counter() - t_p_trk)
 
                                     m_reg = getattr(trk, "mask", None)
                                     if m_reg is None and trk.polygon:
@@ -1172,6 +1192,7 @@ class VideoProcessor:
                 }
 
                 # 1. Export CSV
+                t_exp_d = time.perf_counter()
                 try:
                     export_transect_csv(
                         output_csv_path=transect_csv,
@@ -1204,10 +1225,12 @@ class VideoProcessor:
                 except Exception as coco_err:
                     export_errors["coco_json"] = str(coco_err)
                     _set_stage(log_entry=f"COCO JSON export error: {coco_err}")
+                t_export_deliv_sec = time.perf_counter() - t_exp_d
 
                 # 3. Optional MP4 overlay generation
                 export_mp4_enabled = opts.get("export_mp4", True)
                 if export_mp4_enabled:
+                    t_exp_m = time.perf_counter()
                     try:
                         _set_stage(
                             stage="Rendering annotated video overlay...",
@@ -1225,6 +1248,7 @@ class VideoProcessor:
                     except Exception as mp4_err:
                         export_errors["annotated_mp4"] = str(mp4_err)
                         _set_stage(log_entry=f"MP4 export error: {mp4_err}")
+                    t_export_mp4_sec = time.perf_counter() - t_exp_m
 
                 # Determine overall export status based on verified deliverables (Fixes P1 Issue 7)
                 expected_exports = ["transect_csv", "coco_json"]
@@ -1248,7 +1272,54 @@ class VideoProcessor:
                     log_entry=f"Survey finished: {tracker.total_unique_colonies} corals, {job['bleaching_prevalence_pct']}% bleaching across {len(committed_frames)} frames in {elapsed_total}s (export_status={export_status})",
                 )
 
+                tracker_timings = sam2_tracker.get_timings()
+                total_prop_sec = accumulated_prop_sec + tracker_timings.get("propagation_sec", 0.0)
+                total_transfer_sec = tracker_timings.get("transfer_sec", 0.0)
+                total_geometry_sec = tracker_timings.get("geometry_sec", 0.0)
+                total_decode_prep_sec = t_motion_scan_sec + t_chunk_prep_sec
+
+                measured_stages_sec = (
+                    total_decode_prep_sec
+                    + total_prop_sec
+                    + total_transfer_sec
+                    + total_geometry_sec
+                    + t_discovery_sec
+                    + t_classification_sec
+                    + t_persistence_sec
+                    + t_export_deliv_sec
+                    + t_export_mp4_sec
+                )
+                unaccounted_idle_sec = max(0.0, elapsed_total - measured_stages_sec)
+
+                pipeline_timings = {
+                    "total_elapsed_sec": round(elapsed_total, 3),
+                    "video_decode_prep_sec": round(total_decode_prep_sec, 3),
+                    "motion_scan_sec": round(t_motion_scan_sec, 3),
+                    "chunk_prep_sec": round(t_chunk_prep_sec, 3),
+                    "synchronized_gpu_inference_sec": round(total_prop_sec, 3),
+                    "mask_transfer_sec": round(total_transfer_sec, 3),
+                    "geometry_extraction_sec": round(total_geometry_sec, 3),
+                    "keyframe_discovery_sec": round(t_discovery_sec, 3),
+                    "keyframe_classification_sec": round(t_classification_sec, 3),
+                    "persistence_sec": round(t_persistence_sec, 3),
+                    "export_deliverables_sec": round(t_export_deliv_sec, 3),
+                    "export_annotated_mp4_sec": round(t_export_mp4_sec, 3),
+                    "unaccounted_idle_sec": round(unaccounted_idle_sec, 3),
+                    "pct_gpu_inference": round((total_prop_sec / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "pct_video_decode_prep": round((total_decode_prep_sec / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "pct_keyframe_discovery": round((t_discovery_sec / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "pct_keyframe_classification": round((t_classification_sec / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "pct_geometry_and_transfer": round(((total_geometry_sec + total_transfer_sec) / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "pct_persistence": round((t_persistence_sec / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "pct_export": round(((t_export_deliv_sec + t_export_mp4_sec) / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "pct_unaccounted_idle": round((unaccounted_idle_sec / max(elapsed_total, 0.001)) * 100.0, 1),
+                    "unique_colonies_count": tracker.total_unique_colonies,
+                    "keyframes_count": len(keyframe_indices),
+                    "committed_frames": len(committed_frames),
+                }
+
                 with self._lock:
+                    job["timings"] = pipeline_timings
                     job["state"] = VideoJobState.COMPLETED
                     job["completed_at"] = time.time()
                     job["export_status"] = export_status
@@ -1261,6 +1332,7 @@ class VideoProcessor:
                     completed_at=time.time(),
                     export_paths=export_paths,
                     export_status=export_status,
+                    timings=pipeline_timings,
                 )
 
         except Exception as e:
