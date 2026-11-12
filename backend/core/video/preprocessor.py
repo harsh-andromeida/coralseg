@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 import cv2
 from typing import Dict, Any, List, Tuple
 
@@ -7,10 +9,50 @@ def standardize_video_to_25fps(input_path: str, output_path: str) -> Dict[str, A
     """
     Standardizes any video to a constant 25.0 FPS grid.
     Guarantees 1 second = exactly 25 frames (Frame 0 = 0.0s, Frame 25 = 1.0s, Frame 50 = 2.0s).
+    Uses web-standard H.264 (avc1) with +faststart (moov atom at start) for instant browser playback.
     """
     if not os.path.isfile(input_path):
         raise FileNotFoundError(f"Video file not found: {input_path}")
 
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+
+    # 1. Preferred method: Fast, universal H.264 browser-streamable conversion via ffmpeg
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin:
+        try:
+            cmd = [
+                ffmpeg_bin,
+                "-y",
+                "-i", input_path,
+                "-r", "25",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-preset", "fast",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            if res.returncode == 0 and os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+                # Probe output file
+                cap = cv2.VideoCapture(output_path)
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                cap.release()
+                if total > 0:
+                    return {
+                        "width": w,
+                        "height": h,
+                        "fps": 25.0,
+                        "total_frames": total,
+                        "duration_sec": round(total / 25.0, 2),
+                        "filename": os.path.basename(output_path),
+                        "file_size": os.path.getsize(output_path),
+                    }
+        except Exception as ffmpeg_err:
+            print(f"[preprocessor] ffmpeg conversion failed, falling back to OpenCV: {ffmpeg_err}")
+
+    # 2. Fallback: OpenCV frame-by-frame resampling
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video file: {input_path}")
@@ -35,9 +77,21 @@ def standardize_video_to_25fps(input_path: str, output_path: str) -> Dict[str, A
     duration_sec = orig_total / max(orig_fps, 1.0)
     target_total_frames = max(1, int(round(duration_sec * 25.0)))
 
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(output_path, fourcc, 25.0, (orig_w, orig_h))
+    # Try browser-compatible codecs first (avc1/H264), falling back to mp4v only if unsupported
+    writer = None
+    for codec_tag in ("avc1", "H264", "x264", "mp4v"):
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*codec_tag)
+            test_writer = cv2.VideoWriter(output_path, fourcc, 25.0, (orig_w, orig_h))
+            if test_writer.isOpened():
+                writer = test_writer
+                break
+        except Exception:
+            continue
+
+    if writer is None:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(output_path, fourcc, 25.0, (orig_w, orig_h))
 
     # Fast O(N) sequential frame resampling
     cur_src_idx = -1
@@ -60,6 +114,25 @@ def standardize_video_to_25fps(input_path: str, output_path: str) -> Dict[str, A
 
     cap.release()
     writer.release()
+
+    # Move moov atom to beginning if ffmpeg is available
+    if ffmpeg_bin and os.path.isfile(output_path):
+        temp_faststart = output_path + ".faststart.mp4"
+        try:
+            subprocess.run(
+                [ffmpeg_bin, "-y", "-i", output_path, "-c", "copy", "-movflags", "+faststart", temp_faststart],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+            )
+            if os.path.isfile(temp_faststart) and os.path.getsize(temp_faststart) > 0:
+                os.replace(temp_faststart, output_path)
+        except Exception:
+            if os.path.isfile(temp_faststart):
+                try:
+                    os.remove(temp_faststart)
+                except Exception:
+                    pass
 
     file_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
 

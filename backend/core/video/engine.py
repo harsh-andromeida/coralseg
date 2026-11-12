@@ -111,7 +111,11 @@ class VideoProcessor:
         # 1. Standardize video to constant 25.0 FPS grid
         storage_dir = os.path.dirname(os.path.abspath(video_path))
         base_name = os.path.splitext(os.path.basename(video_path))[0]
-        std_25fps_path = os.path.join(storage_dir, f"{base_name}_25fps.mp4")
+        # Prevent chaining _25fps redundantly (e.g. ..._25fps_25fps.mp4)
+        if base_name.endswith("_25fps"):
+            std_25fps_path = os.path.abspath(video_path)
+        else:
+            std_25fps_path = os.path.join(storage_dir, f"{base_name}_25fps.mp4")
 
         try:
             if not os.path.isfile(std_25fps_path) or os.path.abspath(video_path) != os.path.abspath(std_25fps_path):

@@ -142,6 +142,15 @@ def setup_colab_gpu_environment():
         print(f"  📦 Checking dependencies from {os.path.basename(req_file)}...", flush=True)
         subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"], check=False)
 
+    # Ensure ffmpeg is present for web-standard H.264 video streaming and +faststart
+    if not shutil.which("ffmpeg") and shutil.which("apt-get"):
+        print("  🎥 Installing ffmpeg for universal browser video streaming...", flush=True)
+        try:
+            subprocess.run(["apt-get", "update", "-qq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["apt-get", "install", "-y", "-qq", "ffmpeg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
 
 def ensure_production_frontend():
     """

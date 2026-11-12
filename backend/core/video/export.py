@@ -6,6 +6,8 @@ Utilizes fast vectorized OpenCV drawing operations for real-time video playback 
 import os
 import json
 import csv
+import shutil
+import subprocess
 from typing import List, Dict, Any, Tuple, Optional, Callable
 import numpy as np
 
@@ -195,6 +197,36 @@ def export_annotated_video(
     finally:
         cap.release()
         writer.release()
+
+        # Remux to universal browser H.264 (avc1) with +faststart if ffmpeg is available
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if ffmpeg_bin and os.path.isfile(output_mp4_path) and os.path.getsize(output_mp4_path) > 0:
+            temp_faststart = output_mp4_path + ".faststart.mp4"
+            try:
+                # Transcode to H.264 yuv420p + faststart to ensure instant HTML5 browser playback
+                subprocess.run(
+                    [
+                        ffmpeg_bin,
+                        "-y",
+                        "-i", output_mp4_path,
+                        "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p",
+                        "-preset", "fast",
+                        "-movflags", "+faststart",
+                        temp_faststart,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                )
+                if os.path.isfile(temp_faststart) and os.path.getsize(temp_faststart) > 0:
+                    os.replace(temp_faststart, output_mp4_path)
+            except Exception:
+                if os.path.isfile(temp_faststart):
+                    try:
+                        os.remove(temp_faststart)
+                    except Exception:
+                        pass
 
 
 def export_transect_csv(

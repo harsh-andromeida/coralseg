@@ -1463,8 +1463,11 @@ async def upload_video(file: UploadFile = File(...)):
         content = await file.read()
         buffer.write(content)
 
-    base, _ = os.path.splitext(clean_name)
-    std_name = f"{base}_25fps.mp4"
+    base, ext = os.path.splitext(clean_name)
+    if base.endswith("_25fps"):
+        std_name = clean_name
+    else:
+        std_name = f"{base}_25fps.mp4"
     std_path = os.path.join(VIDEO_STORAGE_DIR, std_name)
 
     try:
@@ -1525,16 +1528,38 @@ def get_sample_video():
 
 @app.get("/api/video/stream-file/{video_name}")
 def stream_video_file(video_name: str):
-    """Streams raw video file for HTML5 video player playback."""
+    """Streams raw video file for HTML5 video player playback with HTTP range support."""
     from fastapi.responses import FileResponse
-    target = os.path.join(VIDEO_STORAGE_DIR, os.path.basename(video_name))
+    clean_base = os.path.basename(video_name)
+    target = os.path.join(VIDEO_STORAGE_DIR, clean_base)
     if not os.path.isfile(target):
-        demo_target = os.path.join(BACKEND_DIR.parent, "demo_images", os.path.basename(video_name))
+        # Gracefully handle redundant _25fps_25fps naming
+        if "_25fps_25fps" in clean_base:
+            normalized_name = clean_base.replace("_25fps_25fps", "_25fps")
+            candidate = os.path.join(VIDEO_STORAGE_DIR, normalized_name)
+            if os.path.isfile(candidate):
+                target = candidate
+
+    if not os.path.isfile(target):
+        demo_target = os.path.join(BACKEND_DIR.parent, "demo_images", clean_base)
         if os.path.isfile(demo_target):
             target = demo_target
-        else:
-            raise HTTPException(status_code=404, detail=f"Video file '{video_name}' not found.")
-    return FileResponse(target, media_type="video/mp4")
+        elif "_25fps_25fps" in clean_base:
+            demo_norm = os.path.join(BACKEND_DIR.parent, "demo_images", clean_base.replace("_25fps_25fps", "_25fps"))
+            if os.path.isfile(demo_norm):
+                target = demo_norm
+
+    if not os.path.isfile(target):
+        raise HTTPException(status_code=404, detail=f"Video file '{video_name}' not found.")
+
+    return FileResponse(
+        target,
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=3600",
+        },
+    )
 
 
 @app.post("/api/video/process")

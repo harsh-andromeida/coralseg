@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
-import { Film, Sparkles } from "lucide-react";
+import { Film, Sparkles, AlertCircle } from "lucide-react";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CoralSegment } from "../../types";
@@ -52,6 +52,11 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
   const secondaryVideoRef = useRef<HTMLVideoElement>(null);
   const overlayContainerRef = useRef<HTMLDivElement>(null);
   const [renderBox, setRenderBox] = useState<VideoRenderBox>({ left: 0, top: 0, width: 0, height: 0 });
+  const [videoError, setVideoError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setVideoError(null);
+  }, [videoSrc]);
 
   // Sync secondary video for side-by-side playback
   useEffect(() => {
@@ -270,12 +275,31 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
               src={videoSrc}
               muted
               playsInline
+              preload="auto"
+              crossOrigin="anonymous"
+              onLoadedData={() => {
+                setVideoError(null);
+                updateRenderBox();
+              }}
+              onError={(e) => {
+                const mediaErr = (e.target as HTMLVideoElement).error;
+                const detail = mediaErr ? `(Code ${mediaErr.code}: ${mediaErr.message || "Codec unsupported or stream unreachable"})` : "";
+                setVideoError(`Video playback error ${detail}`);
+              }}
               onTimeUpdate={(e) => {
                 if (!isSideBySide) onTimeUpdate((e.target as HTMLVideoElement).currentTime);
               }}
               onEnded={onVideoEnded}
               className="max-h-[64vh] w-auto mx-auto object-contain select-none"
             />
+            {videoError && (
+              <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center text-white z-20">
+                <AlertCircle className="w-8 h-8 text-rose-400 mb-2" />
+                <p className="font-semibold text-sm">Failed to Load Video Stream</p>
+                <p className="text-xs text-slate-300 font-mono mt-1 max-w-md">{videoError}</p>
+                <p className="text-[11px] text-slate-400 mt-2">Source: <span className="font-mono text-cyan-300">{videoSrc}</span></p>
+              </div>
+            )}
           </div>
         </Card>
       )}
@@ -306,11 +330,30 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
               src={videoSrc}
               muted
               playsInline
+              preload="auto"
+              crossOrigin="anonymous"
               onLoadedMetadata={updateRenderBox}
+              onLoadedData={() => {
+                setVideoError(null);
+                updateRenderBox();
+              }}
+              onError={(e) => {
+                const mediaErr = (e.target as HTMLVideoElement).error;
+                const detail = mediaErr ? `(Code ${mediaErr.code}: ${mediaErr.message || "Codec unsupported or stream unreachable"})` : "";
+                setVideoError(`Video playback error ${detail}`);
+              }}
               onTimeUpdate={(e) => onTimeUpdate((e.target as HTMLVideoElement).currentTime)}
               onEnded={onVideoEnded}
               className="max-h-[64vh] w-auto mx-auto object-contain select-none"
             />
+            {videoError && (
+              <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center text-white z-20">
+                <AlertCircle className="w-8 h-8 text-rose-400 mb-2" />
+                <p className="font-semibold text-sm">Failed to Load Video Stream</p>
+                <p className="text-xs text-slate-300 font-mono mt-1 max-w-md">{videoError}</p>
+                <p className="text-[11px] text-slate-400 mt-2">Source: <span className="font-mono text-cyan-300">{videoSrc}</span></p>
+              </div>
+            )}
             {renderBox.width > 0 && renderBox.height > 0 && (
               <canvas
                 ref={canvasRef}
