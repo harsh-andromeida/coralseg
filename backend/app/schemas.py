@@ -194,11 +194,6 @@ class VideoProcessRequest(BaseModel):
     def validate_tracker_mode(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             v_clean = v.strip().lower()
-            if v_clean in ("optical_flow", "flow", "lucas_kanade"):
-                raise ValueError(
-                    "Optical flow inference engine has been removed. "
-                    "Use 'sam2' (default reference) or 'efficienttam' (experimental fast profile)."
-                )
             if v_clean not in ("sam2", "efficienttam"):
                 raise ValueError(f"Unsupported tracker mode '{v}'. Allowed: 'sam2', 'efficienttam'")
             return v_clean

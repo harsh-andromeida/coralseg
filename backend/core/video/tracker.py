@@ -38,8 +38,10 @@ class CoralTrack:
         bleaching: Optional[Dict[str, Any]] = None,
         compressed_mask: Optional[bytes] = None,
         max_history_len: int = 30,
+        global_colony_id: Optional[int] = None,
     ):
         self.track_id = int(track_id)
+        self.global_colony_id = int(global_colony_id) if global_colony_id is not None else int(track_id)
         self.bbox = [int(v) for v in bbox]  # [x, y, w, h] in original-space pixels
         self.polygon = [[float(p[0]), float(p[1])] for p in polygon]
         self.area_px = int(area_px)
@@ -127,6 +129,7 @@ class CoralTrack:
             bleaching=dict(self.bleaching) if self.bleaching else None,
             compressed_mask=self.compressed_mask,
             max_history_len=self.max_history_len,
+            global_colony_id=self.global_colony_id,
         )
         snap.first_seen_frame = self.first_seen_frame
         snap.last_seen_frame = self.last_seen_frame
@@ -137,10 +140,13 @@ class CoralTrack:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes track state for API responses and video overlay rendering."""
+        gid = self.global_colony_id
         return {
-            "track_id": self.track_id,
-            "id": self.track_id,
-            "id_str": f"#{self.track_id}",
+            "track_id": gid,
+            "id": gid,
+            "id_str": f"#{gid}",
+            "local_track_id": self.track_id,
+            "global_colony_id": gid,
             "bbox": self.bbox,
             "polygon": self.polygon,
             "centroid": list(self.centroid),
@@ -208,6 +214,7 @@ class BenthicColonyTracker:
 
         self._next_track_id = 1
         self._tracks: Dict[int, CoralTrack] = {}
+        self._local_to_global: Dict[int, int] = {}
         self._palette = generate_distinct_colors(200)
         self._last_retired_ids: List[int] = []
         self._last_matched_corrections: List[Tuple[CoralTrack, Dict[str, Any]]] = []
@@ -228,6 +235,7 @@ class BenthicColonyTracker:
         """Resets all active and historical tracks."""
         self._next_track_id = 1
         self._tracks.clear()
+        self._local_to_global.clear()
 
     def get_active_tracks(self) -> List[CoralTrack]:
         """Returns all currently active tracks within viewport."""
@@ -425,23 +433,35 @@ class BenthicColonyTracker:
             frame_idx=frame_idx,
             taxonomy=det.get("taxonomy"),
             bleaching=det.get("bleaching"),
+            global_colony_id=self._local_to_global.get(track_id, track_id),
         )
         self._tracks[track_id] = track
         return track
 
+    def apply_id_reconciliation(self, reconciliation_map: Dict[int, int]):
+        """
+        Simultaneously reconciles chunk-local IDs to existing global colony IDs
+        without destructively renaming dictionary keys or clobbering existing objects.
+        Keeps predictor-local IDs stable so subsequent SAM outputs continue to update cleanly.
+        """
+        for local_id, global_id in reconciliation_map.items():
+            self._local_to_global[local_id] = global_id
+            if local_id in self._tracks:
+                self._tracks[local_id].global_colony_id = global_id
+                if global_id >= self._next_track_id:
+                    self._next_track_id = global_id + 1
+
     def map_local_id_to_global(self, local_id: int, global_id: int):
-        """
-        Reconciles a chunk-local ID to an existing global ID.
-        Ensures global ID counts are not incremented spuriously.
-        """
-        if local_id in self._tracks and local_id != global_id:
-            track = self._tracks.pop(local_id)
-            track.track_id = global_id
-            self._tracks[global_id] = track
-            if global_id >= self._next_track_id:
-                self._next_track_id = global_id + 1
+        """Backwards compatibility helper delegating to apply_id_reconciliation."""
+        self.apply_id_reconciliation({local_id: global_id})
+
+    def get_global_id(self, local_id: int) -> int:
+        """Returns the resolved global colony ID for a given local ID."""
+        if local_id in self._tracks:
+            return self._tracks[local_id].global_colony_id
+        return self._local_to_global.get(local_id, local_id)
 
     @property
     def total_unique_colonies(self) -> int:
-        """Returns count of all unique colonies cataloged so far."""
-        return len(self._tracks)
+        """Returns count of all unique global colonies cataloged so far."""
+        return len({t.global_colony_id for t in self._tracks.values()})

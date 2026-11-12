@@ -132,7 +132,7 @@ class EgoMotionKeyframeSelector:
                 is_scene_cut = True
         self._prev_hist = curr_hist
 
-        # 3. Inter-frame motion estimation using pyramidal Lucas-Kanade on proxy resolution
+        # 3. Inter-frame camera motion estimation on proxy resolution
         pts_prev = cv2.goodFeaturesToTrack(
             self._prev_motion_gray if self._prev_motion_gray is not None else curr_motion_gray,
             maxCorners=200,

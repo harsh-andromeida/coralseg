@@ -37,4 +37,4 @@
 
 - **Zero Skipped Frames**: Every single source frame (all 202 frames) is accounted for and committed exactly once.
 - **Colony Identity Continuity**: 17 unique coral colonies tracked across transects with bipartite IoU matching across 16-frame chunk overlaps.
-- **No Optical-Flow Fallback**: Fully eliminated Lucas-Kanade optical-flow approximations; all temporal deformable mask propagations are driven purely by neural spatio-temporal memory attention.
+- **Pure Neural Tracking**: All temporal deformable mask propagations are driven purely by neural spatio-temporal memory attention.

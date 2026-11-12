@@ -2,7 +2,7 @@
 Asynchronous Video Inference Engine and Transect Processor for ReefVision.
 Coordinates bounded frame ingestion, ego-motion discovery scheduling, SAM-based benthic tracking,
 on-demand BioCLIP/YOLO enrichment, and durable status tracking with SQLite persistence.
-Optical-flow inference and automatic fallbacks to it have been completely removed.
+All temporal mask propagation is driven by spatio-temporal memory attention.
 """
 
 import os
@@ -12,6 +12,7 @@ import queue
 import tempfile
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable, Tuple
 from PIL import Image
 import numpy as np
@@ -279,13 +280,10 @@ class VideoProcessor:
         if params:
             opts.update(params)
 
-        # Enforce removal of optical-flow inference mode
+        # Validate tracker mode
         raw_mode = str(opts.get("tracker_mode", "sam2")).lower()
-        if raw_mode in ("optical_flow", "flow", "lucas_kanade"):
-            raise ValueError(
-                "Optical flow inference engine has been removed. "
-                "Use 'sam2' (default reference) or 'efficienttam' (fast profile)."
-            )
+        if raw_mode not in ("sam2", "efficienttam"):
+            raise ValueError(f"Unsupported tracker mode '{raw_mode}'. Allowed: 'sam2', 'efficienttam'")
 
         if opts["min_stride"] > opts["max_stride"]:
             raise ValueError(f"min_stride ({opts['min_stride']}) cannot exceed max_stride ({opts['max_stride']})")
@@ -537,7 +535,7 @@ class VideoProcessor:
 
         _set_stage(
             stage="Analyzing camera ego-motion & seafloor overlap...",
-            model="Lucas-Kanade Ego-Motion Estimator",
+            model="Camera Ego-Motion Estimator",
             action="Computing camera translation & benthic scene overlap",
             detail=f"Scanning frame 0/{total_frames}",
         )
@@ -635,7 +633,44 @@ class VideoProcessor:
         pipeline_start_t = time.time()
         committed_frames = set()
         accumulated_prop_sec = 0.0
+        accumulated_prop_frames = 0
         previous_chunk_overlap_frames: Dict[int, List[Dict[str, Any]]] = {}
+        overlap_start_frames = {c.start_frame for c in chunk_plan if c.chunk_idx > 0}
+        saved_overlap_start_tracks: Dict[int, List[Dict[str, Any]]] = {}
+
+        def _save_overlap_snapshot(f_idx: int, tracks: List[CoralTrack]):
+            if f_idx not in overlap_start_frames:
+                return
+            snaps = []
+            for trk in tracks:
+                if getattr(trk, "active", False):
+                    m_poly = None
+                    if trk.polygon:
+                        m_poly = np.zeros((height, width), dtype=np.uint8)
+                        pts = np.array(trk.polygon, dtype=np.int32).reshape((-1, 1, 2))
+                        cv2.fillPoly(m_poly, [pts], 1)
+                        m_poly = m_poly.astype(bool)
+                    snaps.append({
+                        "track_id": trk.track_id,
+                        "global_colony_id": trk.global_colony_id,
+                        "mask": m_poly,
+                        "polygon": trk.polygon,
+                        "bbox": trk.bbox,
+                        "metadata": {
+                            "track_id": trk.track_id,
+                            "global_colony_id": trk.global_colony_id,
+                            "genus": trk.taxonomy.get("genus", "Coral"),
+                            "growth_form": trk.taxonomy.get("growth_form", "-"),
+                            "taxon_conf": trk.taxonomy.get("confidence_pct", 85.0),
+                            "condition": trk.bleaching.get("status", "Healthy"),
+                            "condition_conf": trk.bleaching.get("confidence_pct", 90.0),
+                            "is_bleached": trk.bleaching.get("is_bleached", False),
+                            "color_hex": trk.color_hex,
+                            "first_seen_frame": trk.first_seen_frame,
+                            "predicted_iou": trk.predicted_iou,
+                        },
+                    })
+            saved_overlap_start_tracks[f_idx] = snaps
 
         def _record_frame_state(cur_f: int, current_active_tracks: List[Any]):
             """Records and commits logical output frame state exactly once into durable store."""
@@ -677,8 +712,9 @@ class VideoProcessor:
             cur_analysis_fps = round(len(committed_frames) / elapsed, 1)
 
             tracker_timings = sam2_tracker.get_timings()
-            prop_sec = accumulated_prop_sec + tracker_timings.get("propagation_sec", 0.0)
-            tracker_fps = round(len(committed_frames) / max(0.001, prop_sec), 1) if prop_sec > 0 else cur_analysis_fps
+            cur_prop_sec = accumulated_prop_sec + tracker_timings.get("propagation_sec", 0.0)
+            cur_prop_frames = accumulated_prop_frames + tracker_timings.get("frames_propagated", 0)
+            tracker_fps = round(cur_prop_frames / max(0.001, cur_prop_sec), 1) if cur_prop_sec > 0 else cur_analysis_fps
 
             # Persist frame geometry and survey metrics into SQLite
             track_snapshots = [t.to_dict() if hasattr(t, "to_dict") else t for t in current_active_tracks]
@@ -719,6 +755,23 @@ class VideoProcessor:
                 job["fps_realtime"] = cur_analysis_fps
                 job["elapsed_sec"] = round(elapsed, 2)
 
+        prefetch_executor = ThreadPoolExecutor(max_workers=1)
+        next_chunk_future = None
+        next_chunk_dir = None
+        if chunk_plan:
+            c0 = chunk_plan[0]
+            c0_dir = os.path.join(tempfile.gettempdir(), f"rv_chunk_{job_id}_{c0.chunk_idx}_{os.getpid()}")
+            next_chunk_future = prefetch_executor.submit(
+                prepare_bounded_chunk_frames,
+                video_path=video_path,
+                chunk_dir=c0_dir,
+                start_frame=c0.start_frame,
+                end_frame=c0.end_frame,
+                max_dim=480,
+                jpeg_quality=80,
+            )
+            next_chunk_dir = c0_dir
+
         current_chunk_dir = None
         try:
             for chunk_idx, chunk in enumerate(chunk_plan):
@@ -738,53 +791,49 @@ class VideoProcessor:
                     detail=f"Chunk {chunk.chunk_idx + 1} of {len(chunk_plan)} ({chunk.total_frames} frames)",
                 )
 
-                chunk_dir = os.path.join(tempfile.gettempdir(), f"rv_chunk_{job_id}_{chunk.chunk_idx}_{os.getpid()}")
+                chunk_dir = next_chunk_dir
                 current_chunk_dir = chunk_dir
 
-                _, proxy_meta = prepare_bounded_chunk_frames(
-                    video_path=video_path,
-                    chunk_dir=chunk_dir,
-                    start_frame=chunk.start_frame,
-                    end_frame=chunk.end_frame,
-                    max_dim=480,
-                    jpeg_quality=80,
-                )
+                _, proxy_meta = next_chunk_future.result()
                 scale_x = proxy_meta.get("scale_x", 1.0)
                 scale_y = proxy_meta.get("scale_y", 1.0)
+
+                # Prefetch next chunk in background thread while this chunk runs SAM inference
+                if chunk_idx + 1 < len(chunk_plan):
+                    next_c = chunk_plan[chunk_idx + 1]
+                    next_chunk_dir = os.path.join(tempfile.gettempdir(), f"rv_chunk_{job_id}_{next_c.chunk_idx}_{os.getpid()}")
+                    next_chunk_future = prefetch_executor.submit(
+                        prepare_bounded_chunk_frames,
+                        video_path=video_path,
+                        chunk_dir=next_chunk_dir,
+                        start_frame=next_c.start_frame,
+                        end_frame=next_c.end_frame,
+                        max_dim=480,
+                        jpeg_quality=80,
+                    )
+                else:
+                    next_chunk_future = None
+                    next_chunk_dir = None
 
                 sam2_tracker.init_video(chunk_dir, frame_offset=chunk.start_frame)
 
                 # Carry forward active tracks into this chunk's SAM inference state
+                # seeded from the exact overlap start frame (Fixes P1 Issue 1)
                 if chunk.chunk_idx > 0:
-                    for trk in tracker.get_active_tracks():
-                        m_reg = getattr(trk, "mask", None)
-                        if m_reg is None and trk.polygon:
-                            m_reg = np.zeros((height, width), dtype=np.uint8)
-                            pts = np.array(trk.polygon, dtype=np.int32).reshape((-1, 1, 2))
-                            cv2.fillPoly(m_reg, [pts], 1)
-                            m_reg = m_reg.astype(bool)
+                    seed_tracks = saved_overlap_start_tracks.get(chunk.start_frame, [])
+                    for s_trk in seed_tracks:
+                        m_reg = s_trk.get("mask")
                         if m_reg is not None:
                             try:
                                 sam2_tracker.register_mask(
                                     frame_idx=chunk.start_frame,
-                                    obj_id=trk.track_id,
+                                    obj_id=s_trk["track_id"],
                                     binary_mask=m_reg,
                                     is_correction=False,
-                                    metadata={
-                                        "track_id": trk.track_id,
-                                        "genus": trk.taxonomy.get("genus", "Coral"),
-                                        "growth_form": trk.taxonomy.get("growth_form", "-"),
-                                        "taxon_conf": trk.taxonomy.get("confidence_pct", 85.0),
-                                        "condition": trk.bleaching.get("status", "Healthy"),
-                                        "condition_conf": trk.bleaching.get("confidence_pct", 90.0),
-                                        "is_bleached": trk.bleaching.get("is_bleached", False),
-                                        "color_hex": trk.color_hex,
-                                        "first_seen_frame": trk.first_seen_frame,
-                                        "predicted_iou": trk.predicted_iou,
-                                    },
+                                    metadata=s_trk["metadata"],
                                 )
                             except Exception as reg_err:
-                                _set_stage(log_entry=f"Warning registering existing coral {trk.track_id} into chunk: {reg_err}")
+                                _set_stage(log_entry=f"Warning registering coral {s_trk['track_id']} into chunk {chunk.chunk_idx}: {reg_err}")
 
                 c_keyframes = [kf for kf in keyframe_indices if chunk.start_frame <= kf < chunk.end_frame]
                 if not c_keyframes and chunk.chunk_idx == 0:
@@ -823,6 +872,7 @@ class VideoProcessor:
                                 )
 
                         active_tracks = tracker.get_active_tracks()
+                        _save_overlap_snapshot(out_f, active_tracks)
                         if chunk.has_overlap and chunk.reconcile_start <= out_f < chunk.reconcile_end:
                             incoming_chunk_overlap_tracks[out_f] = [t.to_dict() for t in active_tracks]
                             if out_f == chunk.reconcile_end - 1 and previous_chunk_overlap_frames:
@@ -831,8 +881,7 @@ class VideoProcessor:
                                     incoming_chunk_overlap_tracks,
                                     iou_threshold=0.50,
                                 )
-                                for inc_id, ex_id in rec_map.items():
-                                    tracker.map_local_id_to_global(inc_id, ex_id)
+                                tracker.apply_id_reconciliation(rec_map)
 
                         if chunk.commit_start <= out_f < chunk.commit_end:
                             _record_frame_state(out_f, active_tracks)
@@ -1016,6 +1065,7 @@ class VideoProcessor:
 
                     # Record keyframe if in commit range
                     active_tracks = tracker.get_active_tracks()
+                    _save_overlap_snapshot(kf_frame_idx, active_tracks)
                     if chunk.has_overlap and chunk.reconcile_start <= kf_frame_idx < chunk.reconcile_end:
                         incoming_chunk_overlap_tracks[kf_frame_idx] = [t.to_dict() for t in active_tracks]
                         if kf_frame_idx == chunk.reconcile_end - 1 and previous_chunk_overlap_frames:
@@ -1024,8 +1074,7 @@ class VideoProcessor:
                                 incoming_chunk_overlap_tracks,
                                 iou_threshold=0.50,
                             )
-                            for inc_id, ex_id in rec_map.items():
-                                tracker.map_local_id_to_global(inc_id, ex_id)
+                            tracker.apply_id_reconciliation(rec_map)
 
                     if chunk.commit_start <= kf_frame_idx < chunk.commit_end:
                         _record_frame_state(kf_frame_idx, active_tracks)
@@ -1059,6 +1108,7 @@ class VideoProcessor:
                                     )
 
                             active = tracker.get_active_tracks()
+                            _save_overlap_snapshot(out_f, active)
                             if chunk.has_overlap and chunk.reconcile_start <= out_f < chunk.reconcile_end:
                                 incoming_chunk_overlap_tracks[out_f] = [t.to_dict() for t in active]
                                 if out_f == chunk.reconcile_end - 1 and previous_chunk_overlap_frames:
@@ -1067,8 +1117,7 @@ class VideoProcessor:
                                         incoming_chunk_overlap_tracks,
                                         iou_threshold=0.50,
                                     )
-                                    for inc_id, ex_id in rec_map.items():
-                                        tracker.map_local_id_to_global(inc_id, ex_id)
+                                    tracker.apply_id_reconciliation(rec_map)
 
                             if chunk.commit_start <= out_f < chunk.commit_end:
                                 _record_frame_state(out_f, active)
@@ -1079,6 +1128,8 @@ class VideoProcessor:
                 # Accumulate timings and complete chunk
                 timings = sam2_tracker.get_timings()
                 accumulated_prop_sec += timings.get("propagation_sec", 0.0)
+                accumulated_prop_frames += timings.get("frames_propagated", 0)
+                sam2_tracker.reset_timings()
                 previous_chunk_overlap_frames = tail_overlap_tracks
                 self.store.update_chunk_status(job_id, chunk.chunk_idx, "completed")
                 cleanup_chunk_dir(chunk_dir)
@@ -1233,7 +1284,13 @@ class VideoProcessor:
             )
         finally:
             cap.release()
+            try:
+                prefetch_executor.shutdown(wait=False)
+            except Exception:
+                pass
             if sam2_tracker:
                 sam2_tracker.close()
             if current_chunk_dir:
                 cleanup_chunk_dir(current_chunk_dir)
+            if next_chunk_dir and os.path.exists(next_chunk_dir):
+                cleanup_chunk_dir(next_chunk_dir)

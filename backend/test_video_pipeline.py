@@ -284,8 +284,9 @@ def test_benthic_colony_tracker_lifecycle():
 
     # Test global ID mapping without spurious increment
     tracker.map_local_id_to_global(local_id=1, global_id=10)
-    assert 10 in tracker._tracks
-    assert 1 not in tracker._tracks
+    assert tracker.get_global_id(1) == 10
+    assert tracker._tracks[1].global_colony_id == 10
+    assert tracker._tracks[1].to_dict()["id"] == 10
     print("  Deterministic global ID mapping verified.")
 
 
@@ -335,13 +336,13 @@ def test_video_api_endpoints():
 
     client = TestClient(app)
 
-    # 1. Test rejection of optical_flow mode
+    # 1. Test rejection of unsupported tracker mode
     resp_reject = client.post("/api/video/process", json={
         "video_name": "non_existent.mp4",
-        "tracker_mode": "optical_flow",
+        "tracker_mode": "unsupported_legacy_mode",
     })
-    assert resp_reject.status_code == 422, f"Expected 422 for optical_flow rejection, got {resp_reject.status_code}"
-    print("  Rejected optical_flow tracker mode verified with 422.")
+    assert resp_reject.status_code == 422, f"Expected 422 for unsupported tracker mode rejection, got {resp_reject.status_code}"
+    print("  Rejected unsupported tracker mode verified with 422.")
 
     # 2. Test rejection of invalid strides
     resp_stride = client.post("/api/video/process", json={

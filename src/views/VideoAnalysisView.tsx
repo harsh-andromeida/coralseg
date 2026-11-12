@@ -153,13 +153,14 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
           }
         }
 
-        // Bound in-memory cache to prevent memory bloat on large videos
+        // Bound in-memory cache to strictly enforce the 800-frame limit
         if (frameCacheRef.current.size > 800) {
+          const numToEvict = frameCacheRef.current.size - 800;
           const active = activeFrameRef.current;
           const sortedByDist = Array.from(frameCacheRef.current.keys()).sort(
             (a, b) => Math.abs(b - active) - Math.abs(a - active)
           );
-          for (let i = 0; i < 200 && i < sortedByDist.length; i++) {
+          for (let i = 0; i < numToEvict && i < sortedByDist.length; i++) {
             frameCacheRef.current.delete(sortedByDist[i]);
           }
         }

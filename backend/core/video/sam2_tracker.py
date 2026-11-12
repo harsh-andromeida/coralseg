@@ -96,6 +96,17 @@ def _resolve_torch_device(pref: Optional[str] = None) -> str:
     return "cpu"
 
 
+def _sync_device(device: str):
+    """Synchronizes accelerator stream so host timings reflect true hardware compute latency."""
+    if device == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elif device == "mps" and hasattr(torch, "mps") and torch.backends.mps.is_available():
+        try:
+            torch.mps.synchronize()
+        except Exception:
+            pass
+
+
 def _resolve_precision(device: str, user_precision: Optional[str] = None) -> Tuple[torch.dtype, bool]:
     """
     Selects hardware-validated precision:
@@ -367,11 +378,13 @@ class SAM2BenthicTracker(BaseVideoTracker):
                 it = iter(gen)
                 while frames_yielded < len(expected_frame_indices):
                     # Measure pure model propagation / GPU inference latency around generator advancement
+                    _sync_device(self.device)
                     t_infer_start = time.perf_counter()
                     try:
                         out_frame_idx, out_obj_ids, out_mask_logits = next(it)
                     except StopIteration:
                         break
+                    _sync_device(self.device)
                     t_infer_end = time.perf_counter()
                     self._timings["propagation_sec"] += (t_infer_end - t_infer_start)
 
@@ -515,24 +528,32 @@ class SAM2BenthicTracker(BaseVideoTracker):
 
     def retire_objects(self, obj_ids: List[int]):
         """
-        Removes specified objects from active SAM 2 computation memory.
-        Prevents unbounded growth of active track tracking state.
+        Removes specified objects from active SAM 2 computation memory and adapter metadata.
+        Prevents unbounded growth of active track tracking state. Surfaces removal failures.
         """
         if not self.initialized or self._inference_state is None:
+            for oid in obj_ids:
+                self._tracks_meta.pop(oid, None)
             return
 
         with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
             for oid in obj_ids:
-                try:
-                    if hasattr(self._predictor, "remove_object"):
+                self._tracks_meta.pop(oid, None)
+                if hasattr(self._predictor, "remove_object"):
+                    try:
                         self._predictor.remove_object(
                             self._inference_state,
                             obj_id=oid,
                             strict=False,
                             need_output=False,
                         )
-                except Exception:
-                    pass
+                    except Exception as rem_err:
+                        print(f"[SAM2BenthicTracker] Warning removing object {oid} from inference state: {rem_err}")
+
+    def reset_timings(self):
+        """Resets timing accumulators for a new processing chunk."""
+        for k in self._timings:
+            self._timings[k] = 0.0
 
     def reset(self):
         """Resets active tracking state while keeping loaded model."""

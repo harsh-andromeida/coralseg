@@ -23,7 +23,13 @@ try:
 except ImportError:
     _HAS_TORCH = False
 
-from core.video.sam2_tracker import BaseVideoTracker
+from core.video.sam2_tracker import (
+    BaseVideoTracker,
+    _resolve_precision,
+    _get_autocast_context,
+    _resolve_torch_device,
+    _sync_device,
+)
 
 try:
     from efficient_track_anything.build_efficienttam import build_efficienttam_video_predictor
@@ -57,25 +63,9 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
         self.checkpoint_path = checkpoint_path
         self.offload_to_cpu = offload_to_cpu
 
-        # Device resolution
-        if device == "auto":
-            if _HAS_TORCH and torch.cuda.is_available():
-                self.device = "cuda"
-            elif _HAS_TORCH and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                self.device = "mps"
-            else:
-                self.device = "cpu"
-        else:
-            self.device = device
-
-        # Precision resolution
-        if self.device == "cuda":
-            if precision == "bf16" and _HAS_TORCH and torch.cuda.is_bf16_supported():
-                self.dtype = torch.bfloat16
-            else:
-                self.dtype = torch.float16 if _HAS_TORCH else None
-        else:
-            self.dtype = torch.float32 if _HAS_TORCH else None
+        # Device and Precision resolution
+        self.device = _resolve_torch_device(device)
+        self.dtype, self.use_autocast = _resolve_precision(self.device, precision)
 
         self.predictor = None
         self.inference_state = None
@@ -163,12 +153,13 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
         self.frame_offset = frame_offset
         t0 = time.perf_counter()
         try:
-            if hasattr(self.predictor, "init_state"):
-                self.inference_state = self.predictor.init_state(
-                    video_path=video_source,
-                    offload_video_to_cpu=self.offload_to_cpu,
-                    offload_state_to_cpu=self.offload_to_cpu,
-                )
+            with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
+                if hasattr(self.predictor, "init_state"):
+                    self.inference_state = self.predictor.init_state(
+                        video_path=video_source,
+                        offload_video_to_cpu=self.offload_to_cpu,
+                        offload_state_to_cpu=self.offload_to_cpu,
+                    )
             self.initialized = True
         finally:
             self._timings["initialization_sec"] += time.perf_counter() - t0
@@ -197,13 +188,14 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
                     mask_bool = cv2.resize(mask_bool.astype(np.uint8), (tw, th), interpolation=cv2.INTER_NEAREST).astype(bool)
 
             local_frame_idx = frame_idx - getattr(self, "frame_offset", 0)
-            if hasattr(self.predictor, "add_new_mask"):
-                self.predictor.add_new_mask(
-                    inference_state=self.inference_state,
-                    frame_idx=local_frame_idx,
-                    obj_id=obj_id,
-                    mask=mask_bool,
-                )
+            with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
+                if hasattr(self.predictor, "add_new_mask"):
+                    self.predictor.add_new_mask(
+                        inference_state=self.inference_state,
+                        frame_idx=local_frame_idx,
+                        obj_id=obj_id,
+                        mask=mask_bool,
+                    )
 
             self._tracks_meta[obj_id] = {
                 "track_id": obj_id,
@@ -243,79 +235,82 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
         local_start = start_frame_idx - offset
         frames_yielded = 0
 
-        prop_gen = self.predictor.propagate_in_video(
-            self.inference_state,
-            start_frame_idx=local_start,
-            max_frame_num_to_track=expected_count - 1,
-        )
+        with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
+            prop_gen = self.predictor.propagate_in_video(
+                self.inference_state,
+                start_frame_idx=local_start,
+                max_frame_num_to_track=expected_count - 1,
+            )
 
-        try:
-            it = iter(prop_gen)
-            while frames_yielded < len(expected_indices):
-                t_infer_start = time.perf_counter()
-                try:
-                    out_frame_idx, out_obj_ids, out_mask_logits = next(it)
-                except StopIteration:
-                    break
-                t_infer_end = time.perf_counter()
-                self._timings["propagation_sec"] += (t_infer_end - t_infer_start)
+            try:
+                it = iter(prop_gen)
+                while frames_yielded < len(expected_indices):
+                    _sync_device(self.device)
+                    t_infer_start = time.perf_counter()
+                    try:
+                        out_frame_idx, out_obj_ids, out_mask_logits = next(it)
+                    except StopIteration:
+                        break
+                    _sync_device(self.device)
+                    t_infer_end = time.perf_counter()
+                    self._timings["propagation_sec"] += (t_infer_end - t_infer_start)
 
-                abs_out_frame_idx = out_frame_idx + offset
-                if abs_out_frame_idx >= end_frame_idx:
-                    break
+                    abs_out_frame_idx = out_frame_idx + offset
+                    if abs_out_frame_idx >= end_frame_idx:
+                        break
 
-                expected_idx = expected_indices[frames_yielded]
-                if abs_out_frame_idx != expected_idx:
-                    raise RuntimeError(
-                        f"EfficientTAM propagation index mismatch: expected {expected_idx}, got {abs_out_frame_idx}"
-                    )
+                    expected_idx = expected_indices[frames_yielded]
+                    if abs_out_frame_idx != expected_idx:
+                        raise RuntimeError(
+                            f"EfficientTAM propagation index mismatch: expected {expected_idx}, got {abs_out_frame_idx}"
+                        )
 
-                if len(out_obj_ids) == 0:
-                    yield abs_out_frame_idx, []
-                    frames_yielded += 1
-                    continue
-
-                t_trans = time.perf_counter()
-                if hasattr(out_mask_logits, "cpu"):
-                    bin_masks = (out_mask_logits > 0.0).cpu().numpy()
-                else:
-                    bin_masks = (out_mask_logits > 0.0)
-                if bin_masks.ndim == 2:
-                    bin_masks = np.expand_dims(bin_masks, axis=0)
-                self._timings["transfer_sec"] += time.perf_counter() - t_trans
-
-                t_geom = time.perf_counter()
-                frame_detections = []
-                for idx, obj_id in enumerate(out_obj_ids):
-                    if obj_id not in self._tracks_meta:
+                    if len(out_obj_ids) == 0:
+                        yield abs_out_frame_idx, []
+                        frames_yielded += 1
                         continue
-                    bin_mask = bin_masks[idx]
-                    if bin_mask.ndim == 3:
-                        bin_mask = bin_mask[0]
 
-                    geom = self._extract_geometry(bin_mask, scale_x, scale_y)
-                    if geom:
-                        frame_detections.append({
-                            "track_id": int(obj_id),
-                            "id": int(obj_id),
-                            "id_str": f"#{obj_id}",
-                            **geom,
-                            **self._tracks_meta[obj_id].get("metadata", {}),
-                        })
+                    t_trans = time.perf_counter()
+                    if hasattr(out_mask_logits, "cpu"):
+                        bin_masks = (out_mask_logits > 0.0).cpu().numpy()
+                    else:
+                        bin_masks = (out_mask_logits > 0.0)
+                    if bin_masks.ndim == 2:
+                        bin_masks = np.expand_dims(bin_masks, axis=0)
+                    self._timings["transfer_sec"] += time.perf_counter() - t_trans
 
-                self._timings["geometry_sec"] += time.perf_counter() - t_geom
+                    t_geom = time.perf_counter()
+                    frame_detections = []
+                    for idx, obj_id in enumerate(out_obj_ids):
+                        if obj_id not in self._tracks_meta:
+                            continue
+                        bin_mask = bin_masks[idx]
+                        if bin_mask.ndim == 3:
+                            bin_mask = bin_mask[0]
 
-                yield abs_out_frame_idx, frame_detections
-                frames_yielded += 1
+                        geom = self._extract_geometry(bin_mask, scale_x, scale_y)
+                        if geom:
+                            frame_detections.append({
+                                "track_id": int(obj_id),
+                                "id": int(obj_id),
+                                "id_str": f"#{obj_id}",
+                                **geom,
+                                **self._tracks_meta[obj_id].get("metadata", {}),
+                            })
 
-            if frames_yielded != len(expected_indices):
-                raise RuntimeError(
-                    f"EfficientTAM propagation truncated: expected {len(expected_indices)} frames "
-                    f"[{start_frame_idx}, {end_frame_idx}), yielded only {frames_yielded}"
-                )
-        finally:
-            if hasattr(prop_gen, "close"):
-                prop_gen.close()
+                    self._timings["geometry_sec"] += time.perf_counter() - t_geom
+
+                    yield abs_out_frame_idx, frame_detections
+                    frames_yielded += 1
+
+                if frames_yielded != len(expected_indices):
+                    raise RuntimeError(
+                        f"EfficientTAM propagation truncated: expected {len(expected_indices)} frames "
+                        f"[{start_frame_idx}, {end_frame_idx}), yielded only {frames_yielded}"
+                    )
+            finally:
+                if hasattr(prop_gen, "close"):
+                    prop_gen.close()
 
     def _extract_geometry(self, mask: np.ndarray, scale_x: float, scale_y: float) -> Optional[Dict[str, Any]]:
         """Extracts canonical polygon, bbox, centroid, and area_px from a binary mask."""
@@ -366,9 +361,33 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
         }
 
     def retire_objects(self, obj_ids: List[int]):
-        """Retires objects from active state."""
-        for oid in obj_ids:
-            self._tracks_meta.pop(oid, None)
+        """
+        Removes specified objects from active EfficientTAM computation memory and adapter metadata.
+        Surfaces removal failures.
+        """
+        if not self.initialized or self.inference_state is None:
+            for oid in obj_ids:
+                self._tracks_meta.pop(oid, None)
+            return
+
+        with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
+            for oid in obj_ids:
+                self._tracks_meta.pop(oid, None)
+                if hasattr(self.predictor, "remove_object"):
+                    try:
+                        self.predictor.remove_object(
+                            self.inference_state,
+                            obj_id=oid,
+                            strict=False,
+                            need_output=False,
+                        )
+                    except Exception as rem_err:
+                        print(f"[EfficientTAMBenthicTracker] Warning removing object {oid} from inference state: {rem_err}")
+
+    def reset_timings(self):
+        """Resets timing accumulators for a new processing chunk."""
+        for k in self._timings:
+            self._timings[k] = 0.0
 
     def reset(self):
         """Resets active tracks and inference state."""

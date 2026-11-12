@@ -192,18 +192,17 @@ def admit_workers_for_device(
     if device_type == "cpu" or device_pref == "cpu":
         return 1
 
-    # On CUDA, admit workers based on available VRAM budget
+    # On CUDA, admit workers based on cumulative available VRAM and host budget
     admitted = 0
+    estimated_vram_per_worker = 600 * 1024 * 1024
+    estimated_host_per_worker = 800 * 1024 * 1024
     for w in range(1, requested_workers + 1):
-        # Estimate ~600 MiB per SAM 2 Tiny worker at 512px
-        estimated_vram_bytes = 600 * 1024 * 1024
-        estimated_host_bytes = 800 * 1024 * 1024
         can_admit, _ = can_admit_worker(
-            estimated_worker_vram_bytes=estimated_vram_bytes,
-            estimated_worker_host_bytes=estimated_host_bytes,
+            estimated_worker_vram_bytes=w * estimated_vram_per_worker,
+            estimated_worker_host_bytes=w * estimated_host_per_worker,
         )
         if can_admit:
-            admitted += 1
+            admitted = w
         else:
             break
 
