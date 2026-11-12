@@ -209,6 +209,20 @@ class BenthicColonyTracker:
         self._next_track_id = 1
         self._tracks: Dict[int, CoralTrack] = {}
         self._palette = generate_distinct_colors(200)
+        self._last_retired_ids: List[int] = []
+        self._last_matched_corrections: List[Tuple[CoralTrack, Dict[str, Any]]] = []
+
+    def pop_retired_ids(self) -> List[int]:
+        """Returns and clears track IDs retired during the last keyframe association."""
+        res = list(self._last_retired_ids)
+        self._last_retired_ids.clear()
+        return res
+
+    def pop_matched_corrections(self) -> List[Tuple[CoralTrack, Dict[str, Any]]]:
+        """Returns and clears (CoralTrack, detection_dict) pairs matched on the last keyframe."""
+        res = list(self._last_matched_corrections)
+        self._last_matched_corrections.clear()
+        return res
 
     def reset(self):
         """Resets all active and historical tracks."""
@@ -324,6 +338,7 @@ class BenthicColonyTracker:
                     pairs.append((score_matrix[i, j], i, j))
         pairs.sort(key=lambda x: x[0], reverse=True)
 
+        matched_corrections: List[Tuple[CoralTrack, Dict[str, Any]]] = []
         for _, trk_idx, det_idx in pairs:
             if trk_idx in matched_tracks or det_idx in matched_dets:
                 continue
@@ -343,14 +358,21 @@ class BenthicColonyTracker:
                 frame_idx=frame_idx,
                 predicted_iou=det.get("predicted_iou"),
             )
+            track.hits += 1
+            track.active = True
+            track.last_seen_frame = frame_idx
 
             if "taxonomy" in det and det["taxonomy"]:
                 track.taxonomy = det["taxonomy"]
             if "bleaching" in det and det["bleaching"]:
                 track.bleaching = det["bleaching"]
 
+            matched_corrections.append((track, det))
+
         # Check absent tracks for retirement
-        self.retire_absent_tracks(frame_idx)
+        retired_ids = self.retire_absent_tracks(frame_idx)
+        self._last_retired_ids = retired_ids
+        self._last_matched_corrections = matched_corrections
 
         # Spawn new tracks for unmatched detections
         for j, det in enumerate(normalized_dets):

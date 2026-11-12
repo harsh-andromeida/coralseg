@@ -54,6 +54,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   const frameCacheRef = useRef<Map<number, VideoTrackItem[]>>(new Map());
   const activeFrameRef = useRef<number>(0);
   const lastCommittedSeqRef = useRef<number>(0);
+  const isPollingDeltaRef = useRef<boolean>(false);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState<boolean>(false);
 
   const [jobId] = useState<string>(initialJobId || videoItem.job_id || "");
@@ -114,77 +115,90 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     }
   };
 
-  // Load initial batch of frame annotations on mount using delta query
-  useEffect(() => {
-    if (!jobId) return;
-    getVideoFramesDelta(jobId, 0, 64)
-      .then((deltaRes) => {
-        if (deltaRes && deltaRes.frames) {
-          deltaRes.frames.forEach((item) => {
-            frameCacheRef.current.set(item.frame_idx, item.tracks);
-          });
-          if (deltaRes.max_seq > lastCommittedSeqRef.current) {
-            lastCommittedSeqRef.current = deltaRes.max_seq;
-          }
-          if (frameCacheRef.current.has(currentFrameIdx)) {
-            setCurrentTracks(frameCacheRef.current.get(currentFrameIdx)!);
-          }
-        }
-      })
-      .catch(() => {});
-  }, [jobId]);
-
-  // Poll background job status and advance live video stream
+  // Poll background job status, drain delta pages, and advance live video stream
   useEffect(() => {
     if (!jobId) return;
 
     let isMounted = true;
-    const interval = setInterval(async () => {
+
+    const pollAndDrain = async () => {
+      if (isPollingDeltaRef.current) return;
+      isPollingDeltaRef.current = true;
+
       try {
         const s = await getVideoStatus(jobId);
-        if (isMounted) {
-          setJobStatus(s);
+        if (!isMounted) return;
+        setJobStatus(s);
 
-          // Fetch newly available processed frames via bounded delta query (up to 64 frames per query)
-          getVideoFramesDelta(jobId, lastCommittedSeqRef.current, 64)
-            .then((deltaRes) => {
-              if (deltaRes && deltaRes.frames && deltaRes.frames.length > 0) {
-                deltaRes.frames.forEach((item) => {
-                  frameCacheRef.current.set(item.frame_idx, item.tracks);
-                });
-                if (deltaRes.max_seq > lastCommittedSeqRef.current) {
-                  lastCommittedSeqRef.current = deltaRes.max_seq;
-                }
-                if (frameCacheRef.current.has(activeFrameRef.current)) {
-                  setCurrentTracks(frameCacheRef.current.get(activeFrameRef.current)!);
-                }
-              }
-            })
-            .catch(() => {});
+        // Drain delta pages until caught up or batch limit reached (supports completed jobs)
+        let hasMore = true;
+        let drainCycles = 0;
+        while (hasMore && drainCycles < 4 && isMounted) {
+          drainCycles++;
+          const deltaRes = await getVideoFramesDelta(jobId, lastCommittedSeqRef.current, 64);
+          if (!isMounted) break;
 
-          // ONLY auto-advance player to follow live stream if user is NOT playing and is following live
-          if (s.state === "processing" && isFollowingLive && !isPlaying && s.current_frame > 0) {
-            const liveFrame = Math.max(0, Math.min(totalFrames - 1, s.current_frame - 1));
-            activeFrameRef.current = liveFrame;
-            setCurrentFrameIdx(liveFrame);
-            const liveSec = liveFrame / fps;
-            setCurrentTimeSec(liveSec);
-            if (videoRef.current) {
-              videoRef.current.currentTime = liveSec;
+          if (deltaRes && deltaRes.frames && deltaRes.frames.length > 0) {
+            deltaRes.frames.forEach((item) => {
+              frameCacheRef.current.set(item.frame_idx, item.tracks);
+            });
+            if (deltaRes.max_seq > lastCommittedSeqRef.current) {
+              lastCommittedSeqRef.current = deltaRes.max_seq;
             }
-            if (frameCacheRef.current.has(liveFrame)) {
-              setCurrentTracks(frameCacheRef.current.get(liveFrame)!);
+            if (deltaRes.frames.length < 64) {
+              hasMore = false;
             }
+          } else {
+            hasMore = false;
           }
+        }
 
-          if (s.state === "completed" || s.state === "error" || s.state === "cancelled") {
-            clearInterval(interval);
+        // Bound in-memory cache to prevent memory bloat on large videos
+        if (frameCacheRef.current.size > 800) {
+          const active = activeFrameRef.current;
+          const sortedByDist = Array.from(frameCacheRef.current.keys()).sort(
+            (a, b) => Math.abs(b - active) - Math.abs(a - active)
+          );
+          for (let i = 0; i < 200 && i < sortedByDist.length; i++) {
+            frameCacheRef.current.delete(sortedByDist[i]);
           }
+        }
+
+        if (frameCacheRef.current.has(activeFrameRef.current)) {
+          setCurrentTracks(frameCacheRef.current.get(activeFrameRef.current)!);
+        }
+
+        // Auto-advance player to follow live stream if user is following live
+        if (s.state === "processing" && isFollowingLive && !isPlaying && s.current_frame > 0) {
+          const liveFrame = Math.max(0, Math.min(totalFrames - 1, s.current_frame - 1));
+          activeFrameRef.current = liveFrame;
+          setCurrentFrameIdx(liveFrame);
+          const liveSec = liveFrame / fps;
+          setCurrentTimeSec(liveSec);
+          if (videoRef.current) {
+            videoRef.current.currentTime = liveSec;
+          }
+          if (frameCacheRef.current.has(liveFrame)) {
+            setCurrentTracks(frameCacheRef.current.get(liveFrame)!);
+          }
+        }
+
+        // Only clear interval when job is in terminal state AND all pages have been drained
+        const isJobTerminal = s.state === "completed" || s.state === "error" || s.state === "cancelled";
+        const isCaughtUp = !hasMore && (lastCommittedSeqRef.current >= (s.total_frames || 0) || s.current_frame === 0);
+        if (isJobTerminal && isCaughtUp) {
+          clearInterval(interval);
         }
       } catch {
         // quiet poll fail
+      } finally {
+        isPollingDeltaRef.current = false;
       }
-    }, 400);
+    };
+
+    // Execute immediately on mount to drain initial frames
+    pollAndDrain();
+    const interval = setInterval(pollAndDrain, 400);
 
     return () => {
       isMounted = false;

@@ -147,10 +147,12 @@ def reconcile_chunk_identities(
     # Compute mean IoU for each candidate pair
     candidate_matches = []
     for (ex_id, inc_id), iou_list in pair_ious.items():
-        # Require presence in at least 25% of overlap frames or at least 2 frames
-        mean_iou = sum(iou_list) / len(co_frames)
-        if mean_iou >= iou_threshold:
-            candidate_matches.append((mean_iou, ex_id, inc_id))
+        # Require presence in at least 2 co-occurring frames (or all if overlap is shorter)
+        min_presence = min(2, len(co_frames))
+        if len(iou_list) >= min_presence:
+            mean_iou = sum(iou_list) / len(iou_list)
+            if mean_iou >= iou_threshold:
+                candidate_matches.append((mean_iou, ex_id, inc_id))
 
     # Sort descending by mean IoU for greedy optimal matching
     candidate_matches.sort(key=lambda x: x[0], reverse=True)

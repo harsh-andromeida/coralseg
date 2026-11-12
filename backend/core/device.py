@@ -319,28 +319,36 @@ def get_memory_budget() -> Dict[str, Any]:
     }
 
 
-def can_admit_worker(worker_peak_bytes: int = 1024**3) -> Tuple[bool, str]:
+def can_admit_worker(
+    worker_peak_bytes: int = 1024**3,
+    estimated_worker_vram_bytes: Optional[int] = None,
+    estimated_worker_host_bytes: Optional[int] = None,
+) -> Tuple[bool, str]:
     """
     Verifies memory admission for a prospective worker.
     Requires at least 20% of device memory or 2 GiB (whichever is larger) free,
     and at least 2 GiB of available host RAM.
+    Supports either unified worker_peak_bytes or separate VRAM and host RAM estimates.
     """
     budget = get_memory_budget()
 
-    if budget["host_available_bytes"] < (budget["min_host_reservation_bytes"] + worker_peak_bytes):
+    host_req = estimated_worker_host_bytes if estimated_worker_host_bytes is not None else worker_peak_bytes
+    vram_req = estimated_worker_vram_bytes if estimated_worker_vram_bytes is not None else worker_peak_bytes
+
+    if budget["host_available_bytes"] < (budget["min_host_reservation_bytes"] + host_req):
         return (
             False,
             f"Insufficient host RAM: {budget['host_available_gib']} GiB available, "
-            f"requires {round((budget['min_host_reservation_bytes'] + worker_peak_bytes) / 1024**3, 2)} GiB reserve+worker.",
+            f"requires {round((budget['min_host_reservation_bytes'] + host_req) / 1024**3, 2)} GiB reserve+worker.",
         )
 
     if budget["accelerator_type"] == "cuda":
-        req_vram = budget["min_device_reservation_bytes"] + worker_peak_bytes
-        if budget["accelerator_available_bytes"] < req_vram:
+        total_req_vram = budget["min_device_reservation_bytes"] + vram_req
+        if budget["accelerator_available_bytes"] < total_req_vram:
             return (
                 False,
                 f"Insufficient GPU VRAM: {budget['accelerator_available_gib']} GiB available, "
-                f"requires {round(req_vram / 1024**3, 2)} GiB reserve+worker.",
+                f"requires {round(total_req_vram / 1024**3, 2)} GiB reserve+worker.",
             )
 
     return True, "Admission granted"

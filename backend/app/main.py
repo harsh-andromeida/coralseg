@@ -1649,9 +1649,9 @@ def get_active_video_status():
 
 
 @app.get("/api/video/status/{job_id}", response_model=VideoStatusResponse)
-def get_video_status(job_id: str):
-    """Retrieves real-time processing status, FPS, and time-series survey telemetry."""
-    job = _VIDEO_PROCESSOR.get_job(job_id)
+def get_video_status(job_id: str, include_metrics: bool = False):
+    """Retrieves real-time processing status, FPS, and optional time-series survey telemetry."""
+    job = _VIDEO_PROCESSOR.get_job(job_id, include_time_series=include_metrics)
     if not job:
         raise HTTPException(status_code=404, detail=f"Video job '{job_id}' not found.")
 
@@ -1672,7 +1672,7 @@ def get_video_status(job_id: str):
         keyframes_count=job["keyframes_count"],
         metadata=job["metadata"],
         error=job["error"],
-        time_series=job["time_series"],
+        time_series=job.get("time_series", []),
         export_paths=job.get("export_paths"),
         export_status=job.get("export_status", "pending"),
         current_stage=job.get("current_stage", "Processing"),
@@ -1682,6 +1682,19 @@ def get_video_status(job_id: str):
         logs=job.get("logs", []),
         tracker_mode=job.get("tracker_mode", "sam2"),
     )
+
+
+@app.get("/api/video/metrics/{job_id}")
+def get_video_metrics(job_id: str):
+    """Returns full survey telemetry time-series for analysis and charting without polluting status polls."""
+    job = _VIDEO_PROCESSOR.get_job(job_id, include_time_series=True)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Video job '{job_id}' not found.")
+    return {
+        "job_id": job_id,
+        "metrics_count": len(job.get("time_series", [])),
+        "time_series": job.get("time_series", []),
+    }
 
 
 @app.post("/api/video/pause/{job_id}")
@@ -1819,15 +1832,17 @@ def export_video_result(job_id: str, format: str = "mp4"):
             if os.path.isfile(candidate):
                 p = candidate
                 job.setdefault("export_paths", {})["transect_csv"] = candidate
-            elif job.get("time_series"):
+            else:
                 try:
-                    export_transect_csv(
-                        output_csv_path=candidate,
-                        time_series_records=job["time_series"],
-                    )
-                    if os.path.isfile(candidate):
-                        p = candidate
-                        job.setdefault("export_paths", {})["transect_csv"] = candidate
+                    ts_records = _VIDEO_PROCESSOR.store.get_time_series(job_id)
+                    if ts_records:
+                        export_transect_csv(
+                            output_csv_path=candidate,
+                            time_series_records=ts_records,
+                        )
+                        if os.path.isfile(candidate):
+                            p = candidate
+                            job.setdefault("export_paths", {})["transect_csv"] = candidate
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"Failed to generate CSV: {str(e)}")
 

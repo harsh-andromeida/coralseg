@@ -210,10 +210,12 @@ class SAM2BenthicTracker(BaseVideoTracker):
 
         self._timings["initialization_sec"] += time.perf_counter() - t0
 
-    def init_video(self, video_source: str):
+    def init_video(self, video_source: str, frame_offset: int = 0):
         """Initializes SAM 2 inference state from frames directory."""
         t0 = time.perf_counter()
         self.load()
+        self.reset()
+        self.frame_offset = frame_offset
 
         with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
             try:
@@ -261,10 +263,12 @@ class SAM2BenthicTracker(BaseVideoTracker):
             )
             mask_np = mask_resized.astype(bool)
 
+        local_frame_idx = frame_idx - getattr(self, "frame_offset", 0)
+
         with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
             self._predictor.add_new_mask(
                 inference_state=self._inference_state,
-                frame_idx=frame_idx,
+                frame_idx=local_frame_idx,
                 obj_id=obj_id,
                 mask=mask_np,
             )
@@ -347,31 +351,42 @@ class SAM2BenthicTracker(BaseVideoTracker):
                 yield f, []
             return
         # SAM 2 propagate_in_video uses inclusive bounds where max_frame_num_to_track is frames after start
+        offset = getattr(self, "frame_offset", 0)
+        local_start = start_frame_idx - offset
         sam_max_frames = (end_frame_idx - 1) - start_frame_idx
         frames_yielded = 0
 
         with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
             gen = self._predictor.propagate_in_video(
                 self._inference_state,
-                start_frame_idx=start_frame_idx,
+                start_frame_idx=local_start,
                 max_frame_num_to_track=sam_max_frames,
             )
 
             try:
-                for out_frame_idx, out_obj_ids, out_mask_logits in gen:
-                    if out_frame_idx >= end_frame_idx:
+                it = iter(gen)
+                while frames_yielded < len(expected_frame_indices):
+                    # Measure pure model propagation / GPU inference latency around generator advancement
+                    t_infer_start = time.perf_counter()
+                    try:
+                        out_frame_idx, out_obj_ids, out_mask_logits = next(it)
+                    except StopIteration:
+                        break
+                    t_infer_end = time.perf_counter()
+                    self._timings["propagation_sec"] += (t_infer_end - t_infer_start)
+
+                    abs_out_frame_idx = out_frame_idx + offset
+                    if abs_out_frame_idx >= end_frame_idx:
                         break
                     # Assert exact index ordering
                     expected_idx = expected_frame_indices[frames_yielded]
-                    if out_frame_idx != expected_idx:
+                    if abs_out_frame_idx != expected_idx:
                         raise RuntimeError(
-                            f"SAM2 propagation index mismatch: expected {expected_idx}, got {out_frame_idx}"
+                            f"SAM2 propagation index mismatch: expected {expected_idx}, got {abs_out_frame_idx}"
                         )
 
-                    t_prop = time.perf_counter()
-
                     if len(out_obj_ids) == 0:
-                        yield out_frame_idx, []
+                        yield abs_out_frame_idx, []
                         frames_yielded += 1
                         continue
 
@@ -451,10 +466,16 @@ class SAM2BenthicTracker(BaseVideoTracker):
                         })
 
                     self._timings["geometry_sec"] += time.perf_counter() - t_geom
-                    self._timings["propagation_sec"] += time.perf_counter() - t_prop
 
-                    yield out_frame_idx, frame_tracks
+                    yield abs_out_frame_idx, frame_tracks
                     frames_yielded += 1
+
+                # Assert exact frame count: all expected frames must be yielded by the predictor
+                if frames_yielded != len(expected_frame_indices):
+                    raise RuntimeError(
+                        f"SAM2 propagation truncated: expected {len(expected_frame_indices)} frames "
+                        f"[{start_frame_idx}, {end_frame_idx}), yielded only {frames_yielded}"
+                    )
             finally:
                 if hasattr(gen, "close"):
                     gen.close()

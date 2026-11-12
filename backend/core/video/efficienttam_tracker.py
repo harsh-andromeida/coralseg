@@ -1,7 +1,9 @@
 """
-EfficientTAM (Experimental Fast Profile) Video Tracker Adapter for ReefVision.
-Implements the BaseVideoTracker interface for fast offline video inference.
-Provides actionable installation error when the optional upstream package is absent.
+EfficientTAM Benthic Video Tracker Adapter for ReefVision.
+Integrates the upstream EfficientTAM (Efficient Track Anything) model
+as an explicit experimental fast profile conforming to BaseVideoTracker.
+Upstream repository: https://github.com/yformer/EfficientTAM
+Tested baseline commit: abcd061ebd3cc6e7527d152d75b890126aaa53f6
 """
 
 import os
@@ -15,39 +17,73 @@ try:
 except ImportError:
     _HAS_CV2 = False
 
-from core.device import get_optimal_device, check_torch_capabilities
+try:
+    import torch
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
+
 from core.video.sam2_tracker import BaseVideoTracker
+
+try:
+    from efficient_track_anything.build_efficienttam import build_efficienttam_video_predictor
+except ImportError:
+    try:
+        from efficienttam.build_efficienttam import build_efficienttam_video_predictor
+    except ImportError:
+        build_efficienttam_video_predictor = None
 
 
 class EfficientTAMBenthicTracker(BaseVideoTracker):
     """
-    Experimental fast-profile video tracker based on EfficientTAM.
-    Provides ~6.5 FPS tracking at 512px on modest GPUs.
+    Experimental fast video tracker adapter wrapping EfficientTAM.
+    Accepts 512px or 1024px inputs, handles memory offloading, and exposes identical
+    adapter methods (register_mask, propagate, retire_objects, close).
     """
 
     def __init__(
         self,
         device: str = "auto",
-        model_id: str = "efficienttam_ti",
         model_size: int = 512,
         precision: Optional[str] = None,
+        config_path: Optional[str] = None,
+        checkpoint_path: Optional[str] = None,
         offload_to_cpu: bool = True,
     ):
-        self.device_pref = device
-        self.model_id = model_id
-        self.model_size = int(model_size)
-        self.precision_pref = precision
+        self.requested_device = device
+        self.model_size = 512 if model_size == 512 else 1024
+        self.precision_str = precision
+        self.config_path = config_path
+        self.checkpoint_path = checkpoint_path
         self.offload_to_cpu = offload_to_cpu
 
-        self.device = "cpu"
-        self.dtype = None
+        # Device resolution
+        if device == "auto":
+            if _HAS_TORCH and torch.cuda.is_available():
+                self.device = "cuda"
+            elif _HAS_TORCH and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+        else:
+            self.device = device
+
+        # Precision resolution
+        if self.device == "cuda":
+            if precision == "bf16" and _HAS_TORCH and torch.cuda.is_bf16_supported():
+                self.dtype = torch.bfloat16
+            else:
+                self.dtype = torch.float16 if _HAS_TORCH else None
+        else:
+            self.dtype = torch.float32 if _HAS_TORCH else None
+
         self.predictor = None
         self.inference_state = None
-        self.initialized = False
-        self._video_source = None
-
         self._tracks_meta: Dict[int, Dict[str, Any]] = {}
-        self._timings: Dict[str, float] = {
+        self._video_source: Optional[str] = None
+        self.initialized = False
+
+        self._timings = {
             "initialization_sec": 0.0,
             "prompt_registration_sec": 0.0,
             "propagation_sec": 0.0,
@@ -59,6 +95,35 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
     def total_tracks_count(self) -> int:
         return len(self._tracks_meta)
 
+    def _resolve_config_and_checkpoint(self) -> Tuple[str, str]:
+        """Resolves configuration YAML and checkpoint weights path."""
+        # 1. Config path
+        if self.config_path and os.path.exists(self.config_path):
+            cfg = self.config_path
+        else:
+            default_cfg = f"configs/efficienttam/efficienttam_ti_{self.model_size}x{self.model_size}.yaml"
+            cfg = default_cfg
+
+        # 2. Checkpoint path
+        if self.checkpoint_path and os.path.exists(self.checkpoint_path):
+            ckpt = self.checkpoint_path
+        else:
+            candidates = [
+                f"checkpoints/efficienttam_ti_{self.model_size}x{self.model_size}.pt",
+                f"models/efficienttam_ti_{self.model_size}x{self.model_size}.pt",
+                os.path.join(os.path.dirname(__file__), "..", "..", "models", f"efficienttam_ti_{self.model_size}x{self.model_size}.pt"),
+                os.path.expanduser(f"~/.cache/efficienttam/efficienttam_ti_{self.model_size}x{self.model_size}.pt"),
+            ]
+            ckpt = None
+            for c in candidates:
+                if os.path.exists(c):
+                    ckpt = c
+                    break
+            if ckpt is None:
+                ckpt = candidates[0]
+
+        return cfg, ckpt
+
     def load(self):
         """Loads and prepares the EfficientTAM predictor once per worker."""
         if self.predictor is not None:
@@ -66,31 +131,44 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
 
         t0 = time.perf_counter()
         try:
-            # Check for upstream EfficientTAM or adapted checkpoint
-            try:
-                import efficienttam
-                from efficienttam import build_efficienttam_video_predictor
-                self.predictor = build_efficienttam_video_predictor(self.model_id)
-            except ImportError:
-                # Check alternative import style or raise actionable instructions
+            if build_efficienttam_video_predictor is None:
                 raise RuntimeError(
                     "EfficientTAM fast profile is not installed in the current environment.\n"
-                    "To enable the experimental EfficientTAM profile, install from upstream:\n"
-                    "  pip install git+https://github.com/facebookresearch/EfficientTAM.git\n"
+                    "To enable the experimental EfficientTAM profile, install the upstream package:\n"
+                    "  pip install git+https://github.com/yformer/EfficientTAM.git@abcd061ebd3cc6e7527d152d75b890126aaa53f6\n"
                     "Or select the default reference model 'sam2' (SAM 2.1 Tiny)."
                 )
+
+            cfg, ckpt = self._resolve_config_and_checkpoint()
+            if not os.path.isfile(ckpt):
+                raise FileNotFoundError(
+                    f"EfficientTAM checkpoint not found at: {ckpt}\n"
+                    f"Download efficienttam_ti_{self.model_size}x{self.model_size}.pt from "
+                    f"https://github.com/yformer/EfficientTAM and place it in checkpoints/ or models/."
+                )
+
+            self.predictor = build_efficienttam_video_predictor(
+                config_file=cfg,
+                ckpt_path=ckpt,
+                device=self.device,
+            )
         finally:
             self._timings["initialization_sec"] += time.perf_counter() - t0
 
-    def init_video(self, video_source: str):
+    def init_video(self, video_source: str, frame_offset: int = 0):
         """Initializes video inference state from frames directory."""
         self.load()
         self._video_source = video_source
         self.reset()
+        self.frame_offset = frame_offset
         t0 = time.perf_counter()
         try:
             if hasattr(self.predictor, "init_state"):
-                self.inference_state = self.predictor.init_state(video_path=video_source)
+                self.inference_state = self.predictor.init_state(
+                    video_path=video_source,
+                    offload_video_to_cpu=self.offload_to_cpu,
+                    offload_state_to_cpu=self.offload_to_cpu,
+                )
             self.initialized = True
         finally:
             self._timings["initialization_sec"] += time.perf_counter() - t0
@@ -111,7 +189,6 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
         try:
             mask_bool = binary_mask.astype(bool)
             if self.model_size != 1024 and _HAS_CV2:
-                # Resize to tracker proxy resolution
                 h, w = mask_bool.shape[:2]
                 if max(h, w) > self.model_size:
                     scale = self.model_size / float(max(h, w))
@@ -119,10 +196,11 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
                     th = max(16, int(round(h * scale)))
                     mask_bool = cv2.resize(mask_bool.astype(np.uint8), (tw, th), interpolation=cv2.INTER_NEAREST).astype(bool)
 
+            local_frame_idx = frame_idx - getattr(self, "frame_offset", 0)
             if hasattr(self.predictor, "add_new_mask"):
                 self.predictor.add_new_mask(
                     inference_state=self.inference_state,
-                    frame_idx=frame_idx,
+                    frame_idx=local_frame_idx,
                     obj_id=obj_id,
                     mask=mask_bool,
                 )
@@ -144,7 +222,9 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
         scale_y: float = 1.0,
     ) -> Iterator[Tuple[int, List[Dict[str, Any]]]]:
         """
-        Streaming generator yielding (frame_idx, detections) for [start_frame_idx, end_frame_idx).
+        Streaming generator yielding (frame_idx, detections) for half-open range [start_frame_idx, end_frame_idx).
+        Measures pure GPU propagation latency before advancing generator, transfers masks,
+        extracts canonical geometry, and asserts exact complete frame coverage.
         """
         if not self.initialized:
             raise RuntimeError("Tracker must be initialized before propagation.")
@@ -152,52 +232,90 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
         if start_frame_idx >= end_frame_idx:
             return
 
-        expected_count = end_frame_idx - start_frame_idx
+        expected_indices = list(range(start_frame_idx, end_frame_idx))
         if not self._tracks_meta:
-            for f in range(start_frame_idx, end_frame_idx):
+            for f in expected_indices:
                 yield f, []
             return
 
-        t0 = time.perf_counter()
-        returned_indices = set()
-        try:
-            prop_gen = self.predictor.propagate_in_video(
-                self.inference_state,
-                start_frame_idx=start_frame_idx,
-                max_frame_num_to_track=expected_count - 1,
-            )
-            for out_frame_idx, out_obj_ids, out_mask_logits in prop_gen:
-                if out_frame_idx >= end_frame_idx:
-                    break
-                returned_indices.add(out_frame_idx)
+        expected_count = end_frame_idx - start_frame_idx
+        offset = getattr(self, "frame_offset", 0)
+        local_start = start_frame_idx - offset
+        frames_yielded = 0
 
+        prop_gen = self.predictor.propagate_in_video(
+            self.inference_state,
+            start_frame_idx=local_start,
+            max_frame_num_to_track=expected_count - 1,
+        )
+
+        try:
+            it = iter(prop_gen)
+            while frames_yielded < len(expected_indices):
+                t_infer_start = time.perf_counter()
+                try:
+                    out_frame_idx, out_obj_ids, out_mask_logits = next(it)
+                except StopIteration:
+                    break
+                t_infer_end = time.perf_counter()
+                self._timings["propagation_sec"] += (t_infer_end - t_infer_start)
+
+                abs_out_frame_idx = out_frame_idx + offset
+                if abs_out_frame_idx >= end_frame_idx:
+                    break
+
+                expected_idx = expected_indices[frames_yielded]
+                if abs_out_frame_idx != expected_idx:
+                    raise RuntimeError(
+                        f"EfficientTAM propagation index mismatch: expected {expected_idx}, got {abs_out_frame_idx}"
+                    )
+
+                if len(out_obj_ids) == 0:
+                    yield abs_out_frame_idx, []
+                    frames_yielded += 1
+                    continue
+
+                t_trans = time.perf_counter()
+                if hasattr(out_mask_logits, "cpu"):
+                    bin_masks = (out_mask_logits > 0.0).cpu().numpy()
+                else:
+                    bin_masks = (out_mask_logits > 0.0)
+                if bin_masks.ndim == 2:
+                    bin_masks = np.expand_dims(bin_masks, axis=0)
+                self._timings["transfer_sec"] += time.perf_counter() - t_trans
+
+                t_geom = time.perf_counter()
                 frame_detections = []
                 for idx, obj_id in enumerate(out_obj_ids):
                     if obj_id not in self._tracks_meta:
                         continue
-                    m_logits = out_mask_logits[idx]
-                    bin_mask = (m_logits > 0.0)
-                    if hasattr(bin_mask, "cpu"):
-                        bin_mask = bin_mask.cpu().numpy()
+                    bin_mask = bin_masks[idx]
                     if bin_mask.ndim == 3:
                         bin_mask = bin_mask[0]
 
-                    # Extract canonical geometry
                     geom = self._extract_geometry(bin_mask, scale_x, scale_y)
                     if geom:
                         frame_detections.append({
                             "track_id": int(obj_id),
+                            "id": int(obj_id),
+                            "id_str": f"#{obj_id}",
                             **geom,
                             **self._tracks_meta[obj_id].get("metadata", {}),
                         })
 
-                yield out_frame_idx, frame_detections
+                self._timings["geometry_sec"] += time.perf_counter() - t_geom
 
-            for f_fill in range(start_frame_idx, end_frame_idx):
-                if f_fill not in returned_indices:
-                    yield f_fill, []
+                yield abs_out_frame_idx, frame_detections
+                frames_yielded += 1
+
+            if frames_yielded != len(expected_indices):
+                raise RuntimeError(
+                    f"EfficientTAM propagation truncated: expected {len(expected_indices)} frames "
+                    f"[{start_frame_idx}, {end_frame_idx}), yielded only {frames_yielded}"
+                )
         finally:
-            self._timings["propagation_sec"] += time.perf_counter() - t0
+            if hasattr(prop_gen, "close"):
+                prop_gen.close()
 
     def _extract_geometry(self, mask: np.ndarray, scale_x: float, scale_y: float) -> Optional[Dict[str, Any]]:
         """Extracts canonical polygon, bbox, centroid, and area_px from a binary mask."""
@@ -244,6 +362,7 @@ class EfficientTAMBenthicTracker(BaseVideoTracker):
             "polygon": polygon,
             "centroid": (cx, cy),
             "area_px": area_px,
+            "area": area_px,
         }
 
     def retire_objects(self, obj_ids: List[int]):
