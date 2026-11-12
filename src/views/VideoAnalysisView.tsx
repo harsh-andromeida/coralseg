@@ -697,7 +697,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                             <span>↓</span>
                           </button>
                         ) : (
-                          <span>Engine: {jobStatus.tracker_mode === "sam2" ? "SAM 2 Video Predictor" : "Lucas-Kanade Optical Flow (60-120 FPS)"}</span>
+                          <span>Engine: {jobStatus.tracker_mode === "efficienttam" ? "EfficientTAM (experimental)" : "SAM 2.1 Video Predictor"}</span>
                         )}
                       </div>
                     </div>
