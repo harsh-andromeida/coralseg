@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { queryClient } from "./lib/queryClient";
 import { UploadView } from "./views/UploadView";
 import { AnalysisView } from "./views/AnalysisView";
 import { VideoAnalysisView } from "./views/VideoAnalysisView";
@@ -27,34 +29,42 @@ export const App: React.FC = () => {
     setAppStage("upload");
   };
 
-  if (appStage === "video_analysis" && activeVideo) {
-    return (
-      <VideoAnalysisView
-        videoItem={activeVideo}
-        initialJobId={activeVideoJobId}
-        onBackToUpload={handleBackToUpload}
-      />
-    );
-  }
+  const renderContent = () => {
+    if (appStage === "video_analysis" && activeVideo) {
+      return (
+        <VideoAnalysisView
+          videoItem={activeVideo}
+          initialJobId={activeVideoJobId}
+          onBackToUpload={handleBackToUpload}
+        />
+      );
+    }
 
-  if (appStage === "analysis" && loadedImages.length > 0) {
+    if (appStage === "analysis" && loadedImages.length > 0) {
+      return (
+        <AnalysisView
+          images={loadedImages}
+          onBackToUpload={handleBackToUpload}
+        />
+      );
+    }
+
     return (
-      <AnalysisView
-        images={loadedImages}
-        onBackToUpload={handleBackToUpload}
+      <UploadView
+        onLaunchStudio={handleLaunchStudio}
+        onLaunchVideoStudio={handleLaunchVideoStudio}
+        activeVideo={activeVideo}
+        activeVideoJobId={activeVideoJobId}
+        onSetActiveVideo={setActiveVideo}
+        onSetActiveVideoJobId={setActiveVideoJobId}
       />
     );
-  }
+  };
 
   return (
-    <UploadView
-      onLaunchStudio={handleLaunchStudio}
-      onLaunchVideoStudio={handleLaunchVideoStudio}
-      activeVideo={activeVideo}
-      activeVideoJobId={activeVideoJobId}
-      onSetActiveVideo={setActiveVideo}
-      onSetActiveVideoJobId={setActiveVideoJobId}
-    />
+    <QueryClientProvider client={queryClient}>
+      {renderContent()}
+    </QueryClientProvider>
   );
 };
 

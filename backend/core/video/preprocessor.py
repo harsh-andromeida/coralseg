@@ -171,10 +171,12 @@ def prepare_bounded_chunk_frames(
     end_frame: int,
     max_dim: int = 480,
     jpeg_quality: int = 80,
+    keyframe_selector: Optional[Any] = None,
 ) -> Tuple[List[str], Dict[str, Any]]:
     """
     Decodes video sequentially for half-open range [start_frame, end_frame).
     Saves downscaled proxy JPEGs (00000.jpg, 00001.jpg, ...) into chunk_dir.
+    Optionally evaluates ego-motion keyframe selection in-flight during the single decode pass.
     Validates frame counts, writes, and dimensions.
     Returns: (list_of_jpeg_paths, metadata_dict)
     """
@@ -214,6 +216,8 @@ def prepare_bounded_chunk_frames(
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     frame_paths = []
+    chunk_keyframes = []
+    chunk_motion_metas = {}
     expected_frames = end_frame - start_frame
 
     for rel_idx in range(expected_frames):
@@ -223,6 +227,14 @@ def prepare_bounded_chunk_frames(
 
         if scale < 0.999:
             frame = cv2.resize(frame, (proxy_w, proxy_h), interpolation=cv2.INTER_AREA)
+
+        abs_f = start_frame + rel_idx
+        if keyframe_selector is not None:
+            f_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            is_kf, m_meta = keyframe_selector.evaluate_frame(f_rgb)
+            chunk_motion_metas[abs_f] = m_meta
+            if is_kf and abs_f > 0:
+                chunk_keyframes.append(abs_f)
 
         # SAM2 requires 00000.jpg, 00001.jpg, ... within the directory
         frame_name = f"{rel_idx:05d}.jpg"
@@ -248,6 +260,8 @@ def prepare_bounded_chunk_frames(
         "proxy_h": proxy_h,
         "scale_x": scale_x,
         "scale_y": scale_y,
+        "chunk_keyframes": chunk_keyframes,
+        "chunk_motion_metas": chunk_motion_metas,
     }
     return frame_paths, meta
 

@@ -138,6 +138,20 @@ def render_video_overlay(
     return out
 
 
+def _detect_fastest_h264_encoder(ffmpeg_bin: str) -> str:
+    """Detects available hardware encoder: VideoToolbox (Mac), NVENC (CUDA), or ultrafast libx264."""
+    try:
+        res = subprocess.run([ffmpeg_bin, "-encoders"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3)
+        stdout = res.stdout or ""
+        if platform.system() == "Darwin" and "h264_videotoolbox" in stdout:
+            return "h264_videotoolbox"
+        if "h264_nvenc" in stdout:
+            return "h264_nvenc"
+    except Exception:
+        pass
+    return "libx264"
+
+
 def export_annotated_video(
     input_video_path: str,
     output_mp4_path: str,
@@ -147,6 +161,8 @@ def export_annotated_video(
 ) -> str:
     """
     Generates an annotated MP4 video with rendered bounding boxes, polygons, and benthic HUD.
+    Uses single-pass hardware-accelerated ffmpeg streaming pipe when available,
+    falling back to OpenCV VideoWriter.
     """
     if not _HAS_CV2:
         raise RuntimeError("OpenCV is required to export video.")
@@ -162,11 +178,45 @@ def export_annotated_video(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     os.makedirs(os.path.dirname(os.path.abspath(output_mp4_path)), exist_ok=True)
-    fourcc = cv2.VideoWriter_fourcc(*"avc1")
-    writer = cv2.VideoWriter(output_mp4_path, fourcc, fps, (width, height))
-    if not writer.isOpened():
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    ffmpeg_proc = None
+    writer = None
+
+    if ffmpeg_bin:
+        encoder = _detect_fastest_h264_encoder(ffmpeg_bin)
+        ffmpeg_cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{width}x{height}",
+            "-pix_fmt", "bgr24",
+            "-r", str(fps),
+            "-i", "-",
+            "-c:v", encoder,
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+        ]
+        if encoder == "libx264":
+            ffmpeg_cmd.extend(["-preset", "ultrafast", "-crf", "22"])
+        ffmpeg_cmd.append(output_mp4_path)
+        try:
+            ffmpeg_proc = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            ffmpeg_proc = None
+
+    if ffmpeg_proc is None:
+        fourcc = cv2.VideoWriter_fourcc(*"avc1")
         writer = cv2.VideoWriter(output_mp4_path, fourcc, fps, (width, height))
+        if not writer.isOpened():
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(output_mp4_path, fourcc, fps, (width, height))
 
     try:
         frame_idx = 0
@@ -198,7 +248,10 @@ def export_annotated_video(
                 fps=fps,
                 bleaching_prevalence_pct=bleach_pct,
             )
-            writer.write(rendered)
+            if ffmpeg_proc and ffmpeg_proc.stdin:
+                ffmpeg_proc.stdin.write(rendered.tobytes())
+            elif writer:
+                writer.write(rendered)
 
             frame_idx += 1
             if progress_callback and total_frames > 0:
@@ -207,37 +260,43 @@ def export_annotated_video(
         return output_mp4_path
     finally:
         cap.release()
-        writer.release()
-
-        # Remux to universal browser H.264 (avc1) with +faststart if ffmpeg is available
-        ffmpeg_bin = shutil.which("ffmpeg")
-        if ffmpeg_bin and os.path.isfile(output_mp4_path) and os.path.getsize(output_mp4_path) > 0:
-            temp_faststart = output_mp4_path + ".faststart.mp4"
+        if ffmpeg_proc:
             try:
-                # Transcode to H.264 yuv420p + faststart to ensure instant HTML5 browser playback
-                subprocess.run(
-                    [
-                        ffmpeg_bin,
-                        "-y",
-                        "-i", output_mp4_path,
-                        "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p",
-                        "-preset", "fast",
-                        "-movflags", "+faststart",
-                        temp_faststart,
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=True,
-                )
-                if os.path.isfile(temp_faststart) and os.path.getsize(temp_faststart) > 0:
-                    os.replace(temp_faststart, output_mp4_path)
+                if ffmpeg_proc.stdin:
+                    ffmpeg_proc.stdin.close()
+                ffmpeg_proc.wait(timeout=15)
             except Exception:
-                if os.path.isfile(temp_faststart):
-                    try:
-                        os.remove(temp_faststart)
-                    except Exception:
-                        pass
+                pass
+        if writer:
+            writer.release()
+
+            # Remux only if OpenCV fallback writer was used
+            if ffmpeg_bin and os.path.isfile(output_mp4_path) and os.path.getsize(output_mp4_path) > 0:
+                temp_faststart = output_mp4_path + ".faststart.mp4"
+                try:
+                    subprocess.run(
+                        [
+                            ffmpeg_bin,
+                            "-y",
+                            "-i", output_mp4_path,
+                            "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p",
+                            "-preset", "ultrafast",
+                            "-movflags", "+faststart",
+                            temp_faststart,
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True,
+                    )
+                    if os.path.isfile(temp_faststart) and os.path.getsize(temp_faststart) > 0:
+                        os.replace(temp_faststart, output_mp4_path)
+                except Exception:
+                    if os.path.isfile(temp_faststart):
+                        try:
+                            os.remove(temp_faststart)
+                        except Exception:
+                            pass
 
 
 def export_transect_csv(

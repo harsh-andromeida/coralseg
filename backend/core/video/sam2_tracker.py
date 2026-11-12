@@ -7,6 +7,8 @@ and zero routine empty_cache() calls during normal execution.
 
 import abc
 import time
+import queue
+import threading
 import contextlib
 import cv2
 import numpy as np
@@ -367,131 +369,146 @@ class SAM2BenthicTracker(BaseVideoTracker):
         sam_max_frames = (end_frame_idx - 1) - start_frame_idx
         frames_yielded = 0
 
-        with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
-            gen = self._predictor.propagate_in_video(
-                self._inference_state,
-                start_frame_idx=local_start,
-                max_frame_num_to_track=sam_max_frames,
-            )
+        frame_queue = queue.Queue(maxsize=2)
+        worker_error = []
 
+        def _inference_worker():
             try:
-                it = iter(gen)
-                while frames_yielded < len(expected_frame_indices):
-                    # Measure pure model propagation / GPU inference latency around generator advancement
-                    _sync_device(self.device)
-                    t_infer_start = time.perf_counter()
-                    try:
-                        out_frame_idx, out_obj_ids, out_mask_logits = next(it)
-                    except StopIteration:
-                        break
-                    _sync_device(self.device)
-                    t_infer_end = time.perf_counter()
-                    self._timings["propagation_sec"] += (t_infer_end - t_infer_start)
+                with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
+                    gen = self._predictor.propagate_in_video(
+                        self._inference_state,
+                        start_frame_idx=local_start,
+                        max_frame_num_to_track=sam_max_frames,
+                    )
+                    t_infer_prev = time.perf_counter()
+                    for out_frame_idx, out_obj_ids, out_mask_logits in gen:
+                        _sync_device(self.device)
+                        t_now = time.perf_counter()
+                        self._timings["propagation_sec"] += (t_now - t_infer_prev)
 
-                    abs_out_frame_idx = out_frame_idx + offset
-                    if abs_out_frame_idx >= end_frame_idx:
-                        break
-                    # Assert exact index ordering
-                    expected_idx = expected_frame_indices[frames_yielded]
-                    if abs_out_frame_idx != expected_idx:
-                        raise RuntimeError(
-                            f"SAM2 propagation index mismatch: expected {expected_idx}, got {abs_out_frame_idx}"
-                        )
+                        t_trans_start = time.perf_counter()
+                        masks_bool = None
+                        if len(out_obj_ids) > 0:
+                            masks_bool = (out_mask_logits > 0.0).squeeze(1).cpu().numpy()
+                            if masks_bool.ndim == 2:
+                                masks_bool = np.expand_dims(masks_bool, axis=0)
+                        self._timings["transfer_sec"] += (time.perf_counter() - t_trans_start)
 
-                    if len(out_obj_ids) == 0:
-                        yield abs_out_frame_idx, []
-                        frames_yielded += 1
+                        frame_queue.put((out_frame_idx, list(out_obj_ids), masks_bool))
+                        t_infer_prev = time.perf_counter()
+            except Exception as exc:
+                worker_error.append(exc)
+            finally:
+                frame_queue.put(None)
+
+        worker_thread = threading.Thread(target=_inference_worker, daemon=True)
+        worker_thread.start()
+
+        try:
+            while frames_yielded < len(expected_frame_indices):
+                item = frame_queue.get()
+                if item is None:
+                    if worker_error:
+                        raise worker_error[0]
+                    break
+
+                out_frame_idx, out_obj_ids, masks_bool = item
+                abs_out_frame_idx = out_frame_idx + offset
+                if abs_out_frame_idx >= end_frame_idx:
+                    break
+
+                expected_idx = expected_frame_indices[frames_yielded]
+                if abs_out_frame_idx != expected_idx:
+                    raise RuntimeError(
+                        f"SAM2 propagation index mismatch: expected {expected_idx}, got {abs_out_frame_idx}"
+                    )
+
+                if len(out_obj_ids) == 0 or masks_bool is None:
+                    yield abs_out_frame_idx, []
+                    frames_yielded += 1
+                    continue
+
+                t_geom = time.perf_counter()
+                frame_tracks = []
+                for i, obj_id in enumerate(out_obj_ids):
+                    if obj_id not in self._tracks_meta:
                         continue
 
-                    # Batch transfer all object masks to CPU in single tensor call
-                    t_trans = time.perf_counter()
-                    masks_bool = (out_mask_logits > 0.0).squeeze(1).cpu().numpy()
-                    if masks_bool.ndim == 2:
-                        masks_bool = np.expand_dims(masks_bool, axis=0)
-                    self._timings["transfer_sec"] += time.perf_counter() - t_trans
+                    meta = self._tracks_meta[obj_id]
+                    mask_bool = masks_bool[i]
+                    if mask_bool.ndim == 3:
+                        mask_bool = mask_bool[0]
 
-                    t_geom = time.perf_counter()
-                    frame_tracks = []
-                    for i, obj_id in enumerate(out_obj_ids):
-                        if obj_id not in self._tracks_meta:
-                            continue
+                    area_px = int(np.sum(mask_bool))
+                    if area_px < 15:
+                        continue
 
-                        meta = self._tracks_meta[obj_id]
-                        mask_bool = masks_bool[i]
-                        if mask_bool.ndim == 3:
-                            mask_bool = mask_bool[0]
-
-                        area_px = int(np.sum(mask_bool))
-                        if area_px < 15:
-                            continue
-
-                        contours, _ = cv2.findContours(
-                            mask_bool.astype(np.uint8),
-                            cv2.RETR_EXTERNAL,
-                            cv2.CHAIN_APPROX_SIMPLE,
-                        )
-
-                        poly = []
-                        bbox = [0, 0, 0, 0]
-                        cx, cy = 0, 0
-                        if contours:
-                            c = max(contours, key=cv2.contourArea)
-                            if len(c) >= 3:
-                                poly = c[:, 0, :].tolist()
-                            bx, by, bw, bh = cv2.boundingRect(c)
-                            bbox = [int(bx), int(by), max(1, int(bw)), max(1, int(bh))]
-                            cx = int(bx + bw / 2)
-                            cy = int(by + bh / 2)
-                        else:
-                            continue
-
-                        # Remap proxy coordinates back to raw video display coordinates
-                        if scale_x != 1.0 or scale_y != 1.0:
-                            poly = [[int(round(pt[0] * scale_x)), int(round(pt[1] * scale_y))] for pt in poly]
-                            bbox = [
-                                int(round(bbox[0] * scale_x)),
-                                int(round(bbox[1] * scale_y)),
-                                max(1, int(round(bbox[2] * scale_x))),
-                                max(1, int(round(bbox[3] * scale_y))),
-                            ]
-                            cx = int(round(cx * scale_x))
-                            cy = int(round(cy * scale_y))
-                            area_px = int(round(area_px * scale_x * scale_y))
-
-                        frame_tracks.append({
-                            "track_id": obj_id,
-                            "id": obj_id,
-                            "id_str": f"#{obj_id}",
-                            "genus": meta["genus"],
-                            "growth_form": meta["growth_form"],
-                            "condition": meta["condition"],
-                            "condition_conf": meta["condition_conf"],
-                            "taxon_conf": meta["taxon_conf"],
-                            "is_bleached": meta["is_bleached"],
-                            "color_hex": meta["color_hex"],
-                            "area_px": area_px,
-                            "area": area_px,
-                            "predicted_iou": meta["predicted_iou"],
-                            "bbox": bbox,
-                            "centroid": [cx, cy],
-                            "polygon": poly,
-                            "mask": mask_bool,
-                        })
-
-                    self._timings["geometry_sec"] += time.perf_counter() - t_geom
-
-                    yield abs_out_frame_idx, frame_tracks
-                    frames_yielded += 1
-
-                # Assert exact frame count: all expected frames must be yielded by the predictor
-                if frames_yielded != len(expected_frame_indices):
-                    raise RuntimeError(
-                        f"SAM2 propagation truncated: expected {len(expected_frame_indices)} frames "
-                        f"[{start_frame_idx}, {end_frame_idx}), yielded only {frames_yielded}"
+                    contours, _ = cv2.findContours(
+                        mask_bool.astype(np.uint8),
+                        cv2.RETR_EXTERNAL,
+                        cv2.CHAIN_APPROX_SIMPLE,
                     )
-            finally:
-                if hasattr(gen, "close"):
-                    gen.close()
+
+                    poly = []
+                    bbox = [0, 0, 0, 0]
+                    cx, cy = 0, 0
+                    if contours:
+                        c = max(contours, key=cv2.contourArea)
+                        if len(c) >= 3:
+                            poly = c[:, 0, :].tolist()
+                        bx, by, bw, bh = cv2.boundingRect(c)
+                        bbox = [int(bx), int(by), max(1, int(bw)), max(1, int(bh))]
+                        cx = int(bx + bw / 2)
+                        cy = int(by + bh / 2)
+                    else:
+                        continue
+
+                    # Remap proxy coordinates back to raw video display coordinates
+                    if scale_x != 1.0 or scale_y != 1.0:
+                        poly = [[int(round(pt[0] * scale_x)), int(round(pt[1] * scale_y))] for pt in poly]
+                        bbox = [
+                            int(round(bbox[0] * scale_x)),
+                            int(round(bbox[1] * scale_y)),
+                            max(1, int(round(bbox[2] * scale_x))),
+                            max(1, int(round(bbox[3] * scale_y))),
+                        ]
+                        cx = int(round(cx * scale_x))
+                        cy = int(round(cy * scale_y))
+                        area_px = int(round(area_px * scale_x * scale_y))
+
+                    frame_tracks.append({
+                        "track_id": obj_id,
+                        "id": obj_id,
+                        "id_str": f"#{obj_id}",
+                        "genus": meta["genus"],
+                        "growth_form": meta["growth_form"],
+                        "condition": meta["condition"],
+                        "condition_conf": meta["condition_conf"],
+                        "taxon_conf": meta["taxon_conf"],
+                        "is_bleached": meta["is_bleached"],
+                        "color_hex": meta["color_hex"],
+                        "area_px": area_px,
+                        "area": area_px,
+                        "predicted_iou": meta["predicted_iou"],
+                        "bbox": bbox,
+                        "centroid": [cx, cy],
+                        "polygon": poly,
+                        "mask": mask_bool,
+                    })
+
+                self._timings["geometry_sec"] += time.perf_counter() - t_geom
+
+                yield abs_out_frame_idx, frame_tracks
+                frames_yielded += 1
+
+            # Assert exact frame count: all expected frames must be yielded by the predictor
+            if frames_yielded != len(expected_frame_indices):
+                raise RuntimeError(
+                    f"SAM2 propagation truncated: expected {len(expected_frame_indices)} frames "
+                    f"[{start_frame_idx}, {end_frame_idx}), yielded only {frames_yielded}"
+                )
+        finally:
+            worker_thread.join(timeout=2.0)
 
     def propagate_stream(
         self,
