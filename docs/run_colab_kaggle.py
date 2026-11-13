@@ -16,6 +16,7 @@ import platform
 import stat
 import shutil
 import socket
+import json
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
@@ -106,28 +107,106 @@ def get_cloudflared_binary() -> str:
     return ""
 
 
-def get_cuda_library_paths() -> list:
+def get_or_create_venv() -> str:
+    """
+    Resolves or creates a Python virtual environment (.venv) at the repository root.
+    Uses --system-site-packages in cloud GPU environments (Colab/Kaggle) to leverage
+    pre-installed CUDA PyTorch drivers while isolating runtime dependencies.
+    """
+    # 1. If currently running inside an active virtual environment, use it directly
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        print(f"  🐍 Using active virtual environment: {sys.executable}", flush=True)
+        return sys.executable
+
+    # 2. Check candidate venv directories
+    candidates = [
+        os.path.join(ROOT_DIR, ".venv"),
+        os.path.join(BACKEND_DIR, ".venv"),
+    ]
+
+    for venv_dir in candidates:
+        py_bin = (
+            os.path.join(venv_dir, "Scripts", "python.exe")
+            if os.name == "nt"
+            else os.path.join(venv_dir, "bin", "python3")
+        )
+        if not os.path.isfile(py_bin) and os.name != "nt":
+            py_bin = os.path.join(venv_dir, "bin", "python")
+
+        if os.path.isfile(py_bin):
+            print(f"  🐍 Found existing virtual environment: {py_bin}", flush=True)
+            return py_bin
+
+    # 3. Create .venv at ROOT_DIR
+    target_venv = os.path.join(ROOT_DIR, ".venv")
+    print(f"  🐍 Bootstrapping dedicated virtual environment at {target_venv}...", flush=True)
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--system-site-packages", target_venv],
+            check=True,
+        )
+    except Exception as e:
+        print(f"  ⚠️ Note: venv creation with --system-site-packages failed ({e}). Retrying standard venv...", flush=True)
+        subprocess.run(
+            [sys.executable, "-m", "venv", target_venv],
+            check=True,
+        )
+
+    py_bin = (
+        os.path.join(target_venv, "Scripts", "python.exe")
+        if os.name == "nt"
+        else os.path.join(target_venv, "bin", "python3")
+    )
+    if not os.path.isfile(py_bin) and os.name != "nt":
+        py_bin = os.path.join(target_venv, "bin", "python")
+
+    if not os.path.isfile(py_bin):
+        print(f"  ⚠️ Virtual environment python not found at {py_bin}. Falling back to {sys.executable}", flush=True)
+        return sys.executable
+
+    print(f"  ✅ Virtual environment ready: {py_bin}", flush=True)
+    return py_bin
+
+
+def get_cuda_library_paths(venv_python: str = None) -> list:
     """Finds all nvidia and CUDA shared library directories in site-packages and system."""
     paths = []
-    for p in sys.path:
+    seen = set()
+
+    search_dirs = list(sys.path)
+    if venv_python and os.path.isfile(venv_python):
+        try:
+            out = subprocess.check_output(
+                [venv_python, "-c", "import sys, json; print(json.dumps(sys.path))"],
+                text=True,
+                timeout=5,
+            )
+            search_dirs.extend(json.loads(out.strip()))
+        except Exception:
+            pass
+
+    for p in search_dirs:
         if "site-packages" in p or "dist-packages" in p:
             nvidia_dir = os.path.join(p, "nvidia")
             if os.path.isdir(nvidia_dir):
                 for sub in os.listdir(nvidia_dir):
                     lib_dir = os.path.join(nvidia_dir, sub, "lib")
-                    if os.path.isdir(lib_dir):
+                    if os.path.isdir(lib_dir) and lib_dir not in seen:
                         paths.append(lib_dir)
+                        seen.add(lib_dir)
             torch_lib = os.path.join(p, "torch", "lib")
-            if os.path.isdir(torch_lib):
+            if os.path.isdir(torch_lib) and torch_lib not in seen:
                 paths.append(torch_lib)
+                seen.add(torch_lib)
 
     for sys_p in (
         "/usr/local/cuda/lib64",
         "/usr/local/cuda/targets/x86_64-linux/lib",
         "/opt/cuda/lib64",
     ):
-        if os.path.isdir(sys_p):
+        if os.path.isdir(sys_p) and sys_p not in seen:
             paths.append(sys_p)
+            seen.add(sys_p)
 
     return paths
 
@@ -146,47 +225,64 @@ def free_port(port: int = 8000):
         pass
 
 
-def setup_colab_gpu_environment():
+def setup_colab_gpu_environment(venv_python: str):
     """
-    Ensures onnxruntime-gpu is installed and CUDA/cuDNN shared libraries are linked.
+    Ensures onnxruntime-gpu is installed in .venv and CUDA/cuDNN shared libraries are linked.
     Resolves the dominant Colab issue where CUDA is present in Torch but missing in ORT.
     """
     print("\n[1/4] Inspecting hardware acceleration and CUDA drivers...", flush=True)
     has_gpu = False
+
+    # Check GPU availability inside the virtual environment
+    check_gpu_script = (
+        "import torch; "
+        "has = torch.cuda.is_available(); "
+        "dev = torch.cuda.get_device_name(0) if has else ''; "
+        "cuda = getattr(torch.version, 'cuda', '') or ''; "
+        "print(f'{has}|{dev}|{cuda}')"
+    )
     try:
-        import torch
-        if torch.cuda.is_available():
-            dev_name = torch.cuda.get_device_name(0)
-            print(f"  ✅ NVIDIA GPU detected via PyTorch: {dev_name} (CUDA {torch.version.cuda})", flush=True)
-            has_gpu = True
+        res = subprocess.run([venv_python, "-c", check_gpu_script], capture_output=True, text=True, timeout=15)
+        if res.returncode == 0:
+            parts = res.stdout.strip().split("|")
+            if parts[0].strip().lower() == "true":
+                dev_name = parts[1].strip() if len(parts) > 1 else "NVIDIA GPU"
+                cuda_ver = parts[2].strip() if len(parts) > 2 else "Unknown"
+                print(f"  ✅ NVIDIA GPU detected in .venv via PyTorch: {dev_name} (CUDA {cuda_ver})", flush=True)
+                has_gpu = True
+            else:
+                print("  ℹ️ No CUDA GPU detected in PyTorch (running in CPU mode).", flush=True)
         else:
-            print("  ℹ️ No CUDA GPU detected in PyTorch (running in CPU mode).", flush=True)
+            print("  ℹ️ PyTorch check in .venv returned non-zero code. Running in CPU mode.", flush=True)
     except Exception as e:
-        print(f"  ℹ️ PyTorch check: {e}", flush=True)
+        print(f"  ℹ️ PyTorch check in .venv: {e}", flush=True)
 
     if has_gpu:
         need_ort_gpu = False
+        check_ort_script = (
+            "import onnxruntime as ort; "
+            "print('CUDAExecutionProvider' in ort.get_available_providers())"
+        )
         try:
-            import onnxruntime as ort
-            providers = ort.get_available_providers()
-            if "CUDAExecutionProvider" not in providers:
-                need_ort_gpu = True
+            res = subprocess.run([venv_python, "-c", check_ort_script], capture_output=True, text=True, timeout=10)
+            if res.returncode == 0 and res.stdout.strip().lower() == "true":
+                print("  ✅ ONNX Runtime CUDA Execution Provider is active in .venv!", flush=True)
             else:
-                print(f"  ✅ ONNX Runtime CUDA Execution Provider is active!", flush=True)
-        except ImportError:
+                need_ort_gpu = True
+        except Exception:
             need_ort_gpu = True
 
         if need_ort_gpu:
-            print("  ⚡ Installing onnxruntime-gpu for 50x-100x acceleration in Colab...", flush=True)
-            subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "onnxruntime"], stdout=subprocess.DEVNULL)
-            subprocess.run([sys.executable, "-m", "pip", "install", "onnxruntime-gpu>=1.17.0"], check=False)
-            print("  ✅ onnxruntime-gpu installation finished.", flush=True)
+            print("  ⚡ Installing onnxruntime-gpu into .venv for 50x-100x acceleration in Colab...", flush=True)
+            subprocess.run([venv_python, "-m", "pip", "uninstall", "-y", "onnxruntime"], stdout=subprocess.DEVNULL)
+            subprocess.run([venv_python, "-m", "pip", "install", "onnxruntime-gpu>=1.17.0"], check=False)
+            print("  ✅ onnxruntime-gpu installation finished in .venv.", flush=True)
 
-    # Ensure backend requirements are installed
+    # Ensure backend requirements are installed into .venv
     req_file = os.path.join(BACKEND_DIR, "requirements-gpu.txt" if has_gpu else "requirements.txt")
     if os.path.isfile(req_file):
-        print(f"  📦 Checking dependencies from {os.path.basename(req_file)}...", flush=True)
-        subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file, "--quiet"], check=False)
+        print(f"  📦 Checking and installing dependencies into .venv from {os.path.basename(req_file)}...", flush=True)
+        subprocess.run([venv_python, "-m", "pip", "install", "-r", req_file, "--quiet"], check=False)
 
     # Ensure ffmpeg is present for web-standard H.264 video streaming and +faststart
     if not shutil.which("ffmpeg") and shutil.which("apt-get"):
@@ -230,8 +326,9 @@ def main():
     print("🪸  Andromeida Reef Vision Studio - Colab / Cloud Runner", flush=True)
     print("=" * 65, flush=True)
 
-    # 1. GPU Acceleration setup
-    setup_colab_gpu_environment()
+    # 1. Environment & GPU Acceleration setup in dedicated .venv
+    venv_python = get_or_create_venv()
+    setup_colab_gpu_environment(venv_python)
 
     # 2. Ensure optimized production frontend bundle in dist/
     ensure_production_frontend()
@@ -244,15 +341,20 @@ def main():
     env["PYTHONPATH"] = f"{BACKEND_DIR}:{env.get('PYTHONPATH', '')}"
     env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+    # Configure virtual environment for server process
+    venv_bin = os.path.dirname(venv_python)
+    env["VIRTUAL_ENV"] = os.path.dirname(venv_bin)
+    env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+
     # Prepend CUDA and cuDNN shared libraries to LD_LIBRARY_PATH so dynamic linker maps them cleanly
-    cuda_paths = get_cuda_library_paths()
+    cuda_paths = get_cuda_library_paths(venv_python)
     if cuda_paths:
         curr_ld = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = ":".join(cuda_paths) + (f":{curr_ld}" if curr_ld else "")
         print(f"  🔗 Linked {len(cuda_paths)} CUDA/cuDNN shared library directories into runtime path.", flush=True)
 
     server_proc = subprocess.Popen(
-        [sys.executable, backend_script, "--host", "0.0.0.0", "--port", "8000"],
+        [venv_python, backend_script, "--host", "0.0.0.0", "--port", "8000"],
         cwd=ROOT_DIR,
         env=env,
     )
