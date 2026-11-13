@@ -790,8 +790,8 @@ class VideoProcessor:
                         t_classification_sec += res_pack.get("duration_sec", 0.0)
                         for trk_id, res in res_pack.get("results", {}).items():
                             # 1. Update live tracker mutable state in coordinator
-                            if trk_id in tracker.tracks:
-                                trk_obj = tracker.tracks[trk_id]
+                            if trk_id in tracker._tracks:
+                                trk_obj = tracker._tracks[trk_id]
                                 trk_obj.taxonomy = res["taxonomy"]
                                 trk_obj.bleaching = res["bleaching"]
                                 trk_obj.needs_enrichment = False
