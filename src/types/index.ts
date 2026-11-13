@@ -2,7 +2,15 @@ export interface DeviceInfo {
   device: string;
   device_type: "gpu" | "cpu";
   device_name?: string;
-  native_precision?: string;
+  native_precision?:
+    | string
+    | {
+        cuda_bf16_native?: boolean;
+        cuda_fp16?: boolean;
+        mps_fp32?: boolean;
+        mps_fp16_profile?: boolean;
+        recommended_sam_precision?: string;
+      };
   compute_capability?: string | null;
   mps_available?: boolean;
   coreml_available?: boolean;

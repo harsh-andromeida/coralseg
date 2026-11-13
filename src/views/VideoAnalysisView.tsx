@@ -60,6 +60,12 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   const [jobId] = useState<string>(initialJobId || videoItem.job_id || "");
   const [jobStatus, setJobStatus] = useState<VideoJobStatus | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
+  // Backend sends native_precision as an object; older builds sent a string.
+  const precisionLabel = useMemo(() => {
+    const np = deviceInfo?.native_precision;
+    const raw = typeof np === "string" ? np : np?.recommended_sam_precision;
+    return typeof raw === "string" && raw ? raw.toUpperCase() : null;
+  }, [deviceInfo]);
   const [devicePref, setDevicePref] = useState<string>("auto");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [showLogs, setShowLogs] = useState<boolean>(true);
@@ -570,9 +576,9 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                       <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 text-white text-[11px] font-semibold shadow-xs" title={`Accelerator: ${deviceInfo.device_name || deviceInfo.gpu_name || deviceInfo.device}`}>
                         <Zap size={12} className="text-cyan-400" />
                         <span className="text-slate-300 font-mono uppercase">{deviceInfo.device}</span>
-                        {deviceInfo.native_precision && (
+                        {precisionLabel && (
                           <span className="text-cyan-300 font-mono text-[10px]">
-                            {deviceInfo.native_precision.toUpperCase()}
+                            {precisionLabel}
                           </span>
                         )}
                       </div>
