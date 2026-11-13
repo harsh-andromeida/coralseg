@@ -28,7 +28,7 @@ from core.models import (
 from core.segmentation import run_segmentation
 from core.taxonomy import enrich_masks_with_taxonomy_and_bleaching
 from core.visualization import create_segmentation_overlay, generate_distinct_colors
-from core.export import build_coco_json
+from core.image_export import build_coco_json
 from core.interactive_segmentation import (
     SAM_SESSION,
     mask_to_polygon,

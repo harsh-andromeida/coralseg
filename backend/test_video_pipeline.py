@@ -15,7 +15,7 @@ from core.device import check_torch_capabilities, get_memory_budget, resolve_har
 from core.video.keyframe_selector import EgoMotionKeyframeSelector
 from core.video.tracker import BenthicColonyTracker, CoralTrack, compute_box_iou
 from core.video.sam2_tracker import SAM2BenthicTracker, BaseVideoTracker
-from core.video.export import export_transect_csv, export_coco_video, render_video_overlay
+from core.video.video_export import export_transect_csv, export_coco_video, render_video_overlay
 from core.video.store import VideoJobStore
 from core.video.preprocessor import prepare_bounded_chunk_frames, cleanup_chunk_dir
 

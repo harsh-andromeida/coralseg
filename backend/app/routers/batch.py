@@ -14,7 +14,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Response
 
 from core.models import check_models_download_status
-from core.export import create_coco_dataset_zip, export_dataset_to_directory
+from core.image_export import create_coco_dataset_zip, export_dataset_to_directory
 from app.schemas import (
     BatchStartRequest,
     BatchPrioritizeRequest,

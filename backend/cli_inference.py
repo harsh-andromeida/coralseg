@@ -22,7 +22,7 @@ from core.models import load_coralscop_model, load_bioclip_model, load_bleaching
 from core.segmentation import run_segmentation
 from core.taxonomy import enrich_masks_with_taxonomy_and_bleaching
 from core.visualization import create_segmentation_overlay, generate_distinct_colors
-from core.export import build_coco_json
+from core.image_export import build_coco_json
 
 
 def main():

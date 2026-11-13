@@ -127,7 +127,7 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 | `app/schemas.py` | Pydantic request models |
 | `app/routers/system.py` | Health, device select, model status/download/delete |
 | `app/routers/images.py` | Samples, register image, segment, enrich, overlay, SAM prompt, save annotations, COCO/CSV export |
-| `app/routers/batch.py` | Batch start/pause/resume/cancel/status, folder export (not `core/batch.py`) |
+| `app/routers/batch.py` | Batch routes: start/pause/resume/cancel/status, folder export (logic in `core/batch_processor.py`) |
 | `app/routers/video.py` | Video upload, process, status/frames, pause/cancel, exports |
 | `core/models.py` | ONNX session loading, HF download, model locks, active-job counter |
 | `core/device.py` | Hardware tier resolution (CUDA/CoreML/CPU), memory budget, session options |
@@ -136,8 +136,8 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 | `core/interactive_segmentation.py` | Point/box prompt SAM, mask<->polygon, `SAM_SESSION` embedding cache |
 | `core/taxonomy.py` | BioCLIP genus/growth-form + bleaching classification, `enrich_masks_with_taxonomy_and_bleaching` |
 | `core/visualization.py` | Overlay rendering, distinct colours |
-| `core/batch.py` | `BatchProcessor` worker thread (image batches); the route layer is `app/routers/batch.py` |
-| `core/export.py` | COCO JSON/zip/dataset export for images |
+| `core/batch_processor.py` | `BatchProcessor` worker thread for image batches |
+| `core/image_export.py` | COCO JSON/zip/dataset export for images |
 | `core/video/engine.py` | `VideoProcessor`; `_run_job_pipeline` is the whole video pipeline (prepare, discover, track, classify, persist, export) |
 | `core/video/store.py` | `VideoJobStore` SQLite (WAL) persistence for jobs/chunks/frames/metrics |
 | `core/video/scheduler.py` | Chunk planning, worker admission, identity reconciliation across chunks |
@@ -145,7 +145,7 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 | `core/video/keyframe_selector.py` | Ego-motion keyframe selection |
 | `core/video/tracker.py` | `CoralTrack`, `BenthicColonyTracker` (IoU identity matching) |
 | `core/video/sam2_tracker.py`, `efficienttam_tracker.py` | Neural temporal mask propagation backends |
-| `core/video/export.py` | Annotated MP4, transect CSV, COCO video export (not `core/export.py`) |
+| `core/video/video_export.py` | Annotated MP4, transect CSV, COCO video export |
 | `test_api.py`, `test_video_pipeline.py` | Existing tests; benchmark/Colab scripts also live in `backend/` |
 
 **Frontend (`src/`, React 19 + Vite, dev port 1425)**
@@ -165,7 +165,7 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 **Desktop shell (`src-tauri/src/lib.rs`)**: spawns `backend/run_server.py` from `.venv`, health-checks `127.0.0.1:8000`, native save dialog command.
 
 **Data flow**
-- Image: `register` -> `/api/analysis/segment` (SAM) -> `/enrich` (BioCLIP + bleaching) -> `/overlay`; batch mode runs the same steps in `core/batch.py`. Results live in `app/state.py` caches (in memory only).
+- Image: `register` -> `/api/analysis/segment` (SAM) -> `/enrich` (BioCLIP + bleaching) -> `/overlay`; batch mode runs the same steps in `core/batch_processor.py`. Results live in `app/state.py` caches (in memory only).
 - Video: `/api/video/upload` -> `/process` -> `VideoProcessor` thread -> frames written to SQLite -> UI polls `/api/video/status` and frame deltas -> export endpoints.
 
-**Known name collisions**: `batch.py` (routers vs core), `export.py` (core vs core/video). Always use the full path.
+**Naming**: every source filename in `backend/` is unique; grep by filename is safe.

@@ -47,7 +47,7 @@ from core.visualization import (
     get_mask_overlay_label,
     create_segmentation_overlay,
 )
-from core.export import build_coco_json
+from core.image_export import build_coco_json
 
 __all__ = [
     "get_optimal_device",

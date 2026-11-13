@@ -41,7 +41,7 @@ from core.video.tracker import BenthicColonyTracker, CoralTrack
 from core.video.sam2_tracker import SAM2BenthicTracker
 from core.video.efficienttam_tracker import EfficientTAMBenthicTracker
 from core.video.scheduler import calculate_chunk_plan, admit_workers_for_device, reconcile_chunk_identities
-from core.video.export import export_annotated_video, export_transect_csv, export_coco_video
+from core.video.video_export import export_annotated_video, export_transect_csv, export_coco_video
 from core.video.store import VideoJobStore
 from core.segmentation import run_segmentation
 from core.interactive_segmentation import mask_to_polygon

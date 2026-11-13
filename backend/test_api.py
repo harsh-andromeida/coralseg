@@ -126,7 +126,7 @@ def test_endpoints():
     # Test COCO dataset ZIP serialization directly
     import io, zipfile
     from PIL import Image
-    from core.export import create_coco_dataset_zip
+    from core.image_export import create_coco_dataset_zip
     mock_img = Image.new("RGB", (64, 64), color=(0, 100, 200))
     mock_store = {"coral_test.png": mock_img}
     mock_item = {

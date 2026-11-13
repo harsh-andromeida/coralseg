@@ -22,7 +22,7 @@ from core.models import (
     unload_all_models_from_ram,
     are_models_loaded_in_ram,
 )
-from core.batch import BatchProcessor
+from core.batch_processor import BatchProcessor
 from core.schema import BaseSegCache, EnrichCache
 from core.video import VideoProcessor
 
