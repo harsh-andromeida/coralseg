@@ -113,6 +113,56 @@ def _is_noexec_or_drive_path(path: str) -> bool:
     return "/content/drive" in norm
 
 
+def ensure_pip_in_venv(py_bin: str) -> bool:
+    """Verifies and bootstraps pip inside a virtual environment if missing."""
+    try:
+        res = subprocess.run(
+            [py_bin, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    print("  📦 Bootstrapping pip into virtual environment...", flush=True)
+    # Attempt 1: ensurepip
+    try:
+        subprocess.run(
+            [py_bin, "-m", "ensurepip", "--default-pip"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+        res = subprocess.run(
+            [py_bin, "-m", "pip", "--version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        if res.returncode == 0:
+            print("  ✅ pip installed via ensurepip.", flush=True)
+            return True
+    except Exception:
+        pass
+
+    # Attempt 2: download get-pip.py from PyPA
+    try:
+        get_pip_url = "https://bootstrap.pypa.io/get-pip.py"
+        get_pip_file = "/tmp/get-pip.py"
+        urllib.request.urlretrieve(get_pip_url, get_pip_file)
+        res = subprocess.run([py_bin, get_pip_file, "--quiet", "--no-warn-script-location"], timeout=60)
+        if res.returncode == 0:
+            print("  ✅ pip installed via get-pip.py.", flush=True)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def get_or_create_venv() -> str:
     """
     Resolves or creates a Python virtual environment (.venv).
@@ -124,10 +174,10 @@ def get_or_create_venv() -> str:
     # 1. If currently running inside an active virtual environment, check if it's safe
     if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
         if not _is_noexec_or_drive_path(sys.executable):
-            print(f"  🐍 Using active virtual environment: {sys.executable}", flush=True)
-            return sys.executable
-        else:
-            print("  ⚠️ Active virtual environment is located on /content/drive (noexec mount). Switching to local /content/.venv...", flush=True)
+            if ensure_pip_in_venv(sys.executable):
+                print(f"  🐍 Using active virtual environment: {sys.executable}", flush=True)
+                return sys.executable
+        print("  ⚠️ Active virtual environment is invalid or on /content/drive. Switching to local /content/.venv...", flush=True)
 
     # 2. Determine target venv directory
     # If the repository is on /content/drive (Google Colab Drive mount):
@@ -151,8 +201,30 @@ def get_or_create_venv() -> str:
         py_bin = os.path.join(target_venv, "bin", "python")
 
     if os.path.isfile(py_bin) and _can_execute_binary(py_bin):
-        print(f"  🐍 Found existing virtual environment: {py_bin}", flush=True)
-        return py_bin
+        has_pip = ensure_pip_in_venv(py_bin)
+
+        # Check if host PyTorch with CUDA is accessible (verifies --system-site-packages)
+        can_access_torch = True
+        try:
+            import torch
+            if torch.cuda.is_available():
+                t_check = subprocess.run(
+                    [py_bin, "-c", "import torch; assert torch.cuda.is_available()"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                if t_check.returncode != 0:
+                    can_access_torch = False
+        except Exception:
+            pass
+
+        if has_pip and can_access_torch:
+            print(f"  🐍 Found existing healthy virtual environment: {py_bin}", flush=True)
+            return py_bin
+        else:
+            print(f"  ⚠️ Existing virtual environment at {target_venv} is incomplete (missing pip or system CUDA packages). Recreating cleanly...", flush=True)
+            shutil.rmtree(target_venv, ignore_errors=True)
 
     # 4. Create target_venv
     print(f"  🐍 Bootstrapping dedicated virtual environment at {target_venv}...", flush=True)
@@ -179,6 +251,9 @@ def get_or_create_venv() -> str:
     if not os.path.isfile(py_bin) or not _can_execute_binary(py_bin):
         print(f"  ⚠️ Virtual environment python not executable at {py_bin}. Falling back to {sys.executable}", flush=True)
         return sys.executable
+
+    # Ensure pip is installed in newly created venv
+    ensure_pip_in_venv(py_bin)
 
     print(f"  ✅ Virtual environment ready: {py_bin}", flush=True)
     return py_bin
@@ -361,12 +436,14 @@ def ensure_production_frontend():
                 print("  📦 Installing npm dependencies (one-time setup)...", flush=True)
                 subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--quiet"], cwd=ROOT_DIR, check=True)
 
-            print("  🔨 Building optimized bundle with 'npm run build'...", flush=True)
-            build_res = subprocess.run(["npm", "run", "build"], cwd=ROOT_DIR)
-            if build_res.returncode != 0 and has_node:
-                # Direct node invocation fallback for noexec filesystems (e.g. Google Drive where node_modules/.bin/tsc fails)
-                vite_bin = os.path.join(ROOT_DIR, "node_modules", "vite", "bin", "vite.js")
-                if os.path.isfile(vite_bin):
+            vite_bin = os.path.join(ROOT_DIR, "node_modules", "vite", "bin", "vite.js")
+            if _is_noexec_or_drive_path(ROOT_DIR) and has_node and os.path.isfile(vite_bin):
+                print("  ⚡ Building optimized bundle with direct node vite build (bypassing noexec)...", flush=True)
+                subprocess.run(["node", vite_bin, "build"], cwd=ROOT_DIR, check=True)
+            else:
+                print("  🔨 Building optimized bundle with 'npm run build'...", flush=True)
+                build_res = subprocess.run(["npm", "run", "build"], cwd=ROOT_DIR)
+                if build_res.returncode != 0 and has_node and os.path.isfile(vite_bin):
                     print("  ⚡ Falling back to direct node vite build (bypassing noexec script wrapper)...", flush=True)
                     subprocess.run(["node", vite_bin, "build"], cwd=ROOT_DIR, check=True)
 
