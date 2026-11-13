@@ -25,3 +25,9 @@ description: Core project workflow and development standards for ReefVision / co
   - Python: `.venv/`, `__pycache__/`, `build/`, `dist/`
   - Node/Rust: `node_modules/`, `target/`, `dist/`
   - Models/Binaries: `*.onnx`, `*.pth`, `*.pt`, `*.bin`, `*.npy`, `*.dmg`, `*.pkg`
+
+## 4. Testing & Execution Protocol: No Full Pipeline Locally
+- **Do NOT run the complete heavy pipeline on the user's PC for testing every time.**
+- **For every MAJOR change**:
+  1. **Primary**: Test first on **Google Colab** (using `colab` CLI remote session with GPU).
+  2. **Alternative**: Or create a **smaller, lightweight version** (e.g. tiny sample data, minimal frame count, or mock stages) that runs safely and fast on the local PC without overloading hardware.

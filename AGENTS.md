@@ -26,8 +26,13 @@ On completion of every development step, task, bug fix, or milestone:
 ### 3. Binary & Weight Handling
 Never commit heavy machine learning model weights (`*.onnx`, `*.pth`, `*.pt`, `*.bin`), installers (`*.dmg`, `*.pkg`, `*.exe`), or virtual environments/dependencies (`node_modules/`, `.venv/`, `target/`). Keep `.gitignore` strictly maintained.
 
-### 4. GPU usage for local inference and testing
-NOTE: use Colab GPU as default you can use it anytime.. but use modal only when asked. 
+### 4. Testing & Pipeline Execution Policy (Do NOT Run Full Pipeline Locally)
+**STRICT REQUIREMENT**: Do **NOT** run the complete heavy pipeline on the user's PC for testing every time.
+- **On every MAJOR change**:
+  1. **Primary (Cloud Colab)**: Test and benchmark first on **Google Colab** (via Colab CLI GPU session). Colab GPU is the default environment and can be used anytime.
+  2. **Alternative (Scaled-down Local)**: If testing locally, make or run a **smaller, lightweight version** (e.g. minimal sample dataset, 1-2 video frames, or lightweight mock stages) that can be run safely and quickly on the user's PC without overloading local system resources.
+- Reserve local testing strictly for fast smoke checks, unit tests, or scaled-down test cases—never full-scale, end-to-end heavy pipeline processing.
+- Use Modal only when explicitly requested.
 
 ### 5. Remote Cloud GPU Testing via Google Colab CLI (`colab`)
 The Google Colab CLI allows provisioning cloud runtimes with GPU accelerators (T4) and running remote tests/benchmarks directly from the terminal without manual browser interaction.
@@ -67,7 +72,7 @@ The Google Colab CLI allows provisioning cloud runtimes with GPU accelerators (T
   - Remote working directory is `/content`. Use absolute paths for remote file transfers (`colab upload`/`colab download`).
   - Always clean up any provisioned session with `colab stop -s <name>` to prevent wasting compute units.
 
-### 5. Remote Cloud GPU Testing & Serverless Benchmarking via Modal CLI (`modal`)
+### 6. Remote Cloud GPU Testing & Serverless Benchmarking via Modal CLI (`modal`)
 Modal provides serverless cloud execution for horizontal scaling and high-end GPUs (e.g. NVIDIA H100, A100, L4).
 
 - **Binary Location**: `/Users/harsh/.local/bin/modal` (or `modal`).
