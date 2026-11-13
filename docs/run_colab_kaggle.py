@@ -163,6 +163,24 @@ def ensure_pip_in_venv(py_bin: str) -> bool:
     return False
 
 
+def enable_system_site_packages_in_cfg(target_venv: str):
+    """Ensures pyvenv.cfg has include-system-site-packages = true."""
+    cfg_file = os.path.join(target_venv, "pyvenv.cfg")
+    if os.path.isfile(cfg_file):
+        try:
+            with open(cfg_file, "r") as f:
+                content = f.read()
+            if "include-system-site-packages = false" in content:
+                content = content.replace("include-system-site-packages = false", "include-system-site-packages = true")
+                with open(cfg_file, "w") as f:
+                    f.write(content)
+            elif "include-system-site-packages = true" not in content:
+                with open(cfg_file, "a") as f:
+                    f.write("\ninclude-system-site-packages = true\n")
+        except Exception:
+            pass
+
+
 def get_or_create_venv() -> str:
     """
     Resolves or creates a Python virtual environment (.venv).
@@ -201,44 +219,36 @@ def get_or_create_venv() -> str:
         py_bin = os.path.join(target_venv, "bin", "python")
 
     if os.path.isfile(py_bin) and _can_execute_binary(py_bin):
-        has_pip = ensure_pip_in_venv(py_bin)
-
-        # Check if host PyTorch with CUDA is accessible (verifies --system-site-packages)
-        can_access_torch = True
-        try:
-            import torch
-            if torch.cuda.is_available():
-                t_check = subprocess.run(
-                    [py_bin, "-c", "import torch; assert torch.cuda.is_available()"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5,
-                )
-                if t_check.returncode != 0:
-                    can_access_torch = False
-        except Exception:
-            pass
-
-        if has_pip and can_access_torch:
+        # Enable system packages (CUDA / PyTorch) in config and ensure pip is present
+        enable_system_site_packages_in_cfg(target_venv)
+        if ensure_pip_in_venv(py_bin):
             print(f"  🐍 Found existing healthy virtual environment: {py_bin}", flush=True)
             return py_bin
-        else:
-            print(f"  ⚠️ Existing virtual environment at {target_venv} is incomplete (missing pip or system CUDA packages). Recreating cleanly...", flush=True)
-            shutil.rmtree(target_venv, ignore_errors=True)
 
     # 4. Create target_venv
+    # In Ubuntu/Debian/Colab, ensurepip wheels are often stripped from minimal python,
+    # causing `python3 -m venv` to fail with exit status 1.
+    # Using --without-pip avoids ensurepip failure, and ensure_pip_in_venv() bootstraps pip via get-pip.py.
     print(f"  🐍 Bootstrapping dedicated virtual environment at {target_venv}...", flush=True)
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "venv", "--system-site-packages", target_venv],
-            check=True,
-        )
-    except Exception as e:
-        print(f"  ⚠️ Note: venv creation with --system-site-packages failed ({e}). Retrying standard venv...", flush=True)
-        subprocess.run(
-            [sys.executable, "-m", "venv", target_venv],
-            check=True,
-        )
+    created = False
+    for venv_cmd in [
+        [sys.executable, "-m", "venv", "--system-site-packages", "--without-pip", target_venv],
+        [sys.executable, "-m", "venv", "--without-pip", target_venv],
+        [sys.executable, "-m", "venv", "--system-site-packages", target_venv],
+        [sys.executable, "-m", "venv", target_venv],
+    ]:
+        try:
+            subprocess.run(venv_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            created = True
+            break
+        except Exception:
+            continue
+
+    if not created:
+        print(f"  ⚠️ Could not create virtual environment. Falling back to {sys.executable}", flush=True)
+        return sys.executable
+
+    enable_system_site_packages_in_cfg(target_venv)
 
     py_bin = (
         os.path.join(target_venv, "Scripts", "python.exe")
