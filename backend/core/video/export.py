@@ -75,9 +75,9 @@ def render_video_overlay(
             bleaching = getattr(track, "bleaching", None) or (track.get("bleaching") if isinstance(track, dict) else None) or {}
             track_id = getattr(track, "track_id", None) or (track.get("track_id") if isinstance(track, dict) else None) or 0
 
-            genus = taxonomy.get("genus", "Coral")
-            is_bleached = bleaching.get("is_bleached", False)
-            cond_str = "Bleached" if is_bleached else "Healthy"
+            genus = (taxonomy.get("genus") if taxonomy else None) or (track.get("genus") if isinstance(track, dict) else None) or "Coral"
+            is_bleached = (bleaching.get("is_bleached") if bleaching else None) or (track.get("is_bleached", False) if isinstance(track, dict) else False)
+            cond_str = (track.get("condition") if isinstance(track, dict) else None) or ("Bleached" if is_bleached else "Healthy")
             label = f"#{track_id} {genus} [{cond_str}]"
 
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -138,17 +138,40 @@ def render_video_overlay(
     return out
 
 
-def _detect_fastest_h264_encoder(ffmpeg_bin: str) -> str:
-    """Detects available hardware encoder: VideoToolbox (Mac), NVENC (CUDA), or ultrafast libx264."""
+def _test_encoder_works(ffmpeg_bin: str, encoder: str) -> bool:
+    """Verifies that an encoder actually initializes and executes without driver/hardware error."""
     try:
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-f", "lavfi",
+            "-i", "color=c=black:s=64x64:d=0.04",
+            "-c:v", encoder,
+            "-f", "null",
+            "-",
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=4)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _detect_fastest_h264_encoder(ffmpeg_bin: str) -> str:
+    """Detects available and hardware-validated encoder: VideoToolbox (Mac), NVENC (CUDA), or ultrafast libx264."""
+    try:
+        import platform
         res = subprocess.run([ffmpeg_bin, "-encoders"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3)
         stdout = res.stdout or ""
         if platform.system() == "Darwin" and "h264_videotoolbox" in stdout:
-            return "h264_videotoolbox"
+            if _test_encoder_works(ffmpeg_bin, "h264_videotoolbox"):
+                return "h264_videotoolbox"
         if "h264_nvenc" in stdout:
-            return "h264_nvenc"
+            if _test_encoder_works(ffmpeg_bin, "h264_nvenc"):
+                return "h264_nvenc"
     except Exception:
         pass
+    if _test_encoder_works(ffmpeg_bin, "libx264"):
+        return "libx264"
     return "libx264"
 
 
@@ -161,8 +184,8 @@ def export_annotated_video(
 ) -> str:
     """
     Generates an annotated MP4 video with rendered bounding boxes, polygons, and benthic HUD.
-    Uses single-pass hardware-accelerated ffmpeg streaming pipe when available,
-    falling back to OpenCV VideoWriter.
+    Uses single-pass hardware-accelerated ffmpeg streaming pipe with verified encoder initialization,
+    captures actionable errors, validates output dimensions and frame count, and falls back to OpenCV VideoWriter.
     """
     if not _HAS_CV2:
         raise RuntimeError("OpenCV is required to export video.")
@@ -206,7 +229,7 @@ def export_annotated_video(
                 ffmpeg_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
         except Exception:
             ffmpeg_proc = None
@@ -218,6 +241,7 @@ def export_annotated_video(
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             writer = cv2.VideoWriter(output_mp4_path, fourcc, fps, (width, height))
 
+    ffmpeg_error_msg = None
     try:
         frame_idx = 0
         while True:
@@ -249,7 +273,12 @@ def export_annotated_video(
                 bleaching_prevalence_pct=bleach_pct,
             )
             if ffmpeg_proc and ffmpeg_proc.stdin:
-                ffmpeg_proc.stdin.write(rendered.tobytes())
+                try:
+                    ffmpeg_proc.stdin.write(rendered.tobytes())
+                except BrokenPipeError:
+                    _, err_bytes = ffmpeg_proc.communicate()
+                    ffmpeg_error_msg = err_bytes.decode("utf-8", errors="replace")[-500:] if err_bytes else "Broken pipe"
+                    break
             elif writer:
                 writer.write(rendered)
 
@@ -257,20 +286,21 @@ def export_annotated_video(
             if progress_callback and total_frames > 0:
                 progress_callback(frame_idx, total_frames, (frame_idx / total_frames) * 100.0)
 
-        return output_mp4_path
     finally:
         cap.release()
         if ffmpeg_proc:
             try:
-                if ffmpeg_proc.stdin:
+                if ffmpeg_proc.stdin and not ffmpeg_proc.stdin.closed:
                     ffmpeg_proc.stdin.close()
-                ffmpeg_proc.wait(timeout=15)
-            except Exception:
-                pass
+                _, err_bytes = ffmpeg_proc.communicate(timeout=15)
+                if ffmpeg_proc.returncode != 0 and not ffmpeg_error_msg:
+                    ffmpeg_error_msg = err_bytes.decode("utf-8", errors="replace")[-500:] if err_bytes else f"Exit code {ffmpeg_proc.returncode}"
+            except Exception as e:
+                if not ffmpeg_error_msg:
+                    ffmpeg_error_msg = str(e)
         if writer:
             writer.release()
 
-            # Remux only if OpenCV fallback writer was used
             if ffmpeg_bin and os.path.isfile(output_mp4_path) and os.path.getsize(output_mp4_path) > 0:
                 temp_faststart = output_mp4_path + ".faststart.mp4"
                 try:
@@ -297,6 +327,28 @@ def export_annotated_video(
                             os.remove(temp_faststart)
                         except Exception:
                             pass
+
+    if ffmpeg_error_msg and (not os.path.isfile(output_mp4_path) or os.path.getsize(output_mp4_path) == 0):
+        raise RuntimeError(f"FFmpeg single-pass export failed: {ffmpeg_error_msg}")
+
+    # Validate generated output file
+    if not os.path.isfile(output_mp4_path) or os.path.getsize(output_mp4_path) == 0:
+        raise RuntimeError(f"Export output MP4 is missing or empty: {output_mp4_path}")
+
+    cap_verify = cv2.VideoCapture(output_mp4_path)
+    if not cap_verify.isOpened():
+        raise RuntimeError(f"Exported MP4 is unreadable or corrupted: {output_mp4_path}")
+    v_w = int(cap_verify.get(cv2.CAP_PROP_FRAME_WIDTH))
+    v_h = int(cap_verify.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    v_frames = int(cap_verify.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap_verify.release()
+
+    if v_w != width or v_h != height:
+        raise ValueError(f"Exported video dimensions ({v_w}x{v_h}) do not match source ({width}x{height})")
+    if total_frames > 0 and v_frames < max(1, total_frames - 5):
+        raise ValueError(f"Exported frame count ({v_frames}) significantly below expected ({total_frames})")
+
+    return output_mp4_path
 
 
 def export_transect_csv(
@@ -378,10 +430,10 @@ def export_coco_video(
                 "bbox": bbox,
                 "area": area_px,
                 "predicted_iou": pred_iou,
-                "taxonomy": tax.get("genus", "Coral"),
-                "growth_form": tax.get("growth_form", "-"),
-                "condition": bl.get("status", "Healthy"),
-                "is_bleached": bl.get("is_bleached", False),
+                "taxonomy": (tax.get("genus") if tax else None) or (t.get("genus") if isinstance(t, dict) else None) or "Coral",
+                "growth_form": (tax.get("growth_form") if tax else None) or (t.get("growth_form") if isinstance(t, dict) else None) or "-",
+                "condition": (bl.get("status") if bl else None) or (t.get("condition") if isinstance(t, dict) else None) or "Healthy",
+                "is_bleached": (bl.get("is_bleached") if bl else None) or (t.get("is_bleached", False) if isinstance(t, dict) else False),
             })
             ann_id += 1
 

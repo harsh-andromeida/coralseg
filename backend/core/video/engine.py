@@ -34,6 +34,7 @@ from core.video.preprocessor import (
     extract_video_frames_to_disk,
     prepare_bounded_chunk_frames,
     cleanup_chunk_dir,
+    BoundedVideoFrameBuffer,
 )
 from core.video.keyframe_selector import EgoMotionKeyframeSelector
 from core.video.tracker import BenthicColonyTracker, CoralTrack
@@ -122,6 +123,7 @@ class VideoProcessor:
         self.store = VideoJobStore(db_path=os.path.join(self.cache_dir, "video_jobs.sqlite3"))
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._tracker_cache: Dict[Tuple[str, int, str, Optional[str], bool], Any] = {}
 
         # Bounded job queue: default 1 active video job per accelerator
         self._job_queue = queue.Queue()
@@ -129,8 +131,15 @@ class VideoProcessor:
         self._queue_worker_thread.start()
 
     def close(self):
-        """Cleanly releases storage and worker threads."""
+        """Cleanly releases storage, cached tracker models, and worker threads."""
         self.store.close()
+        with self._lock:
+            for trk in self._tracker_cache.values():
+                try:
+                    trk.close()
+                except Exception:
+                    pass
+            self._tracker_cache.clear()
 
     def _process_queue_loop(self):
         """Sequential job coordinator running one active video job at a time."""
@@ -273,7 +282,8 @@ class VideoProcessor:
             "model_profile": "sam2",
             "model_size": 1024,
             "precision": None,
-            "worker_count": 1,
+            "worker_count": "auto",
+            "compile_tracker": False,
             "export_mp4": True,
             "tracker_mode": "sam2",
         }
@@ -427,7 +437,7 @@ class VideoProcessor:
             job["started_at"] = time.time()
         self.store.set_job_state(job_id, VideoJobState.PREPARING, started_at=time.time())
 
-        frames_dir: Optional[str] = None
+        frame_buffer: Optional[BoundedVideoFrameBuffer] = None
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             err_msg = f"Failed to open video file: {video_path}"
@@ -480,9 +490,11 @@ class VideoProcessor:
                     job["stage_detail"] = detail
                 if log_entry:
                     t_str = time.strftime("%H:%M:%S")
-                    job.setdefault("logs", []).append(f"[{t_str}] {log_entry}")
+                    formatted_log = f"[{t_str}] {log_entry}"
+                    job.setdefault("logs", []).append(formatted_log)
                     if len(job["logs"]) > 100:
                         job["logs"] = job["logs"][-100:]
+                    print(f"  ⚡ [Pipeline] {log_entry}", flush=True)
 
         # 1. Verify memory budget and load foundation models
         try:
@@ -508,6 +520,8 @@ class VideoProcessor:
             )
         except Exception as e:
             err_msg = f"Model loading failed: {str(e)}"
+            print(f"  ❌ [Pipeline Error] {err_msg}", flush=True)
+            traceback.print_exc()
             with self._lock:
                 job["state"] = VideoJobState.ERROR
                 job["error"] = err_msg
@@ -529,8 +543,10 @@ class VideoProcessor:
         )
 
         # 3. Worker Admission and Bounded Temporal Chunk Planning
-        requested_workers = opts.get("worker_count", 1)
-        effective_workers = admit_workers_for_device(device_pref, requested_workers)
+        from core.video.scheduler import normalize_worker_count
+        requested_workers = opts.get("worker_count", "auto")
+        normalized_workers = normalize_worker_count(requested_workers, device_pref=device_pref)
+        effective_workers = admit_workers_for_device(device_pref, normalized_workers)
         chunk_size = opts.get("chunk_size", 128)
         overlap_frames = opts.get("overlap_frames", 16)
         chunk_plan = calculate_chunk_plan(total_frames, chunk_size=chunk_size, overlap_frames=overlap_frames)
@@ -545,6 +561,9 @@ class VideoProcessor:
         t_persistence_sec = 0.0
         t_export_deliv_sec = 0.0
         t_export_mp4_sec = 0.0
+        accumulated_transfer_sec = 0.0
+        accumulated_geometry_sec = 0.0
+        accumulated_init_sec = 0.0
 
         with self._lock:
             job["worker_count"] = effective_workers
@@ -561,25 +580,41 @@ class VideoProcessor:
             log_entry=f"Chunk plan ready: {len(chunk_plan)} chunk(s) of {chunk_size} frames ({overlap_frames} overlap), {effective_workers} worker(s)",
         )
 
+        compile_tracker = bool(opts.get("compile_tracker", False))
+        cache_key = (model_profile, model_size, device_pref, precision, compile_tracker)
         sam2_tracker = None
+        with self._lock:
+            if cache_key in self._tracker_cache:
+                sam2_tracker = self._tracker_cache[cache_key]
+
         try:
-            if model_profile == "efficienttam":
-                sam2_tracker = EfficientTAMBenthicTracker(
-                    device=device_pref,
-                    model_size=model_size,
-                    precision=precision,
-                    offload_to_cpu=True,
-                )
+            if sam2_tracker is None:
+                if model_profile == "efficienttam":
+                    sam2_tracker = EfficientTAMBenthicTracker(
+                        device=device_pref,
+                        model_size=model_size,
+                        precision=precision,
+                        offload_to_cpu=True,
+                    )
+                else:
+                    sam2_tracker = SAM2BenthicTracker(
+                        device=device_pref,
+                        model_id="facebook/sam2.1-hiera-tiny",
+                        model_size=model_size,
+                        precision=precision,
+                        compile_tracker=compile_tracker,
+                        offload_to_cpu=True,
+                    )
+                sam2_tracker.load()
+                with self._lock:
+                    self._tracker_cache[cache_key] = sam2_tracker
             else:
-                sam2_tracker = SAM2BenthicTracker(
-                    device=device_pref,
-                    model_id="facebook/sam2.1-hiera-tiny",
-                    model_size=model_size,
-                    precision=precision,
-                    offload_to_cpu=True,
-                )
+                # Safe model reuse: reset temporal tracking state while retaining compiled weights
+                sam2_tracker.reset()
         except Exception as init_err:
             err_msg = f"SAM tracker initialization failed: {str(init_err)}"
+            print(f"  ❌ [Pipeline Error] {err_msg}", flush=True)
+            traceback.print_exc()
             with self._lock:
                 job["state"] = VideoJobState.ERROR
                 job["error"] = err_msg
@@ -591,6 +626,12 @@ class VideoProcessor:
         with self._lock:
             job["state"] = VideoJobState.PROCESSING
         self.store.set_job_state(job_id, VideoJobState.PROCESSING)
+
+        # Capture initial load & compilation warm-up timings
+        init_timings = sam2_tracker.get_timings()
+        compile_warmup_sec = init_timings.get("compile_warmup_sec", 0.0)
+        accumulated_init_sec = init_timings.get("initialization_sec", 0.0)
+        accumulated_queue_wait_sec = 0.0
 
         pipeline_start_t = time.time()
         committed_frames = set()
@@ -738,24 +779,60 @@ class VideoProcessor:
         prefetch_executor = ThreadPoolExecutor(max_workers=1)
         enrichment_executor = ThreadPoolExecutor(max_workers=1)
         pending_enrichment_futures: List[Any] = []
-        next_chunk_future = None
-        next_chunk_dir = None
-        if chunk_plan:
-            c0 = chunk_plan[0]
-            c0_dir = os.path.join(tempfile.gettempdir(), f"rv_chunk_{job_id}_{c0.chunk_idx}_{os.getpid()}")
-            next_chunk_future = prefetch_executor.submit(
-                prepare_bounded_chunk_frames,
-                video_path=video_path,
-                chunk_dir=c0_dir,
-                start_frame=c0.start_frame,
-                end_frame=c0.end_frame,
-                max_dim=480,
-                jpeg_quality=80,
-                keyframe_selector=selector,
-            )
-            next_chunk_dir = c0_dir
 
-        current_chunk_dir = None
+        def _reap_enrichment_results(block: bool = False):
+            nonlocal t_classification_sec
+            still_pending = []
+            for fut in pending_enrichment_futures:
+                if block or fut.done():
+                    try:
+                        res_pack = fut.result()
+                        t_classification_sec += res_pack.get("duration_sec", 0.0)
+                        for trk_id, res in res_pack.get("results", {}).items():
+                            # 1. Update live tracker mutable state in coordinator
+                            if trk_id in tracker.tracks:
+                                trk_obj = tracker.tracks[trk_id]
+                                trk_obj.taxonomy = res["taxonomy"]
+                                trk_obj.bleaching = res["bleaching"]
+                                trk_obj.needs_enrichment = False
+                            # 2. Update sam2_tracker metadata so future frames carry finalized labels
+                            if hasattr(sam2_tracker, "_tracks_meta") and trk_id in sam2_tracker._tracks_meta:
+                                meta = sam2_tracker._tracks_meta[trk_id]
+                                meta["genus"] = res["taxonomy"].get("genus", "Coral")
+                                meta["growth_form"] = res["taxonomy"].get("growth_form", "-")
+                                meta["taxon_conf"] = res["taxonomy"].get("confidence_pct", 85.0)
+                                meta["condition"] = res["bleaching"].get("status", "Healthy")
+                                meta["condition_conf"] = res["bleaching"].get("confidence_pct", 90.0)
+                                meta["is_bleached"] = res["bleaching"].get("is_bleached", False)
+                            # 3. Update store track record and finalize classifications
+                            self.store.save_track(
+                                job_id=job_id,
+                                track_id=trk_id,
+                                global_colony_id=trk_id,
+                                first_frame=res["first_frame"],
+                                last_frame=res["first_frame"],
+                                genus=res["taxonomy"].get("genus", "Coral"),
+                                growth_form=res["taxonomy"].get("growth_form", "-"),
+                                taxon_conf=float(res["taxonomy"].get("confidence_pct", 85.0)),
+                                condition=str(res["bleaching"].get("status", "Healthy")),
+                                condition_conf=float(res["bleaching"].get("confidence_pct", 90.0)),
+                                color_rgb=res["color_rgb"],
+                                metadata={"color_hex": res["color_hex"], "predicted_iou": res["predicted_iou"]},
+                            )
+                            self.store.finalize_track_classification(
+                                job_id=job_id,
+                                track_id=trk_id,
+                                taxonomy=res["taxonomy"],
+                                bleaching=res["bleaching"],
+                            )
+                    except Exception as ef:
+                        _set_stage(log_entry=f"Async classification task error: {ef}")
+                else:
+                    still_pending.append(fut)
+            pending_enrichment_futures.clear()
+            pending_enrichment_futures.extend(still_pending)
+
+        frame_buffer = BoundedVideoFrameBuffer(video_path=video_path, max_dim=480)
         try:
             for chunk_idx, chunk in enumerate(chunk_plan):
                 if job["cancel_requested"]:
@@ -774,12 +851,15 @@ class VideoProcessor:
                     detail=f"Chunk {chunk.chunk_idx + 1} of {len(chunk_plan)} ({chunk.total_frames} frames)",
                 )
 
-                chunk_dir = next_chunk_dir
-                current_chunk_dir = chunk_dir
-
-                t_c_wait = time.perf_counter()
-                _, proxy_meta = next_chunk_future.result()
-                t_chunk_prep_sec += (time.perf_counter() - t_c_wait)
+                t_c_start = time.perf_counter()
+                min_m_frame = chunk.commit_start if chunk.chunk_idx > 0 else 0
+                chunk_frames, proxy_meta = frame_buffer.fetch_chunk(
+                    start_frame=chunk.start_frame,
+                    end_frame=chunk.end_frame,
+                    keyframe_selector=selector,
+                    min_motion_frame=min_m_frame,
+                )
+                t_chunk_prep_sec += (time.perf_counter() - t_c_start)
                 scale_x = proxy_meta.get("scale_x", 1.0)
                 scale_y = proxy_meta.get("scale_y", 1.0)
                 if "chunk_keyframes" in proxy_meta:
@@ -787,25 +867,11 @@ class VideoProcessor:
                 if "chunk_motion_metas" in proxy_meta:
                     motion_metas.update(proxy_meta["chunk_motion_metas"])
 
-                # Prefetch next chunk in background thread while this chunk runs SAM inference
-                if chunk_idx + 1 < len(chunk_plan):
-                    next_c = chunk_plan[chunk_idx + 1]
-                    next_chunk_dir = os.path.join(tempfile.gettempdir(), f"rv_chunk_{job_id}_{next_c.chunk_idx}_{os.getpid()}")
-                    next_chunk_future = prefetch_executor.submit(
-                        prepare_bounded_chunk_frames,
-                        video_path=video_path,
-                        chunk_dir=next_chunk_dir,
-                        start_frame=next_c.start_frame,
-                        end_frame=next_c.end_frame,
-                        max_dim=480,
-                        jpeg_quality=80,
-                        keyframe_selector=selector,
-                    )
-                else:
-                    next_chunk_future = None
-                    next_chunk_dir = None
-
-                sam2_tracker.init_video(chunk_dir, frame_offset=chunk.start_frame)
+                sam2_tracker.init_video(
+                    chunk_frames,
+                    frame_offset=chunk.start_frame,
+                    orig_hw=(proxy_meta.get("proxy_h", 480), proxy_meta.get("proxy_w", 640)),
+                )
 
                 # Carry forward active tracks into this chunk's SAM inference state
                 # seeded from the exact overlap start frame (Fixes P1 Issue 1)
@@ -884,27 +950,12 @@ class VideoProcessor:
                     if job["cancel_requested"]:
                         break
 
-                    # Step 1: Keyframe discovery & correction (reuse proxy frame if available)
-                    kf_proc_rgb = None
-                    kf_rgb = None
+                    # Step 1: Keyframe discovery & correction (reuse in-memory proxy & raw frames)
                     rel_f = kf_frame_idx - chunk.start_frame
-                    chunk_frame_jpg = os.path.join(chunk_dir, f"{rel_f:05d}.jpg")
-
-                    if is_kf_proxy and os.path.isfile(chunk_frame_jpg):
-                        kf_proc_bgr = cv2.imread(chunk_frame_jpg)
-                        if kf_proc_bgr is not None:
-                            kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
-
-                    if kf_proc_rgb is None:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
-                        ret, kf_bgr = cap.read()
-                        if ret and kf_bgr is not None:
-                            kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
-                            if is_kf_proxy:
-                                kf_proc_bgr = cv2.resize(kf_bgr, (kf_proxy_w, kf_proxy_h), interpolation=cv2.INTER_AREA)
-                                kf_proc_rgb = cv2.cvtColor(kf_proc_bgr, cv2.COLOR_BGR2RGB)
-                            else:
-                                kf_proc_rgb = kf_rgb
+                    kf_proc_rgb = chunk_frames[rel_f] if (0 <= rel_f < len(chunk_frames)) else None
+                    kf_rgb = frame_buffer.get_keyframe_raw_rgb(kf_frame_idx)
+                    if kf_proc_rgb is None and kf_rgb is not None:
+                        kf_proc_rgb = cv2.resize(kf_rgb, (kf_proxy_w, kf_proxy_h), interpolation=cv2.INTER_AREA) if is_kf_proxy else kf_rgb
 
                     if kf_proc_rgb is not None:
                         points_per_side = opts.get("points_per_side", 16)
@@ -1029,12 +1080,7 @@ class VideoProcessor:
 
                             # Read full frame for crops if not loaded
                             if kf_rgb is None:
-                                cap.set(cv2.CAP_PROP_POS_FRAMES, kf_frame_idx)
-                                ret, kf_bgr = cap.read()
-                                if ret and kf_bgr is not None:
-                                    kf_rgb = cv2.cvtColor(kf_bgr, cv2.COLOR_BGR2RGB)
-                                else:
-                                    kf_rgb = kf_proc_rgb
+                                kf_rgb = frame_buffer.get_keyframe_raw_rgb(kf_frame_idx)
 
                             pil_img = Image.fromarray(kf_rgb)
                             crops = []
@@ -1056,25 +1102,23 @@ class VideoProcessor:
                                     t_res = classify_coral_taxonomy(c_crops, bioclip_bundle=bioclip_bundle, top_k=3)
                                     b_res = detect_coral_bleaching(c_crops, bleaching_model=bleaching_model)
                                     c_dur = time.perf_counter() - t_c0
+                                    results = {}
                                     for k_idx, trk_item in enumerate(c_tracks):
-                                        trk_item.taxonomy = t_res[k_idx]
-                                        trk_item.bleaching = b_res[k_idx]
-                                        trk_item.needs_enrichment = False
-                                        self.store.save_track(
-                                            job_id=job_id,
-                                            track_id=trk_item.track_id,
-                                            global_colony_id=trk_item.track_id,
-                                            first_frame=f_idx,
-                                            last_frame=f_idx,
-                                            genus=trk_item.taxonomy.get("genus", "Coral"),
-                                            growth_form=trk_item.taxonomy.get("growth_form", "-"),
-                                            taxon_conf=float(trk_item.taxonomy.get("confidence_pct", 85.0)),
-                                            condition=str(trk_item.bleaching.get("status", "Healthy")),
-                                            condition_conf=float(trk_item.bleaching.get("confidence_pct", 90.0)),
-                                            color_rgb=trk_item.color_rgb,
-                                            metadata={"color_hex": trk_item.color_hex, "predicted_iou": trk_item.predicted_iou},
-                                        )
-                                    return c_dur
+                                        results[trk_item.track_id] = {
+                                            "track_id": trk_item.track_id,
+                                            "taxonomy": t_res[k_idx],
+                                            "bleaching": b_res[k_idx],
+                                            "first_frame": f_idx,
+                                            "color_rgb": trk_item.color_rgb,
+                                            "color_hex": trk_item.color_hex,
+                                            "predicted_iou": trk_item.predicted_iou,
+                                        }
+                                    return {"duration_sec": c_dur, "results": results}
+
+                                # Bound outstanding classification tasks (backpressure)
+                                MAX_PENDING_ENRICHMENT = 4
+                                while len(pending_enrichment_futures) >= MAX_PENDING_ENRICHMENT:
+                                    _reap_enrichment_results(block=True)
 
                                 fut = enrichment_executor.submit(_enrich_worker, crops, task_tracks, kf_frame_idx)
                                 pending_enrichment_futures.append(fut)
@@ -1150,21 +1194,19 @@ class VideoProcessor:
                 timings = sam2_tracker.get_timings()
                 accumulated_prop_sec += timings.get("propagation_sec", 0.0)
                 accumulated_prop_frames += timings.get("frames_propagated", 0)
+                accumulated_transfer_sec += timings.get("transfer_sec", 0.0)
+                accumulated_geometry_sec += timings.get("geometry_sec", 0.0)
+                accumulated_init_sec += timings.get("initialization_sec", 0.0)
+                accumulated_queue_wait_sec += timings.get("queue_wait_sec", 0.0)
                 sam2_tracker.reset_timings()
                 previous_chunk_overlap_frames = tail_overlap_tracks
                 self.store.update_chunk_status(job_id, chunk.chunk_idx, "completed")
-                cleanup_chunk_dir(chunk_dir)
-                current_chunk_dir = None
 
             # Flush any remaining batched frame writes
             _flush_pending_frames()
 
-            # Await all background classification tasks before generating deliverables
-            for fut in pending_enrichment_futures:
-                try:
-                    t_classification_sec += fut.result()
-                except Exception as ef:
-                    _set_stage(log_entry=f"Async classification task error: {ef}")
+            # Await all background classification tasks and apply results through coordinator
+            _reap_enrichment_results(block=True)
 
             if not job["cancel_requested"]:
                 # Strict frame coverage verification (Fixes P1 Issue 4)
@@ -1285,32 +1327,38 @@ class VideoProcessor:
 
                 tracker_timings = sam2_tracker.get_timings()
                 total_prop_sec = accumulated_prop_sec + tracker_timings.get("propagation_sec", 0.0)
-                total_transfer_sec = tracker_timings.get("transfer_sec", 0.0)
-                total_geometry_sec = tracker_timings.get("geometry_sec", 0.0)
+                total_transfer_sec = accumulated_transfer_sec + tracker_timings.get("transfer_sec", 0.0)
+                total_geometry_sec = accumulated_geometry_sec + tracker_timings.get("geometry_sec", 0.0)
+                total_queue_wait_sec = accumulated_queue_wait_sec + tracker_timings.get("queue_wait_sec", 0.0)
                 total_decode_prep_sec = t_motion_scan_sec + t_chunk_prep_sec
 
-                measured_stages_sec = (
+                # Critical path elapsed duration and sequential stage budget
+                critical_path_stages_sec = (
                     total_decode_prep_sec
                     + total_prop_sec
                     + total_transfer_sec
                     + total_geometry_sec
                     + t_discovery_sec
-                    + t_classification_sec
                     + t_persistence_sec
                     + t_export_deliv_sec
                     + t_export_mp4_sec
                 )
-                unaccounted_idle_sec = max(0.0, elapsed_total - measured_stages_sec)
+                unaccounted_idle_sec = max(0.0, elapsed_total - critical_path_stages_sec)
 
                 pipeline_timings = {
                     "total_elapsed_sec": round(elapsed_total, 3),
+                    "critical_path_elapsed_sec": round(elapsed_total, 3),
+                    "compile_warmup_sec": round(compile_warmup_sec, 3),
+                    "initialization_sec": round(accumulated_init_sec, 3),
                     "video_decode_prep_sec": round(total_decode_prep_sec, 3),
                     "motion_scan_sec": round(t_motion_scan_sec, 3),
                     "chunk_prep_sec": round(t_chunk_prep_sec, 3),
                     "synchronized_gpu_inference_sec": round(total_prop_sec, 3),
                     "mask_transfer_sec": round(total_transfer_sec, 3),
                     "geometry_extraction_sec": round(total_geometry_sec, 3),
+                    "queue_wait_sec": round(total_queue_wait_sec, 3),
                     "keyframe_discovery_sec": round(t_discovery_sec, 3),
+                    "background_classification_sec": round(t_classification_sec, 3),
                     "keyframe_classification_sec": round(t_classification_sec, 3),
                     "persistence_sec": round(t_persistence_sec, 3),
                     "export_deliverables_sec": round(t_export_deliv_sec, 3),
@@ -1319,7 +1367,6 @@ class VideoProcessor:
                     "pct_gpu_inference": round((total_prop_sec / max(elapsed_total, 0.001)) * 100.0, 1),
                     "pct_video_decode_prep": round((total_decode_prep_sec / max(elapsed_total, 0.001)) * 100.0, 1),
                     "pct_keyframe_discovery": round((t_discovery_sec / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "pct_keyframe_classification": round((t_classification_sec / max(elapsed_total, 0.001)) * 100.0, 1),
                     "pct_geometry_and_transfer": round(((total_geometry_sec + total_transfer_sec) / max(elapsed_total, 0.001)) * 100.0, 1),
                     "pct_persistence": round((t_persistence_sec / max(elapsed_total, 0.001)) * 100.0, 1),
                     "pct_export": round(((t_export_deliv_sec + t_export_mp4_sec) / max(elapsed_total, 0.001)) * 100.0, 1),
@@ -1368,6 +1415,11 @@ class VideoProcessor:
         finally:
             cap.release()
             try:
+                if frame_buffer is not None:
+                    frame_buffer.close()
+            except Exception:
+                pass
+            try:
                 prefetch_executor.shutdown(wait=False)
             except Exception:
                 pass
@@ -1376,8 +1428,4 @@ class VideoProcessor:
             except Exception:
                 pass
             if sam2_tracker:
-                sam2_tracker.close()
-            if current_chunk_dir:
-                cleanup_chunk_dir(current_chunk_dir)
-            if next_chunk_dir and os.path.exists(next_chunk_dir):
-                cleanup_chunk_dir(next_chunk_dir)
+                sam2_tracker.reset()

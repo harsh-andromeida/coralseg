@@ -187,7 +187,28 @@ class VideoProcessRequest(BaseModel):
     model_size: int = Field(default=1024, description="Model input resolution: 1024 (reference) or 512 (fast)")
     precision: Optional[str] = Field(default=None, description="Precision: 'float16', 'bfloat16', 'float32', or auto (None)")
     worker_count: Union[int, str] = Field(default="auto", description="Inference worker instances: 'auto' or 1-8")
+    compile_tracker: bool = Field(default=False, description="Whether to compile SAM2/TAM via torch.compile (VOS optimized)")
     export_mp4: bool = Field(default=True, description="Whether to render annotated MP4 video deliverable")
+
+    @field_validator("worker_count")
+    @classmethod
+    def validate_worker_count(cls, v: Union[int, str]) -> Union[int, str]:
+        if isinstance(v, str):
+            v_clean = v.strip().lower()
+            if v_clean == "auto":
+                return "auto"
+            try:
+                val = int(v_clean)
+                if 1 <= val <= 8:
+                    return val
+                raise ValueError("worker_count must be between 1 and 8")
+            except ValueError:
+                raise ValueError(f"Invalid worker_count '{v}'. Must be 'auto' or integer between 1 and 8.")
+        elif isinstance(v, int):
+            if 1 <= v <= 8:
+                return v
+            raise ValueError("worker_count must be between 1 and 8")
+        raise ValueError(f"Invalid worker_count type: {type(v)}")
 
     @field_validator("tracker_mode")
     @classmethod

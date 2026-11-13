@@ -555,7 +555,7 @@ class VideoJobStore:
                 "frame_idx": int(row["frame_idx"]),
                 "timestamp_sec": float(row["timestamp_sec"]),
                 "is_keyframe": bool(row["is_keyframe"]),
-                "tracks": json.loads(row["tracks_json"]),
+                "tracks": self._resolve_tracks_labels(job_id, json.loads(row["tracks_json"])),
             }
             self._put_cache(job_id, frame_idx, obj)
             return obj
@@ -594,7 +594,7 @@ class VideoJobStore:
                     "frame_idx": f_idx,
                     "timestamp_sec": float(row["timestamp_sec"]),
                     "is_keyframe": bool(row["is_keyframe"]),
-                    "tracks": json.loads(row["tracks_json"]),
+                    "tracks": self._resolve_tracks_labels(job_id, json.loads(row["tracks_json"])),
                 }
                 result[f_idx] = obj
                 self._put_cache(job_id, f_idx, obj)
@@ -632,7 +632,7 @@ class VideoJobStore:
                     "frame_idx": f_idx,
                     "timestamp_sec": float(r["timestamp_sec"]),
                     "is_keyframe": bool(r["is_keyframe"]),
-                    "tracks": json.loads(r["tracks_json"]),
+                    "tracks": self._resolve_tracks_labels(job_id, json.loads(r["tracks_json"])),
                 }
                 frames.append(obj)
                 self._put_cache(job_id, f_idx, obj)
@@ -750,6 +750,64 @@ class VideoJobStore:
                     "metadata": json.loads(r["metadata_json"]) if r["metadata_json"] else {},
                 }
             return result
+
+    def finalize_track_classification(
+        self,
+        job_id: str,
+        track_id: int,
+        taxonomy: Dict[str, Any],
+        bleaching: Dict[str, Any],
+    ):
+        """Updates track record with finalized asynchronous classification labels."""
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute("""
+            UPDATE tracks
+            SET genus = ?, growth_form = ?, taxon_conf = ?, condition = ?, condition_conf = ?
+            WHERE job_id = ? AND (track_id = ? OR global_colony_id = ?);
+            """, (
+                taxonomy.get("genus", "Coral"),
+                taxonomy.get("growth_form", "-"),
+                float(taxonomy.get("confidence_pct", 85.0)),
+                bleaching.get("status", "Healthy"),
+                float(bleaching.get("confidence_pct", 90.0)),
+                job_id,
+                track_id,
+                track_id,
+            ))
+            # Invalidate in-memory cache for this job to force updated label presentation
+            keys_to_del = [k for k in self._cache if k[0] == job_id]
+            for k in keys_to_del:
+                self._cache.pop(k, None)
+
+    def _resolve_tracks_labels(self, job_id: str, tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Resolves finalized colony taxonomy and condition metadata for frame track detections."""
+        if not tracks:
+            return tracks
+        all_tracks = self.get_tracks(job_id)
+        if not all_tracks:
+            return tracks
+
+        resolved = []
+        for t in tracks:
+            tid = t.get("global_colony_id") or t.get("track_id") or t.get("id")
+            if tid is not None and int(tid) in all_tracks:
+                meta = all_tracks[int(tid)]
+                t_copy = dict(t)
+                t_copy["genus"] = meta.get("genus", t_copy.get("genus", "Coral"))
+                t_copy["primary_label"] = meta.get("genus", t_copy.get("primary_label", "Coral"))
+                t_copy["growth_form"] = meta.get("growth_form", t_copy.get("growth_form", "-"))
+                t_copy["taxon_conf"] = meta.get("taxon_conf", t_copy.get("taxon_conf", 85.0))
+                t_copy["condition"] = meta.get("condition", t_copy.get("condition", "Healthy"))
+                t_copy["condition_conf"] = meta.get("condition_conf", t_copy.get("condition_conf", 90.0))
+                t_copy["is_bleached"] = (str(t_copy["condition"]).lower() == "bleached")
+                color_hex = meta.get("metadata", {}).get("color_hex")
+                if color_hex:
+                    t_copy["color_hex"] = color_hex
+                resolved.append(t_copy)
+            else:
+                resolved.append(t)
+        return resolved
 
     # -------------------------------------------------------------------------
     # Internal Helpers & LRU Cache

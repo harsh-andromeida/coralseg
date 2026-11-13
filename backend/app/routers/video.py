@@ -195,6 +195,7 @@ def process_video(req: VideoProcessRequest):
                 "model_size": req.model_size,
                 "precision": req.precision,
                 "worker_count": req.worker_count,
+                "compile_tracker": req.compile_tracker,
                 "export_mp4": req.export_mp4,
             },
         )

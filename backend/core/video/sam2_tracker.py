@@ -13,7 +13,8 @@ import contextlib
 import cv2
 import numpy as np
 import torch
-from typing import Dict, List, Any, Optional, Tuple, Iterator
+from collections import OrderedDict
+from typing import Dict, List, Any, Optional, Tuple, Iterator, Union
 
 from core.device import check_torch_capabilities
 
@@ -166,13 +167,16 @@ class SAM2BenthicTracker(BaseVideoTracker):
         model_size: int = 1024,
         precision: Optional[str] = None,
         vos_optimized: bool = False,
+        compile_tracker: bool = False,
         offload_to_cpu: bool = True,
     ):
         self.device = _resolve_torch_device(device)
         self.model_id = model_id
         self.model_size = int(model_size)
         self.precision_pref = precision
-        self.vos_optimized = vos_optimized
+        self.compile_tracker = bool(compile_tracker or vos_optimized)
+        # vos_optimized / torch.compile is qualified only on CUDA; MPS & CPU enforce eager
+        self.vos_optimized = bool(self.compile_tracker and self.device == "cuda")
         self.offload_to_cpu = offload_to_cpu
 
         self.dtype, self.use_autocast = _resolve_precision(self.device, precision)
@@ -181,6 +185,7 @@ class SAM2BenthicTracker(BaseVideoTracker):
         self._inference_state = None
         self._tracks_meta: Dict[int, Dict[str, Any]] = {}
         self.initialized = False
+        self.recompilations_count = 0
 
         # Timing instrumentation
         self._timings: Dict[str, float] = {
@@ -190,6 +195,7 @@ class SAM2BenthicTracker(BaseVideoTracker):
             "transfer_sec": 0.0,
             "geometry_sec": 0.0,
             "compile_warmup_sec": 0.0,
+            "queue_wait_sec": 0.0,
         }
 
         if self.device == "cuda" and torch.cuda.is_available():
@@ -198,6 +204,52 @@ class SAM2BenthicTracker(BaseVideoTracker):
                 torch.backends.cudnn.benchmark = True
             except Exception:
                 pass
+
+    def _run_compile_warmup(self):
+        """Executes a 1-frame dummy warm-up forward pass to trigger ahead-of-time graph compilation."""
+        if not (self.vos_optimized and self.device == "cuda"):
+            return
+        t_start = time.perf_counter()
+        try:
+            img_size = getattr(self._predictor, "image_size", self.model_size)
+            dummy_images = torch.zeros(1, 3, img_size, img_size, dtype=torch.float32, device="cpu" if self.offload_to_cpu else self.device)
+            dummy_state = {
+                "images": dummy_images,
+                "num_frames": 1,
+                "offload_video_to_cpu": self.offload_to_cpu,
+                "offload_state_to_cpu": self.offload_to_cpu,
+                "video_height": img_size,
+                "video_width": img_size,
+                "device": self._predictor.device,
+                "storage_device": torch.device("cpu") if self.offload_to_cpu else self._predictor.device,
+                "point_inputs_per_obj": {},
+                "mask_inputs_per_obj": {},
+                "cached_features": {},
+                "constants": {},
+                "obj_id_to_idx": OrderedDict(),
+                "obj_idx_to_id": OrderedDict(),
+                "obj_ids": [],
+                "output_dict_per_obj": {},
+                "temp_output_dict_per_obj": {},
+                "frames_tracked_per_obj": {},
+            }
+            with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
+                # 1. Warm up and compile visual backbone
+                self._predictor._get_image_feature(dummy_state, frame_idx=0, batch_size=1)
+                # 2. Warm up mask prompt encoder & mask decoder
+                dummy_mask = np.zeros((img_size, img_size), dtype=bool)
+                dummy_mask[img_size // 4 : img_size // 2, img_size // 4 : img_size // 2] = True
+                self._predictor.add_new_mask(dummy_state, frame_idx=0, obj_id=1, mask=dummy_mask)
+                # 3. Warm up memory encoder and attention
+                gen = self._predictor.propagate_in_video(dummy_state, start_frame_idx=0, max_frame_num_to_track=0)
+                for _ in gen:
+                    pass
+                if self.device == "cuda" and torch.cuda.is_available():
+                    torch.cuda.synchronize()
+            self._timings["compile_warmup_sec"] = round(time.perf_counter() - t_start, 4)
+        except Exception as e:
+            print(f"[SAM2BenthicTracker] Compile warm-up notice: {e}")
+            self._timings["compile_warmup_sec"] = round(time.perf_counter() - t_start, 4)
 
     def load(self):
         """Builds predictor once per worker and reuses it."""
@@ -217,28 +269,101 @@ class SAM2BenthicTracker(BaseVideoTracker):
         self._predictor = SAM2VideoPredictor.from_pretrained(self.model_id, **kwargs)
 
         if self.vos_optimized and self.device == "cuda":
-            # Warm up and record compile time
-            t_warm = time.perf_counter()
-            self._timings["compile_warmup_sec"] = round(time.perf_counter() - t_warm, 4)
+            self._run_compile_warmup()
 
         self._timings["initialization_sec"] += time.perf_counter() - t0
 
-    def init_video(self, video_source: str, frame_offset: int = 0):
-        """Initializes SAM 2 inference state from frames directory."""
+    def _init_state_from_memory(
+        self,
+        frames: Union[List[np.ndarray], torch.Tensor],
+        orig_hw: Optional[Tuple[int, int]] = None,
+    ) -> Dict[str, Any]:
+        """Directly initializes SAM 2 inference state from in-memory frames without disk I/O."""
+        img_size = getattr(self._predictor, "image_size", self.model_size)
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+
+        if isinstance(frames, torch.Tensor):
+            images = frames
+            v_h, v_w = orig_hw if orig_hw else (images.shape[-2], images.shape[-1])
+        else:
+            if len(frames) == 0:
+                raise ValueError("Frame list is empty")
+            first_f = frames[0]
+            v_h = orig_hw[0] if orig_hw else first_f.shape[0]
+            v_w = orig_hw[1] if orig_hw else first_f.shape[1]
+
+            tensors = []
+            for f in frames:
+                if f.shape[0] != img_size or f.shape[1] != img_size:
+                    f_res = cv2.resize(f, (img_size, img_size), interpolation=cv2.INTER_LINEAR)
+                else:
+                    f_res = f
+                # Ensure RGB float32 [0, 1]
+                t = torch.from_numpy(f_res).permute(2, 0, 1).float() / 255.0
+                tensors.append(t)
+            images = torch.stack(tensors)
+            images = (images - mean) / std
+
+        target_device = "cpu" if self.offload_to_cpu else self.device
+        images = images.to(target_device)
+        return self._build_inference_state(images, v_h, v_w)
+
+    def _build_inference_state(self, images: torch.Tensor, v_h: int, v_w: int) -> Dict[str, Any]:
+        inference_state = {
+            "images": images,
+            "num_frames": len(images),
+            "offload_video_to_cpu": self.offload_to_cpu,
+            "offload_state_to_cpu": self.offload_to_cpu,
+            "video_height": v_h,
+            "video_width": v_w,
+            "device": self._predictor.device,
+            "storage_device": torch.device("cpu") if self.offload_to_cpu else self._predictor.device,
+            "point_inputs_per_obj": {},
+            "mask_inputs_per_obj": {},
+            "cached_features": {},
+            "constants": {},
+            "obj_id_to_idx": OrderedDict(),
+            "obj_idx_to_id": OrderedDict(),
+            "obj_ids": [],
+            "output_dict_per_obj": {},
+            "temp_output_dict_per_obj": {},
+            "frames_tracked_per_obj": {},
+        }
+        self._predictor._get_image_feature(inference_state, frame_idx=0, batch_size=1)
+        return inference_state
+
+    def init_video(
+        self,
+        video_source: Any,
+        frame_offset: int = 0,
+        orig_hw: Optional[Tuple[int, int]] = None,
+    ):
+        """
+        Initializes SAM 2 inference state from frames directory OR in-memory frame buffer.
+        """
         t0 = time.perf_counter()
         self.load()
         self.reset()
         self.frame_offset = frame_offset
 
         with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
-            try:
-                self._inference_state = self._predictor.init_state(
-                    video_path=video_source,
-                    offload_video_to_cpu=self.offload_to_cpu,
-                    offload_state_to_cpu=self.offload_to_cpu,
-                )
-            except TypeError:
-                self._inference_state = self._predictor.init_state(video_path=video_source)
+            if isinstance(video_source, (list, tuple)) or isinstance(video_source, torch.Tensor):
+                self._inference_state = self._init_state_from_memory(video_source, orig_hw=orig_hw)
+            elif hasattr(video_source, "get_chunk_frames"):
+                frames = video_source.get_chunk_frames(frame_offset, frame_offset + getattr(video_source, "chunk_size", 128))
+                self._inference_state = self._init_state_from_memory(frames, orig_hw=orig_hw or (video_source.proxy_h, video_source.proxy_w))
+            elif isinstance(video_source, str):
+                try:
+                    self._inference_state = self._predictor.init_state(
+                        video_path=video_source,
+                        offload_video_to_cpu=self.offload_to_cpu,
+                        offload_state_to_cpu=self.offload_to_cpu,
+                    )
+                except TypeError:
+                    self._inference_state = self._predictor.init_state(video_path=video_source)
+            else:
+                raise TypeError(f"Unsupported video_source type: {type(video_source)}")
 
         self._tracks_meta.clear()
         self.initialized = True
@@ -371,8 +496,10 @@ class SAM2BenthicTracker(BaseVideoTracker):
 
         frame_queue = queue.Queue(maxsize=2)
         worker_error = []
+        cancel_event = threading.Event()
 
         def _inference_worker():
+            gen = None
             try:
                 with torch.inference_mode(), _get_autocast_context(self.device, self.dtype, self.use_autocast):
                     gen = self._predictor.propagate_in_video(
@@ -382,31 +509,65 @@ class SAM2BenthicTracker(BaseVideoTracker):
                     )
                     t_infer_prev = time.perf_counter()
                     for out_frame_idx, out_obj_ids, out_mask_logits in gen:
-                        _sync_device(self.device)
+                        if cancel_event.is_set():
+                            break
+
                         t_now = time.perf_counter()
                         self._timings["propagation_sec"] += (t_now - t_infer_prev)
 
                         t_trans_start = time.perf_counter()
                         masks_bool = None
                         if len(out_obj_ids) > 0:
+                            # Transfer masks to host; .cpu() performs required stream synchronization
                             masks_bool = (out_mask_logits > 0.0).squeeze(1).cpu().numpy()
                             if masks_bool.ndim == 2:
                                 masks_bool = np.expand_dims(masks_bool, axis=0)
                         self._timings["transfer_sec"] += (time.perf_counter() - t_trans_start)
 
-                        frame_queue.put((out_frame_idx, list(out_obj_ids), masks_bool))
+                        item = (out_frame_idx, list(out_obj_ids), masks_bool)
+                        put_ok = False
+                        while not cancel_event.is_set():
+                            try:
+                                frame_queue.put(item, timeout=0.1)
+                                put_ok = True
+                                break
+                            except queue.Full:
+                                continue
+                        if not put_ok or cancel_event.is_set():
+                            break
                         t_infer_prev = time.perf_counter()
             except Exception as exc:
                 worker_error.append(exc)
             finally:
-                frame_queue.put(None)
+                if gen is not None and hasattr(gen, "close"):
+                    try:
+                        gen.close()
+                    except Exception:
+                        pass
+                try:
+                    frame_queue.put(None, timeout=0.5)
+                except Exception:
+                    pass
 
         worker_thread = threading.Thread(target=_inference_worker, daemon=True)
         worker_thread.start()
 
         try:
             while frames_yielded < len(expected_frame_indices):
-                item = frame_queue.get()
+                if cancel_event.is_set():
+                    break
+
+                t_q_start = time.perf_counter()
+                try:
+                    item = frame_queue.get(timeout=0.2)
+                except queue.Empty:
+                    if not worker_thread.is_alive():
+                        if worker_error:
+                            raise worker_error[0]
+                        break
+                    continue
+                self._timings["queue_wait_sec"] += time.perf_counter() - t_q_start
+
                 if item is None:
                     if worker_error:
                         raise worker_error[0]
@@ -508,7 +669,14 @@ class SAM2BenthicTracker(BaseVideoTracker):
                     f"[{start_frame_idx}, {end_frame_idx}), yielded only {frames_yielded}"
                 )
         finally:
-            worker_thread.join(timeout=2.0)
+            cancel_event.set()
+            # Drain queue so producer thread cannot remain blocked on frame_queue.put
+            while not frame_queue.empty():
+                try:
+                    frame_queue.get_nowait()
+                except Exception:
+                    break
+            worker_thread.join(timeout=5.0)
 
     def propagate_stream(
         self,

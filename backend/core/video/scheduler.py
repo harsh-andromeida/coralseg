@@ -7,7 +7,7 @@ and ensures single-output commit of overlap frames into durable storage.
 
 import os
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Tuple, Set
+from typing import Dict, Any, List, Optional, Tuple, Set, Union
 import numpy as np
 
 from core.device import check_torch_capabilities, get_memory_budget, can_admit_worker
@@ -171,15 +171,42 @@ def reconcile_chunk_identities(
     return reconciliation_map
 
 
+def normalize_worker_count(
+    requested_workers: Optional[Union[int, str]] = "auto",
+    device_pref: str = "auto",
+) -> int:
+    """
+    Normalizes worker_count (e.g. 'auto', numeric string, or int) into a validated integer in [1, 8].
+    Resolves 'auto' to 1 for unified memory (Apple Silicon / MPS) and CPU.
+    For discrete CUDA, resolves 'auto' to 2 (target concurrency for multi-worker evaluation).
+    """
+    if requested_workers is None or str(requested_workers).strip().lower() == "auto":
+        hw_info = check_torch_capabilities()
+        is_unified = hw_info.get("is_unified_memory", False)
+        device_type = hw_info.get("torch_device", "cpu")
+        if is_unified or device_type in ("mps", "cpu") or device_pref == "cpu":
+            return 1
+        return 2
+
+    try:
+        val = int(requested_workers)
+        return max(1, min(8, val))
+    except (ValueError, TypeError):
+        return 1
+
+
 def admit_workers_for_device(
     device_pref: str,
-    requested_workers: int = 1,
+    requested_workers: Union[int, str] = 1,
 ) -> int:
     """
     Evaluates accelerator and host memory budget to determine safe worker admission.
+    Includes auxiliary models (CoralSCOP ViT-B, BioCLIP, YOLO11n ~900 MiB VRAM + host RAM).
     On Apple Silicon (M5 unified memory), defaults to 1 worker to prevent memory thrashing.
-    On CUDA, admits up to requested_workers as long as memory budget permits.
+    On CUDA, admits up to normalized requested_workers as long as measured peak memory permits.
     """
+    valid_workers = normalize_worker_count(requested_workers, device_pref=device_pref)
+
     hw_info = check_torch_capabilities()
     is_unified = hw_info.get("is_unified_memory", False)
     device_type = hw_info.get("torch_device", "cpu")
@@ -193,13 +220,20 @@ def admit_workers_for_device(
         return 1
 
     # On CUDA, admit workers based on cumulative available VRAM and host budget
+    # Base auxiliary models: CoralSCOP SAM ViT-B (~400MB) + BioCLIP (~400MB) + YOLO (~60MB) = ~900MB
+    # Worker SAM2 temporal inference: ~800MB VRAM + ~1.0 GiB host RAM per worker
+    base_aux_vram = 900 * 1024 * 1024
+    base_aux_host = 1024 * 1024 * 1024
+    vram_per_worker = 800 * 1024 * 1024
+    host_per_worker = 1024 * 1024 * 1024
+
     admitted = 0
-    estimated_vram_per_worker = 600 * 1024 * 1024
-    estimated_host_per_worker = 800 * 1024 * 1024
-    for w in range(1, requested_workers + 1):
+    for w in range(1, valid_workers + 1):
+        total_worker_vram = base_aux_vram + (w * vram_per_worker)
+        total_worker_host = base_aux_host + (w * host_per_worker)
         can_admit, _ = can_admit_worker(
-            estimated_worker_vram_bytes=w * estimated_vram_per_worker,
-            estimated_worker_host_bytes=w * estimated_host_per_worker,
+            estimated_worker_vram_bytes=total_worker_vram,
+            estimated_worker_host_bytes=total_worker_host,
         )
         if can_admit:
             admitted = w

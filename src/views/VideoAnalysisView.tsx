@@ -94,10 +94,16 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   const totalFrames = videoItem.metadata.total_frames || Math.max(1, Math.round(durationSec * fps));
 
   const isJobProcessing = jobStatus ? jobStatus.state === "processing" : true;
-  const isProcessingState = jobStatus?.state === "processing" || jobStatus?.state === "paused";
-  const maxProcessedFrame = isProcessingState
-    ? Math.max(0, (jobStatus?.current_frame || 1) - 1)
-    : Math.max(0, totalFrames - 1);
+  const isProcessingState =
+    !jobStatus ||
+    jobStatus.state === "queued" ||
+    jobStatus.state === "preparing" ||
+    jobStatus.state === "processing" ||
+    jobStatus.state === "paused";
+  const maxProcessedFrame =
+    jobStatus && jobStatus.state === "completed"
+      ? Math.max(0, totalFrames - 1)
+      : Math.max(0, (jobStatus?.current_frame || 1) - 1);
   const maxNavigableFrame = isProcessingState ? maxProcessedFrame : Math.max(0, totalFrames - 1);
 
   // Fetch device info on mount
@@ -114,6 +120,11 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
       // quiet fail
     }
   };
+
+  const isFollowingLiveRef = useRef(isFollowingLive);
+  isFollowingLiveRef.current = isFollowingLive;
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
 
   // Poll background job status, drain delta pages, and advance live video stream
   useEffect(() => {
@@ -170,7 +181,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
         }
 
         // Auto-advance player to follow live stream if user is following live
-        if (s.state === "processing" && isFollowingLive && !isPlaying && s.current_frame > 0) {
+        if (s.state === "processing" && isFollowingLiveRef.current && !isPlayingRef.current && s.current_frame > 0) {
           const liveFrame = Math.max(0, Math.min(totalFrames - 1, s.current_frame - 1));
           activeFrameRef.current = liveFrame;
           setCurrentFrameIdx(liveFrame);
@@ -205,7 +216,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
       isMounted = false;
       clearInterval(interval);
     };
-  }, [jobId, isFollowingLive, isPlaying, totalFrames, fps]);
+  }, [jobId, totalFrames, fps]);
 
   // Query frame annotations when currentFrameIdx changes (instant in-memory cache lookup)
   useEffect(() => {
@@ -494,12 +505,12 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
             />
 
             {/* Live Pipeline Telemetry HUD & Model Activity Inspector */}
-            {jobStatus && (
+            {jobId && (
               <div className="rounded-2xl border border-cyan-200/90 bg-white/95 backdrop-blur-md shadow-xs p-4 space-y-3">
                 {/* Header: State, Frame counter, Realtime FPS, Active Model, Controls */}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    {jobStatus.state === "processing" ? (
+                    {!jobStatus || jobStatus.state === "processing" || jobStatus.state === "preparing" || jobStatus.state === "queued" ? (
                       <span className="relative flex h-3 w-3 shrink-0">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
                         <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-600" />
@@ -513,9 +524,15 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                     )}
 
                     <div className="flex items-center gap-2 truncate">
-                      <span className={`text-xs font-bold tracking-tight ${jobStatus.state === "error" ? "text-rose-700" : "text-slate-900"}`}>
-                        {jobStatus.state === "processing"
+                      <span className={`text-xs font-bold tracking-tight ${jobStatus?.state === "error" ? "text-rose-700" : "text-slate-900"}`}>
+                        {!jobStatus
+                          ? "Connecting to Vision Pipeline..."
+                          : jobStatus.state === "processing"
                           ? "Autonomous Pipeline Active"
+                          : jobStatus.state === "preparing"
+                          ? "Preparing Foundation Models..."
+                          : jobStatus.state === "queued"
+                          ? "Queued in Pipeline"
                           : jobStatus.state === "paused"
                           ? "Pipeline Paused"
                           : jobStatus.state === "error"
@@ -524,20 +541,22 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                       </span>
 
                       <span className={`text-[11px] font-mono px-2 py-0.5 rounded-md font-bold ${
-                        jobStatus.state === "error"
+                        jobStatus?.state === "error"
                           ? "bg-rose-50 border border-rose-200 text-rose-900"
                           : "bg-cyan-50 border border-cyan-200 text-cyan-900"
                       }`}>
-                        Frame {jobStatus.current_frame} / {totalFrames} ({jobStatus.progress_pct}%)
+                        {jobStatus
+                          ? `Frame ${jobStatus.current_frame} / ${totalFrames} (${jobStatus.progress_pct}%)`
+                          : `Frame 0 / ${totalFrames} (0%)`}
                       </span>
 
-                      {((jobStatus.analysis_fps ?? jobStatus.fps_realtime) > 0) && (
+                      {jobStatus && ((jobStatus.analysis_fps ?? jobStatus.fps_realtime) > 0) && (
                         <span className="text-[10px] font-mono font-bold text-cyan-800 bg-cyan-100/70 border border-cyan-200/60 px-1.5 py-0.5 rounded" title="Total pipeline source throughput">
                           {(jobStatus.analysis_fps ?? jobStatus.fps_realtime).toFixed(1)} Source FPS
                         </span>
                       )}
 
-                      {jobStatus.tracker_fps && jobStatus.tracker_fps > 0 ? (
+                      {jobStatus?.tracker_fps && jobStatus.tracker_fps > 0 ? (
                         <span className="text-[10px] font-mono font-bold text-teal-800 bg-teal-100/70 border border-teal-200/60 px-1.5 py-0.5 rounded" title="Pure SAM tracker inference throughput">
                           {jobStatus.tracker_fps.toFixed(1)} Tracker FPS
                         </span>
@@ -560,7 +579,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                     )}
 
                     {/* Active Model Pill */}
-                    {jobStatus.current_model && (
+                    {jobStatus?.current_model && (
                       <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 text-white text-[11px] font-semibold shadow-xs">
                         <Cpu size={12} className="text-cyan-400" />
                         <span className="text-cyan-300 font-bold">{jobStatus.current_model}</span>
@@ -568,7 +587,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                     )}
 
                     {/* Export Status Pill */}
-                    {jobStatus.export_status && (
+                    {jobStatus?.export_status && (
                       <div className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold border ${
                         jobStatus.export_status === "ready"
                           ? "bg-emerald-50 border-emerald-300 text-emerald-800"
@@ -581,7 +600,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                     )}
 
                     {/* Pause / Resume & Cancel Buttons */}
-                    {(jobStatus.state === "processing" || jobStatus.state === "paused") && (
+                    {jobStatus && (jobStatus.state === "processing" || jobStatus.state === "paused") && (
                       <>
                         <button
                           type="button"
@@ -620,7 +639,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                       <Terminal size={12} className={showLogs ? "text-cyan-600" : ""} />
                       <span>Activity Log</span>
                       <span className="text-[10px] font-mono px-1 rounded bg-slate-200/60 text-slate-700">
-                        {jobStatus.logs?.length || 0}
+                        {jobStatus?.logs?.length || 0}
                       </span>
                       {showLogs ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                     </button>
@@ -631,20 +650,20 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                 <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200/60">
                   <div
                     className={`h-full transition-all duration-300 ${
-                      jobStatus.state === "completed"
+                      jobStatus?.state === "completed"
                         ? "bg-emerald-500"
-                        : jobStatus.state === "paused"
+                        : jobStatus?.state === "paused"
                         ? "bg-amber-500"
-                        : jobStatus.state === "error"
+                        : jobStatus?.state === "error"
                         ? "bg-rose-500"
                         : "bg-gradient-to-r from-cyan-600 via-teal-500 to-cyan-400"
                     }`}
-                    style={{ width: `${Math.min(100, Math.max(0, jobStatus.progress_pct))}%` }}
+                    style={{ width: `${Math.min(100, Math.max(0, jobStatus?.progress_pct ?? 0))}%` }}
                   />
                 </div>
 
                 {/* Explicit Error Diagnostic Display */}
-                {jobStatus.state === "error" && jobStatus.error && (
+                {jobStatus?.state === "error" && jobStatus.error && (
                   <div className="rounded-xl bg-rose-50 border border-rose-200/80 p-3 text-xs text-rose-800 flex items-start gap-2.5">
                     <AlertTriangle size={15} className="text-rose-600 shrink-0 mt-0.5" />
                     <div>
@@ -658,9 +677,9 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                 <div className="flex flex-wrap items-center justify-between text-xs text-slate-600 gap-2 pt-0.5">
                   <div className="flex items-center gap-2 truncate">
                     <span className="font-semibold text-slate-800">
-                      {jobStatus.current_stage || "Analyzing benthic habitat..."}
+                      {jobStatus?.current_stage || "Initializing benthic vision pipeline..."}
                     </span>
-                    {jobStatus.stage_detail && (
+                    {jobStatus?.stage_detail && (
                       <span className="text-slate-400 truncate text-[11px]">
                         • {jobStatus.stage_detail}
                       </span>
@@ -670,17 +689,17 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                   <div className="flex items-center gap-3 text-[11px] font-medium shrink-0">
                     <span className="text-slate-500">
                       Discovered:{" "}
-                      <strong className="text-cyan-800 font-bold">{jobStatus.total_unique_corals || 0}</strong> colonies
+                      <strong className="text-cyan-800 font-bold">{jobStatus?.total_unique_corals || 0}</strong> colonies
                     </span>
                     <span className="text-slate-300">•</span>
                     <span className="text-slate-500">
                       Keyframes:{" "}
-                      <strong className="text-slate-800 font-bold">{jobStatus.keyframes_count || 0}</strong>
+                      <strong className="text-slate-800 font-bold">{jobStatus?.keyframes_count || 0}</strong>
                     </span>
                     <span className="text-slate-300">•</span>
                     <span className="text-slate-500">
                       Bleaching:{" "}
-                      <strong className="text-amber-700 font-bold">{jobStatus.bleaching_prevalence_pct || 0}%</strong>
+                      <strong className="text-amber-700 font-bold">{jobStatus?.bleaching_prevalence_pct || 0}%</strong>
                     </span>
                   </div>
                 </div>
@@ -712,12 +731,12 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                             <span>↓</span>
                           </button>
                         ) : (
-                          <span>Engine: {jobStatus.tracker_mode === "efficienttam" ? "EfficientTAM (experimental)" : "SAM 2.1 Video Predictor"}</span>
+                          <span>Engine: {jobStatus?.tracker_mode === "efficienttam" ? "EfficientTAM (experimental)" : "SAM 2.1 Video Predictor"}</span>
                         )}
                       </div>
                     </div>
 
-                    {jobStatus.logs && jobStatus.logs.length > 0 ? (
+                    {jobStatus?.logs && jobStatus.logs.length > 0 ? (
                       jobStatus.logs.map((logStr, lIdx) => (
                         <div key={lIdx} className="leading-relaxed flex items-start gap-2">
                           <span className="text-slate-500 shrink-0 select-none">›</span>
@@ -727,7 +746,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                         </div>
                       ))
                     ) : (
-                      <div className="text-slate-500 italic">No events logged yet. Waiting for pipeline start...</div>
+                      <div className="text-slate-500 italic">Initializing foundation models & pipeline telemetry stream...</div>
                     )}
                   </div>
                 )}
