@@ -2,7 +2,7 @@
 
 A high-performance, standalone desktop application for AI-powered coral reef segmentation, taxonomic classification, bleaching condition assessment, and automated COCO dataset generation.
 
-Built with **Tauri v2**, **React 19**, **FastAPI**, and **ONNX Runtime (Zero PyTorch)**.
+Built with **Tauri v2**, **React 19**, **FastAPI**, and **ONNX Runtime (image pipeline) and SAM 2 (video tracking, needs PyTorch)**.
 
 ---
 
@@ -23,7 +23,7 @@ Built with **Tauri v2**, **React 19**, **FastAPI**, and **ONNX Runtime (Zero PyT
 coralseg/
 ├── src/                  # React 19 + TypeScript Frontend (Tailwind CSS, Konva, Radix UI)
 ├── src-tauri/            # Tauri v2 Desktop Core (Rust shell, process lifecycle, IPC)
-├── backend/              # Local FastAPI Vision Engine (Zero-PyTorch ONNX Runtime)
+├── backend/              # Local FastAPI Vision Engine (ONNX Runtime; SAM 2 video tracker uses PyTorch)
 │   ├── app/              # FastAPI routers, endpoints, and schemas
 │   ├── core/             # Segmentation, taxonomy, batch engine, hardware detection
 │   └── requirements.txt  # Dedicated Python backend requirements

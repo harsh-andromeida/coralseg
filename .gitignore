@@ -88,3 +88,6 @@ backend/exports/video/
 *.sqlite3-shm
 exports/benchmark_cache/
 !demo_images/*.mp4
+
+# Build output (rebuilt by `npm run build` and the Colab launcher)
+dist/
