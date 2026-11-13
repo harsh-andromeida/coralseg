@@ -23,12 +23,13 @@ from core.models import (
     are_models_loaded_in_ram,
 )
 from core.batch import BatchProcessor
+from core.schema import BaseSegCache, EnrichCache
 from core.video import VideoProcessor
 
 # In-memory storage for images and segmentation session cache
 _IMAGE_STORE: Dict[str, Image.Image] = {}
-_BASE_SEG_CACHE: Dict[str, List[Dict[str, Any]]] = {}
-_ENRICH_CACHE: Dict[str, Any] = {}
+_BASE_SEG_CACHE: BaseSegCache = {}
+_ENRICH_CACHE: EnrichCache = {}
 _OVERLAY_CACHE: Dict[str, str] = {}
 _ACTIVE_DEVICE_PREF: str = "auto"
 _DEFAULT_CONCURRENCY: int = 1
@@ -79,13 +80,11 @@ def _resolve_demo_dirs() -> List[str]:
 # Processor singletons
 batch_processor: Optional[BatchProcessor] = None
 video_processor: Optional[VideoProcessor] = None
-_BATCH_PROCESSOR: Optional[BatchProcessor] = None
-_VIDEO_PROCESSOR: Optional[VideoProcessor] = None
 
 
 def init_processors() -> tuple[BatchProcessor, VideoProcessor]:
     """Initializes global BatchProcessor and VideoProcessor singletons."""
-    global batch_processor, video_processor, _BATCH_PROCESSOR, _VIDEO_PROCESSOR
+    global batch_processor, video_processor
 
     batch_processor = BatchProcessor(
         image_store=_IMAGE_STORE,
@@ -99,7 +98,6 @@ def init_processors() -> tuple[BatchProcessor, VideoProcessor]:
         model_unloader=unload_all_models_from_ram,
         models_loaded_checker=are_models_loaded_in_ram,
     )
-    _BATCH_PROCESSOR = batch_processor
 
     video_processor = VideoProcessor(
         sam_loader=lambda: load_coralscop_model(device=_ACTIVE_DEVICE_PREF),
@@ -107,7 +105,6 @@ def init_processors() -> tuple[BatchProcessor, VideoProcessor]:
         bleaching_loader=lambda: load_bleaching_model(device=_ACTIVE_DEVICE_PREF),
         cache_dir=VIDEO_EXPORTS_DIR,
     )
-    _VIDEO_PROCESSOR = video_processor
 
     return batch_processor, video_processor
 

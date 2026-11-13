@@ -7,7 +7,8 @@ import numpy as np
 from PIL import Image
 import onnxruntime as ort
 
-from core.models import _INFERENCE_LOCK, _SAM_LOCK
+from core.models import _SAM_LOCK
+from core.schema import Segment
 
 try:
     import cv2
@@ -93,7 +94,7 @@ def run_segmentation(
     image_name: Optional[str] = None,
     custom_prompt_points: Optional[np.ndarray] = None,
     discovery_mask: Optional[np.ndarray] = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+) -> Tuple[List[Segment], Dict[str, Any]]:
     """
     Executes CoralSCOP SAM dense instance segmentation using pure ONNX Runtime & NumPy.
     Implements standard ResizeLongestSide aspect-ratio preservation and prompt scaling.

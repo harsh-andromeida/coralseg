@@ -75,21 +75,3 @@ else:
             "docs": "/docs",
             "api_health": "/api/health",
         }
-
-
-# ==============================================================================
-# Backward Compatibility Re-exports
-# ==============================================================================
-_IMAGE_STORE = state._IMAGE_STORE
-_BASE_SEG_CACHE = state._BASE_SEG_CACHE
-_ENRICH_CACHE = state._ENRICH_CACHE
-_OVERLAY_CACHE = state._OVERLAY_CACHE
-_ACTIVE_DEVICE_PREF = state._ACTIVE_DEVICE_PREF
-_DEFAULT_CONCURRENCY = state._DEFAULT_CONCURRENCY
-_SEG_LOCKS = state._SEG_LOCKS
-_SEG_LOCKS_MUTEX = state._SEG_LOCKS_MUTEX
-_get_seg_lock = state._get_seg_lock
-batch_processor = state.batch_processor
-video_processor = state.video_processor
-_BATCH_PROCESSOR = state.batch_processor
-_VIDEO_PROCESSOR = state.video_processor

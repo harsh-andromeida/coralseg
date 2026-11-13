@@ -26,7 +26,6 @@ from core.device import (
 _SAM_LOCK = threading.Lock()
 _BIOCLIP_LOCK = threading.Lock()
 _BLEACHING_LOCK = threading.Lock()
-_INFERENCE_LOCK = _SAM_LOCK  # Backwards compatibility alias
 
 # Active job reference counter to protect loaded sessions during active jobs
 _ACTIVE_JOBS_COUNT = 0

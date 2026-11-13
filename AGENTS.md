@@ -131,6 +131,7 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 | `app/routers/video.py` | Video upload, process, status/frames, pause/cancel, exports |
 | `core/models.py` | ONNX session loading, HF download, model locks, active-job counter |
 | `core/device.py` | Hardware tier resolution (CUDA/CoreML/CPU), memory budget, session options |
+| `core/schema.py` | TypedDicts for the segment dict (`Segment`, `EnrichedSegment`, `SegmentRow`); read this first to learn every key |
 | `core/segmentation.py` | CoralSCOP SAM automatic mask generation + NMS (`run_segmentation`) |
 | `core/interactive_segmentation.py` | Point/box prompt SAM, mask<->polygon, `SAM_SESSION` embedding cache |
 | `core/taxonomy.py` | BioCLIP genus/growth-form + bleaching classification, `enrich_masks_with_taxonomy_and_bleaching` |

@@ -8,7 +8,8 @@ import numpy as np
 from PIL import Image
 import onnxruntime as ort
 
-from core.models import _INFERENCE_LOCK, _BIOCLIP_LOCK, _BLEACHING_LOCK, load_bioclip_model, load_bleaching_model
+from core.schema import Segment, EnrichedSegment, HealthSummary
+from core.models import _SAM_LOCK, _BIOCLIP_LOCK, _BLEACHING_LOCK, load_bioclip_model, load_bleaching_model
 
 try:
     import cv2
@@ -224,10 +225,10 @@ def detect_coral_bleaching(
 
 def enrich_masks_with_taxonomy_and_bleaching(
     image: Union[np.ndarray, Image.Image],
-    masks_info: List[Dict[str, Any]],
+    masks_info: List[Segment],
     bioclip_bundle: Optional[Dict[str, Any]] = None,
     bleaching_model: Optional[Any] = None,
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+) -> Tuple[List[EnrichedSegment], Dict[str, Any], HealthSummary]:
     """
     Crops each segmented coral instance and evaluates taxonomy and bleaching severity.
     Also evaluates the entire coral reef scene.

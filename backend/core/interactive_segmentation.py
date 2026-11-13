@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 import onnxruntime as ort
 
-from core.models import _INFERENCE_LOCK, load_coralscop_model
+from core.models import _SAM_LOCK, load_coralscop_model
 
 
 def ramer_douglas_peucker(points: List[Tuple[int, int]], epsilon: float) -> List[Tuple[int, int]]:
@@ -190,7 +190,7 @@ class InteractiveSAMSession:
             return self._cache[image_name]
 
         # Double-checked locking to avoid duplicate encoder runs during concurrent requests
-        with _INFERENCE_LOCK:
+        with _SAM_LOCK:
             if image_name in self._cache:
                 return self._cache[image_name]
 
@@ -262,7 +262,7 @@ class InteractiveSAMSession:
         final_bin_mask = None
         final_iou = 0.0
 
-        with _INFERENCE_LOCK:
+        with _SAM_LOCK:
             for pt in sorted_points:
                 px = float(pt["x"]) * scale_x
                 py = float(pt["y"]) * scale_y

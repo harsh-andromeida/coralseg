@@ -59,9 +59,6 @@ class VideoJobState:
     ERROR = "error"
     PAUSED = "paused"
 
-    # Compatibility alias
-    IDLE = "queued"
-
 
 class StoreFrameMapAdapter:
     """Lazy dictionary-like adapter exposing VideoJobStore frames for video export."""

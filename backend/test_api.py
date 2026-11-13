@@ -173,7 +173,7 @@ def test_endpoints():
 
     # Test POST /api/batch/export/to-folder with mock item and underscore filename
     import tempfile, shutil
-    from app.main import _IMAGE_STORE, _ENRICH_CACHE
+    from app.state import _IMAGE_STORE, _ENRICH_CACHE
     test_img_name = "test_coral_reef_01.png"
     _IMAGE_STORE[test_img_name] = mock_img
     _ENRICH_CACHE[f"{test_img_name}_16_0.5_0.5_100"] = (
