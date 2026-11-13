@@ -107,38 +107,54 @@ def get_cloudflared_binary() -> str:
     return ""
 
 
+def _is_noexec_or_drive_path(path: str) -> bool:
+    """Returns True if path is inside Google Drive (/content/drive) or another noexec-mounted location."""
+    norm = os.path.abspath(path)
+    return "/content/drive" in norm
+
+
 def get_or_create_venv() -> str:
     """
-    Resolves or creates a Python virtual environment (.venv) at the repository root.
-    Uses --system-site-packages in cloud GPU environments (Colab/Kaggle) to leverage
-    pre-installed CUDA PyTorch drivers while isolating runtime dependencies.
+    Resolves or creates a Python virtual environment (.venv).
+    CRITICAL: In Google Colab, Google Drive (/content/drive) is mounted with 'noexec'
+    and slow FUSE network I/O. Virtual environments with C-extensions (.so files like
+    pydantic_core, torch, onnxruntime) CANNOT execute from /content/drive.
+    When /content/drive is detected, the venv is hosted locally on the fast SSD (/content/.venv).
     """
-    # 1. If currently running inside an active virtual environment, use it directly
+    # 1. If currently running inside an active virtual environment, check if it's safe
     if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
-        print(f"  🐍 Using active virtual environment: {sys.executable}", flush=True)
-        return sys.executable
+        if not _is_noexec_or_drive_path(sys.executable):
+            print(f"  🐍 Using active virtual environment: {sys.executable}", flush=True)
+            return sys.executable
+        else:
+            print("  ⚠️ Active virtual environment is located on /content/drive (noexec mount). Switching to local /content/.venv...", flush=True)
 
-    # 2. Check candidate venv directories
-    candidates = [
-        os.path.join(ROOT_DIR, ".venv"),
-        os.path.join(BACKEND_DIR, ".venv"),
-    ]
+    # 2. Determine target venv directory
+    # If the repository is on /content/drive (Google Colab Drive mount):
+    if _is_noexec_or_drive_path(ROOT_DIR):
+        if os.path.isdir("/content") and os.access("/content", os.W_OK):
+            target_venv = "/content/.venv"
+        else:
+            target_venv = "/tmp/.venv_reefvision"
+        print(f"  💡 Google Drive detected. Hosting .venv on local fast filesystem: {target_venv}", flush=True)
+    else:
+        # Check standard local candidate locations
+        target_venv = os.path.join(ROOT_DIR, ".venv")
 
-    for venv_dir in candidates:
-        py_bin = (
-            os.path.join(venv_dir, "Scripts", "python.exe")
-            if os.name == "nt"
-            else os.path.join(venv_dir, "bin", "python3")
-        )
-        if not os.path.isfile(py_bin) and os.name != "nt":
-            py_bin = os.path.join(venv_dir, "bin", "python")
+    # 3. Check if target_venv already exists and has a working python binary
+    py_bin = (
+        os.path.join(target_venv, "Scripts", "python.exe")
+        if os.name == "nt"
+        else os.path.join(target_venv, "bin", "python3")
+    )
+    if not os.path.isfile(py_bin) and os.name != "nt":
+        py_bin = os.path.join(target_venv, "bin", "python")
 
-        if os.path.isfile(py_bin):
-            print(f"  🐍 Found existing virtual environment: {py_bin}", flush=True)
-            return py_bin
+    if os.path.isfile(py_bin) and _can_execute_binary(py_bin):
+        print(f"  🐍 Found existing virtual environment: {py_bin}", flush=True)
+        return py_bin
 
-    # 3. Create .venv at ROOT_DIR
-    target_venv = os.path.join(ROOT_DIR, ".venv")
+    # 4. Create target_venv
     print(f"  🐍 Bootstrapping dedicated virtual environment at {target_venv}...", flush=True)
     try:
         subprocess.run(
@@ -160,8 +176,8 @@ def get_or_create_venv() -> str:
     if not os.path.isfile(py_bin) and os.name != "nt":
         py_bin = os.path.join(target_venv, "bin", "python")
 
-    if not os.path.isfile(py_bin):
-        print(f"  ⚠️ Virtual environment python not found at {py_bin}. Falling back to {sys.executable}", flush=True)
+    if not os.path.isfile(py_bin) or not _can_execute_binary(py_bin):
+        print(f"  ⚠️ Virtual environment python not executable at {py_bin}. Falling back to {sys.executable}", flush=True)
         return sys.executable
 
     print(f"  ✅ Virtual environment ready: {py_bin}", flush=True)
@@ -233,7 +249,7 @@ def setup_colab_gpu_environment(venv_python: str):
     print("\n[1/4] Inspecting hardware acceleration and CUDA drivers...", flush=True)
     has_gpu = False
 
-    # Check GPU availability inside the virtual environment
+    # Check GPU availability inside the virtual environment (with generous timeout for cold CUDA driver init)
     check_gpu_script = (
         "import torch; "
         "has = torch.cuda.is_available(); "
@@ -242,7 +258,7 @@ def setup_colab_gpu_environment(venv_python: str):
         "print(f'{has}|{dev}|{cuda}')"
     )
     try:
-        res = subprocess.run([venv_python, "-c", check_gpu_script], capture_output=True, text=True, timeout=15)
+        res = subprocess.run([venv_python, "-c", check_gpu_script], capture_output=True, text=True, timeout=45)
         if res.returncode == 0:
             parts = res.stdout.strip().split("|")
             if parts[0].strip().lower() == "true":
@@ -253,9 +269,21 @@ def setup_colab_gpu_environment(venv_python: str):
             else:
                 print("  ℹ️ No CUDA GPU detected in PyTorch (running in CPU mode).", flush=True)
         else:
-            print("  ℹ️ PyTorch check in .venv returned non-zero code. Running in CPU mode.", flush=True)
+            print("  ℹ️ PyTorch check in .venv returned non-zero code.", flush=True)
     except Exception as e:
         print(f"  ℹ️ PyTorch check in .venv: {e}", flush=True)
+
+    # Fallback: check if host Python detected CUDA GPU
+    if not has_gpu:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                dev_name = torch.cuda.get_device_name(0)
+                cuda_ver = getattr(torch.version, "cuda", "") or "Unknown"
+                print(f"  ✅ NVIDIA GPU detected via host PyTorch: {dev_name} (CUDA {cuda_ver})", flush=True)
+                has_gpu = True
+        except Exception:
+            pass
 
     if has_gpu:
         need_ort_gpu = False
@@ -264,7 +292,7 @@ def setup_colab_gpu_environment(venv_python: str):
             "print('CUDAExecutionProvider' in ort.get_available_providers())"
         )
         try:
-            res = subprocess.run([venv_python, "-c", check_ort_script], capture_output=True, text=True, timeout=10)
+            res = subprocess.run([venv_python, "-c", check_ort_script], capture_output=True, text=True, timeout=15)
             if res.returncode == 0 and res.stdout.strip().lower() == "true":
                 print("  ✅ ONNX Runtime CUDA Execution Provider is active in .venv!", flush=True)
             else:
@@ -283,6 +311,25 @@ def setup_colab_gpu_environment(venv_python: str):
     if os.path.isfile(req_file):
         print(f"  📦 Checking and installing dependencies into .venv from {os.path.basename(req_file)}...", flush=True)
         subprocess.run([venv_python, "-m", "pip", "install", "-r", req_file, "--quiet"], check=False)
+
+    # Verify critical dependencies can be imported cleanly in .venv (self-healing health check)
+    print("  🔍 Verifying core framework dependencies (FastAPI, Pydantic, Uvicorn)...", flush=True)
+    check_import_script = (
+        "try:\n"
+        "    from pydantic import BaseModel\n"
+        "    import fastapi\n"
+        "    import uvicorn\n"
+        "    print('OK')\n"
+        "except Exception as e:\n"
+        "    print(f'FAIL:{e}')\n"
+    )
+    res = subprocess.run([venv_python, "-c", check_import_script], capture_output=True, text=True, timeout=20)
+    if "OK" not in res.stdout:
+        print(f"  ⚠️ Framework dependency issue detected ({res.stdout.strip()}). Reinstalling pydantic & fastapi into .venv...", flush=True)
+        subprocess.run(
+            [venv_python, "-m", "pip", "install", "--no-cache-dir", "--force-reinstall", "pydantic>=2.0.0", "pydantic-core", "fastapi>=0.110.0", "uvicorn>=0.28.0"],
+            check=False,
+        )
 
     # Ensure ffmpeg is present for web-standard H.264 video streaming and +faststart
     if not shutil.which("ffmpeg") and shutil.which("apt-get"):
@@ -307,14 +354,26 @@ def ensure_production_frontend():
 
     print("\n[2/4] Building production single-bundle frontend (dist/)...", flush=True)
     has_npm = shutil.which("npm") is not None
-    if has_npm and os.path.isfile(os.path.join(ROOT_DIR, "package.json")):
+    has_node = shutil.which("node") is not None
+    if os.path.isfile(os.path.join(ROOT_DIR, "package.json")):
         try:
-            if not os.path.isdir(os.path.join(ROOT_DIR, "node_modules")):
+            if not os.path.isdir(os.path.join(ROOT_DIR, "node_modules")) and has_npm:
                 print("  📦 Installing npm dependencies (one-time setup)...", flush=True)
                 subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--quiet"], cwd=ROOT_DIR, check=True)
+
             print("  🔨 Building optimized bundle with 'npm run build'...", flush=True)
-            subprocess.run(["npm", "run", "build"], cwd=ROOT_DIR, check=True)
-            print("  ✅ Frontend build complete! Bundle ready in dist/.", flush=True)
+            build_res = subprocess.run(["npm", "run", "build"], cwd=ROOT_DIR)
+            if build_res.returncode != 0 and has_node:
+                # Direct node invocation fallback for noexec filesystems (e.g. Google Drive where node_modules/.bin/tsc fails)
+                vite_bin = os.path.join(ROOT_DIR, "node_modules", "vite", "bin", "vite.js")
+                if os.path.isfile(vite_bin):
+                    print("  ⚡ Falling back to direct node vite build (bypassing noexec script wrapper)...", flush=True)
+                    subprocess.run(["node", vite_bin, "build"], cwd=ROOT_DIR, check=True)
+
+            if os.path.isfile(index_html):
+                print("  ✅ Frontend build complete! Bundle ready in dist/.", flush=True)
+            else:
+                print("  ℹ️ Backend will run in API-only mode.", flush=True)
         except Exception as e:
             print(f"  ⚠️ Warning: Frontend build failed ({e}). Backend will run API-only mode.", flush=True)
     else:
