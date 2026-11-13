@@ -17,6 +17,7 @@ import stat
 import shutil
 import socket
 import json
+import threading
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
@@ -545,6 +546,19 @@ def main():
             bufsize=1,
         )
 
+        def _drain_tunnel_logs(proc):
+            """Continuously drains stdout to prevent 64KB pipe buffer deadlock and surfaces edge disconnects."""
+            try:
+                for line in iter(proc.stdout.readline, ""):
+                    if not line:
+                        break
+                    l_lower = line.lower()
+                    if "error" in l_lower or "failed" in l_lower:
+                        if "metrics server" not in l_lower and "quic" not in l_lower:
+                            print(f"  [tunnel] {line.strip()}", flush=True)
+            except Exception:
+                pass
+
         try:
             tunnel_url = None
             for line in iter(cf_proc.stdout.readline, ""):
@@ -553,17 +567,42 @@ def main():
                 match = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", line)
                 if match:
                     tunnel_url = match.group(0)
-                    print("\n" + "=" * 65, flush=True)
-                    print(f"🚀 REEFVISION STUDIO IS READY AT:", flush=True)
-                    print(f"👉 {tunnel_url}", flush=True)
-                    print("\n💡 INSTANT USAGE OPTIONS:", flush=True)
-                    print(f"  A) Open in Browser: {tunnel_url}", flush=True)
-                    print(f"     Loads in < 1 second using the pre-compiled production bundle.", flush=True)
-                    print(f"  B) In Desktop App: Click 'Remote/Colab' & paste {tunnel_url}", flush=True)
-                    print("=" * 65 + "\n", flush=True)
                     break
 
-            if not tunnel_url:
+            if tunnel_url:
+                # Start background log drainer to prevent OS pipe buffer freeze
+                threading.Thread(target=_drain_tunnel_logs, args=(cf_proc,), daemon=True).start()
+
+                print(f"  ⏳ Verifying Cloudflare Anycast edge DNS propagation for {tunnel_url}...", flush=True)
+                edge_verified = False
+                for attempt in range(12):
+                    try:
+                        probe_req = urllib.request.Request(
+                            f"{tunnel_url}/api/health",
+                            headers={"User-Agent": "ReefVision-CloudRunner/1.0"},
+                        )
+                        with urllib.request.urlopen(probe_req, timeout=3) as probe_resp:
+                            if probe_resp.status == 200:
+                                edge_verified = True
+                                print(f"  ✅ Cloudflare DNS is globally live and active (attempt {attempt + 1})!", flush=True)
+                                break
+                    except Exception:
+                        time.sleep(2)
+
+                print("\n" + "=" * 65, flush=True)
+                print(f"🚀 REEFVISION STUDIO IS READY AT:", flush=True)
+                print(f"👉 {tunnel_url}", flush=True)
+                print("\n💡 INSTANT USAGE OPTIONS:", flush=True)
+                print(f"  A) Open in Browser: {tunnel_url}", flush=True)
+                if edge_verified:
+                    print(f"     ✅ Verified edge routing! Loads in < 1 second using the production bundle.", flush=True)
+                else:
+                    print(f"     ℹ️ If Chrome displays 'DNS_PROBE_POSSIBLE' or 'DNS address not found':", flush=True)
+                    print(f"        Your local ISP DNS cache is still propagating the brand-new domain.", flush=True)
+                    print(f"        Wait 15-30 seconds, reload with Shift+F5, or open in an Incognito tab.", flush=True)
+                print(f"  B) In Desktop App: Click 'Remote/Colab' & paste {tunnel_url}", flush=True)
+                print("=" * 65 + "\n", flush=True)
+            else:
                 print("⚠️ Tunnel launched but could not parse public URL. Check cloudflared output.")
 
             # Monitor processes
