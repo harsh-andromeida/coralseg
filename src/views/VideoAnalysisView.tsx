@@ -105,6 +105,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     jobStatus.state === "queued" ||
     jobStatus.state === "preparing" ||
     jobStatus.state === "processing" ||
+    jobStatus.state === "cancelling" ||
     jobStatus.state === "paused";
   const maxProcessedFrame =
     jobStatus && jobStatus.state === "completed"
@@ -606,8 +607,9 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                     )}
 
                     {/* Pause / Resume & Cancel Buttons */}
-                    {jobStatus && (jobStatus.state === "processing" || jobStatus.state === "paused") && (
+                    {jobStatus && ["queued", "preparing", "processing", "paused", "cancelling"].includes(jobStatus.state) && (
                       <>
+                        {(jobStatus.state === "processing" || jobStatus.state === "paused") && (
                         <button
                           type="button"
                           onClick={handleTogglePauseJob}
@@ -618,15 +620,17 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                           {jobStatus.state === "paused" ? <Play size={12} /> : <Pause size={12} />}
                           <span>{jobStatus.state === "paused" ? "Resume" : "Pause"}</span>
                         </button>
+                        )}
 
                         <button
                           type="button"
                           onClick={handleCancelJob}
+                          disabled={jobStatus.state === "cancelling"}
                           className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-red-200 bg-red-50/50 hover:bg-red-100/60 text-red-700 shadow-2xs transition-all"
                           title="Cancel analysis"
                         >
                           <StopCircle size={12} />
-                          <span>Cancel</span>
+                          <span>{jobStatus.state === "cancelling" ? "Cancelling…" : "Cancel"}</span>
                         </button>
                       </>
                     )}

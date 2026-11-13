@@ -36,7 +36,11 @@ export const VideoProgressCard: React.FC<VideoProgressCardProps> = ({
   onCancelVideo,
   onOpenVideoStudioFromPanel,
 }) => {
-  const isRunning = videoJobStatus?.state === "processing";
+  const jobState = videoJobStatus?.state;
+  // Starting/cancelling jobs are still live work, so the card and its Cancel button stay visible
+  const isStartingOrCancelling = jobState === "queued" || jobState === "preparing" || jobState === "cancelling";
+  const isCancelling = jobState === "cancelling";
+  const isRunning = jobState === "processing" || isStartingOrCancelling;
   const isPaused = videoJobStatus?.state === "paused";
   const isComplete = videoJobStatus?.state === "completed";
   const hasProcessed = (videoJobStatus?.current_frame ?? 0) > 0;
@@ -102,6 +106,7 @@ export const VideoProgressCard: React.FC<VideoProgressCardProps> = ({
           <div className="flex items-center gap-1.5 shrink-0">
             {(isRunning || isPaused) && (
               <>
+                {!isStartingOrCancelling && (
                 <Button
                   type="button"
                   variant="outline"
@@ -114,17 +119,19 @@ export const VideoProgressCard: React.FC<VideoProgressCardProps> = ({
                   {isPaused ? <Play size={11} /> : <Pause size={11} />}
                   <span>{isPaused ? "Resume" : "Pause"}</span>
                 </Button>
+                )}
 
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={onCancelVideo}
+                  disabled={isCancelling}
                   className="h-7 px-2 text-[10px] font-semibold gap-1 text-red-600 border-red-200 hover:bg-red-50"
                   title="Cancel video tracking"
                 >
                   <StopCircle size={11} />
-                  <span>Cancel</span>
+                  <span>{isCancelling ? "Cancelling…" : "Cancel"}</span>
                 </Button>
               </>
             )}

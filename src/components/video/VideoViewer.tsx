@@ -220,23 +220,36 @@ export const VideoViewer: React.FC<VideoViewerProps> = ({
     // 3. Draw Labels & Badges
     if (drawLabels) {
       ctx.font = "bold 11px system-ui, -apple-system, sans-serif";
+      const placed: { x: number; y: number; w: number; h: number }[] = [];
+      const labelH = 16;
       segments.forEach((seg) => {
         if (!seg.bbox) return;
         const [x, y] = seg.bbox;
         const label = `${seg.id_str || `#${seg.id}`} ${seg.genus} [${seg.condition}]`;
-        const renderX = Math.max(4, x * scaleX);
-        const renderY = Math.max(16, y * scaleY - 6);
         const textWidth = ctx.measureText(label).width;
+        const boxW = textWidth + 8;
+        const renderX = Math.min(Math.max(4, x * scaleX), Math.max(4, renderBox.width - boxW - 2));
+        // Anchor above the coral, then nudge down past any label already placed so none stack on each other
+        let boxY = Math.max(2, y * scaleY - 6 - 12);
+        for (let guard = 0; guard < 40; guard++) {
+          const hit = placed.find(
+            (p) => renderX - 2 < p.x + p.w && renderX - 2 + boxW > p.x && boxY < p.y + p.h && boxY + labelH > p.y,
+          );
+          if (!hit) break;
+          boxY = hit.y + hit.h + 1;
+        }
+        boxY = Math.min(boxY, Math.max(2, renderBox.height - labelH - 2));
+        placed.push({ x: renderX - 2, y: boxY, w: boxW, h: labelH });
 
         ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
-        ctx.fillRect(renderX - 2, renderY - 12, textWidth + 8, 16);
+        ctx.fillRect(renderX - 2, boxY, boxW, labelH);
 
         ctx.strokeStyle = seg.condition === "Bleached" ? "#ef4444" : seg.color_hex || "#06b6d4";
         ctx.lineWidth = 1;
-        ctx.strokeRect(renderX - 2, renderY - 12, textWidth + 8, 16);
+        ctx.strokeRect(renderX - 2, boxY, boxW, labelH);
 
         ctx.fillStyle = seg.condition === "Bleached" ? "#f87171" : "#f1f5f9";
-        ctx.fillText(label, renderX + 2, renderY);
+        ctx.fillText(label, renderX + 2, boxY + 12);
       });
     }
 

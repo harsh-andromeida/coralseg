@@ -127,6 +127,7 @@ class VideoProcessor:
         self._jobs: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         self._tracker_cache: Dict[Tuple[str, int, str, Optional[str], bool], Any] = {}
+        self._recover_orphaned_jobs()
 
         # Bounded job queue: default 1 active video job per accelerator
         self._job_queue = queue.Queue()
@@ -143,6 +144,26 @@ class VideoProcessor:
                 except Exception:
                     pass
             self._tracker_cache.clear()
+
+    _TERMINAL_STATES = (VideoJobState.COMPLETED, VideoJobState.ERROR, VideoJobState.CANCELLED)
+
+    def _recover_orphaned_jobs(self):
+        """Marks jobs left running by a previous backend process as interrupted.
+
+        Their worker thread died with that process, so nothing can ever finish or cancel them;
+        left as 'processing' they appear active forever and the UI cancel request has no effect.
+        """
+        try:
+            for j in self.store.list_jobs(limit=500):
+                if j["state"] not in self._TERMINAL_STATES:
+                    self.store.set_job_state(
+                        j["job_id"],
+                        VideoJobState.ERROR,
+                        error="Interrupted: the backend restarted before this job finished.",
+                        failed_stage="interrupted",
+                    )
+        except Exception:
+            traceback.print_exc()
 
     def _process_queue_loop(self):
         """Sequential job coordinator running one active video job at a time."""
@@ -183,7 +204,7 @@ class VideoProcessor:
             active_info = self._jobs.get(job_id)
             if active_info:
                 for k in (
-                    "current_stage", "current_model", "current_action", "stage_detail",
+                    "state", "current_stage", "current_model", "current_action", "stage_detail",
                     "stage_progress_pct", "logs", "cancel_requested", "pause_requested",
                 ):
                     if k in active_info:
@@ -385,17 +406,28 @@ class VideoProcessor:
         return False
 
     def cancel_job(self, job_id: str) -> bool:
-        self.store.request_job_cancel(job_id)
+        """Requests cancellation. Works for live jobs and for orphaned jobs known only to the store."""
         with self._lock:
             job = self._jobs.get(job_id)
-            if job:
+            if job is not None:
                 job["cancel_requested"] = True
-                if job["state"] == VideoJobState.QUEUED:
-                    job["state"] = VideoJobState.CANCELLED
-                else:
-                    job["state"] = VideoJobState.CANCELLING
-                return True
-        return False
+                state = job["state"]
+                if state not in self._TERMINAL_STATES:
+                    state = VideoJobState.CANCELLED if state == VideoJobState.QUEUED else VideoJobState.CANCELLING
+                    job["state"] = state
+                new_state = state
+            else:
+                db_job = self.store.get_job(job_id)
+                if db_job is None:
+                    return False
+                new_state = db_job["state"]
+                if new_state not in self._TERMINAL_STATES:
+                    # No worker owns this job (e.g. left over from a previous backend run)
+                    new_state = VideoJobState.CANCELLED
+        self.store.request_job_cancel(job_id)
+        # Persist so status polling reflects the request immediately
+        self.store.set_job_state(job_id, new_state)
+        return True
 
     def get_frame_annotation(self, job_id: str, frame_idx: int) -> Optional[Dict[str, Any]]:
         """Retrieves tracking results for a specific frame from durable store."""
@@ -499,6 +531,17 @@ class VideoProcessor:
                         job["logs"] = job["logs"][-100:]
                     print(f"  ⚡ [Pipeline] {log_entry}", flush=True)
 
+        def _finish_cancelled():
+            with self._lock:
+                job["state"] = VideoJobState.CANCELLED
+            self.store.set_job_state(job_id, VideoJobState.CANCELLED)
+            _set_stage(
+                stage="Analysis cancelled",
+                model="Cancelled",
+                action="Stopped by user",
+                log_entry="Video analysis cancelled by user",
+            )
+
         # 1. Verify memory budget and load foundation models
         try:
             ok, mem_msg = reserve_memory_for_auxiliary_models(device_pref)
@@ -530,6 +573,11 @@ class VideoProcessor:
                 job["error"] = err_msg
                 job["failed_stage"] = "model_load"
             self.store.set_job_state(job_id, VideoJobState.ERROR, error=err_msg, failed_stage="model_load")
+            cap.release()
+            return
+
+        if job["cancel_requested"]:
+            _finish_cancelled()
             cap.release()
             return
 
@@ -623,6 +671,11 @@ class VideoProcessor:
                 job["error"] = err_msg
                 job["failed_stage"] = "sam_init"
             self.store.set_job_state(job_id, VideoJobState.ERROR, error=err_msg, failed_stage="sam_init")
+            cap.release()
+            return
+
+        if job["cancel_requested"]:
+            _finish_cancelled()
             cap.release()
             return
 
@@ -1124,7 +1177,10 @@ class VideoProcessor:
             # Await all background classification tasks and apply results through coordinator
             _reap_enrichment_results(block=True)
 
-            if not job["cancel_requested"]:
+            if job["cancel_requested"]:
+                # Covers cancels that arrive during the last chunk, when the chunk loop ends without seeing the flag
+                _finish_cancelled()
+            else:
                 # Strict frame coverage verification (Fixes P1 Issue 4)
                 missing_frames = set(range(total_frames)) - committed_frames
                 if missing_frames:
