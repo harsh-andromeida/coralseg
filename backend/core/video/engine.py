@@ -44,6 +44,7 @@ from core.video.scheduler import calculate_chunk_plan, admit_workers_for_device,
 from core.video.export import export_annotated_video, export_transect_csv, export_coco_video
 from core.video.store import VideoJobStore
 from core.segmentation import run_segmentation
+from core.interactive_segmentation import mask_to_polygon
 from core.taxonomy import classify_coral_taxonomy, detect_coral_bleaching
 
 
@@ -978,6 +979,11 @@ class VideoProcessor:
 
                         if is_kf_proxy:
                             for m in masks_info:
+                                # run_segmentation yields masks without polygons; extract them in proxy
+                                # space here so they get remapped like bbox/centroid below. Otherwise
+                                # the tracker derives them later from the proxy mask, unscaled.
+                                if not m.get("polygon") and m.get("mask") is not None:
+                                    m["polygon"] = mask_to_polygon(m["mask"], tolerance=1.5)
                                 if "polygon" in m and m["polygon"]:
                                     m["polygon"] = [
                                         [int(round(pt[0] * kf_scale_x)), int(round(pt[1] * kf_scale_y))]
