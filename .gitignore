@@ -15,8 +15,6 @@ venv.bak/
 
 # Node & Frontend
 node_modules/
-dist/
-/dist
 dist-ssr/
 *.local
 logs/

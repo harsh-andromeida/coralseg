@@ -427,24 +427,52 @@ def setup_colab_gpu_environment(venv_python: str):
             pass
 
 
+def is_valid_production_bundle(dist_dir: str) -> bool:
+    """Checks if dist/ contains a valid compiled bundle rather than an uncompiled dev template."""
+    index_html = os.path.join(dist_dir, "index.html")
+    if not os.path.isfile(index_html):
+        return False
+    try:
+        with open(index_html, "r", encoding="utf-8") as f:
+            content = f.read()
+        # If it points to /src/main.tsx, it's an uncompiled dev template that causes browser module errors!
+        if "/src/main.tsx" in content or 'src="/src/' in content:
+            return False
+        # Must link to a compiled asset in assets/
+        if "assets/" not in content:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def ensure_production_frontend():
     """
     Ensures the production single-bundle frontend in dist/ is available.
     Eliminates Vite dev-server waterfalls over Cloudflare Tunnel (400+ sequential HTTP requests).
     Serving dist/ directly via FastAPI gives sub-second instant page loads.
     """
-    index_html = os.path.join(DIST_DIR, "index.html")
-    if os.path.isfile(index_html):
+    if is_valid_production_bundle(DIST_DIR):
         print("\n[2/4] Production frontend bundle verified in dist/ (instant sub-second loading).", flush=True)
         return
 
-    print("\n[2/4] Building production single-bundle frontend (dist/)...", flush=True)
+    index_html = os.path.join(DIST_DIR, "index.html")
+    if os.path.isfile(index_html):
+        print("\n[2/4] Detected uncompiled or invalid frontend in dist/. Cleaning and rebuilding...", flush=True)
+        shutil.rmtree(DIST_DIR, ignore_errors=True)
+    else:
+        print("\n[2/4] Building production single-bundle frontend (dist/)...", flush=True)
+
     has_npm = shutil.which("npm") is not None
     has_node = shutil.which("node") is not None
     if os.path.isfile(os.path.join(ROOT_DIR, "package.json")):
         try:
-            if not os.path.isdir(os.path.join(ROOT_DIR, "node_modules")) and has_npm:
-                print("  📦 Installing npm dependencies (one-time setup)...", flush=True)
+            # Ensure npm dependencies including newly added ones (like @tanstack/react-query) are present
+            react_query_pkg = os.path.join(ROOT_DIR, "node_modules", "@tanstack", "react-query")
+            need_install = (not os.path.isdir(os.path.join(ROOT_DIR, "node_modules"))) or (not os.path.isdir(react_query_pkg))
+
+            if need_install and has_npm:
+                print("  📦 Installing/updating npm dependencies...", flush=True)
                 subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--quiet"], cwd=ROOT_DIR, check=True)
 
             vite_bin = os.path.join(ROOT_DIR, "node_modules", "vite", "bin", "vite.js")
@@ -458,7 +486,7 @@ def ensure_production_frontend():
                     print("  ⚡ Falling back to direct node vite build (bypassing noexec script wrapper)...", flush=True)
                     subprocess.run(["node", vite_bin, "build"], cwd=ROOT_DIR, check=True)
 
-            if os.path.isfile(index_html):
+            if is_valid_production_bundle(DIST_DIR):
                 print("  ✅ Frontend build complete! Bundle ready in dist/.", flush=True)
             else:
                 print("  ℹ️ Backend will run in API-only mode.", flush=True)
