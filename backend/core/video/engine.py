@@ -1022,7 +1022,7 @@ class VideoProcessor:
                             stage=f"Keyframe at Frame {kf_frame_idx}: Segmenting benthic colonies...",
                             model="CoralSCOP SAM ViT-B",
                             action=f"Prompt grid segmentation ({points_per_side}x{points_per_side} points)",
-                            detail=f"Frame {kf_frame_idx} ({kf_proxy_w}x{kf_proxy_h})",
+                            detail=f"Frame {kf_frame_idx} ({kf_proc_rgb.shape[1]}x{kf_proc_rgb.shape[0]})",
                         )
                         t_disc_start = time.perf_counter()
                         masks_info, _ = run_segmentation(
@@ -1035,8 +1035,11 @@ class VideoProcessor:
                         )
                         t_discovery_sec += (time.perf_counter() - t_disc_start)
 
-                        if is_kf_proxy:
-                            rescale_detections_to_full_res(masks_info, kf_scale_x, kf_scale_y)
+                        # Scale from the array actually segmented. It is usually the SAM2 chunk proxy
+                        # (max_dim 480), not the 480p keyframe proxy, so a fixed ratio mis-scales it.
+                        seg_h, seg_w = kf_proc_rgb.shape[:2]
+                        if (seg_w, seg_h) != (width, height):
+                            rescale_detections_to_full_res(masks_info, width / float(seg_w), height / float(seg_h))
 
                         tracker.match_keyframe_detections(
                             new_detections=masks_info,
