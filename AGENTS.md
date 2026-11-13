@@ -139,6 +139,7 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 | `core/batch_processor.py` | `BatchProcessor` worker thread for image batches |
 | `core/image_export.py` | COCO JSON/zip/dataset export for images |
 | `core/video/engine.py` | `VideoProcessor`; `_run_job_pipeline` is the whole video pipeline (prepare, discover, track, classify, persist, export) |
+| `core/video/pipeline_stages.py` | Pure, unit-tested pipeline pieces: proxy rescaling, track metadata, crops, deliverable exports, timing report (`backend/test_pipeline_stages.py`) |
 | `core/video/store.py` | `VideoJobStore` SQLite (WAL) persistence for jobs/chunks/frames/metrics |
 | `core/video/scheduler.py` | Chunk planning, worker admission, identity reconciliation across chunks |
 | `core/video/preprocessor.py` | 25 fps standardisation, bounded frame extraction |

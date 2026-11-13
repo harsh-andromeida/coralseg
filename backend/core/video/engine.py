@@ -41,11 +41,16 @@ from core.video.tracker import BenthicColonyTracker, CoralTrack
 from core.video.sam2_tracker import SAM2BenthicTracker
 from core.video.efficienttam_tracker import EfficientTAMBenthicTracker
 from core.video.scheduler import calculate_chunk_plan, admit_workers_for_device, reconcile_chunk_identities
-from core.video.video_export import export_annotated_video, export_transect_csv, export_coco_video
 from core.video.store import VideoJobStore
 from core.segmentation import run_segmentation
-from core.interactive_segmentation import mask_to_polygon
 from core.taxonomy import classify_coral_taxonomy, detect_coral_bleaching
+from core.video.pipeline_stages import (
+    build_pipeline_timings,
+    crop_track_regions,
+    rescale_detections_to_full_res,
+    run_deliverable_exports,
+    track_metadata,
+)
 
 
 class VideoJobState:
@@ -900,12 +905,11 @@ class VideoProcessor:
                 tail_overlap_tracks: Dict[int, List[Dict[str, Any]]] = {}
                 next_chunk_start = chunk_plan[chunk.chunk_idx + 1].start_frame if (chunk.chunk_idx + 1 < len(chunk_plan)) else None
 
-                # If first keyframe is strictly after chunk.start_frame, propagate intervening frames
-                if c_keyframes and c_keyframes[0] > chunk.start_frame:
-                    first_kf = c_keyframes[0]
+                def _propagate_range(start_f: int, end_f: int):
+                    """Propagates SAM masks over [start_f, end_f), updating tracks, overlap snapshots and committed frames."""
                     for out_f, det_tracks in sam2_tracker.propagate(
-                        start_frame_idx=chunk.start_frame + 1,
-                        end_frame_idx=first_kf,
+                        start_frame_idx=start_f,
+                        end_frame_idx=end_f,
                         scale_x=scale_x,
                         scale_y=scale_y,
                     ):
@@ -925,10 +929,10 @@ class VideoProcessor:
                                     predicted_iou=det.get("predicted_iou"),
                                 )
 
-                        active_tracks = tracker.get_active_tracks()
-                        _save_overlap_snapshot(out_f, active_tracks)
+                        active = tracker.get_active_tracks()
+                        _save_overlap_snapshot(out_f, active)
                         if chunk.has_overlap and chunk.reconcile_start <= out_f < chunk.reconcile_end:
-                            incoming_chunk_overlap_tracks[out_f] = [t.to_dict() for t in active_tracks]
+                            incoming_chunk_overlap_tracks[out_f] = [t.to_dict() for t in active]
                             if out_f == chunk.reconcile_end - 1 and previous_chunk_overlap_frames:
                                 rec_map = reconcile_chunk_identities(
                                     previous_chunk_overlap_frames,
@@ -938,10 +942,14 @@ class VideoProcessor:
                                 tracker.apply_id_reconciliation(rec_map)
 
                         if chunk.commit_start <= out_f < chunk.commit_end:
-                            _record_frame_state(out_f, active_tracks)
+                            _record_frame_state(out_f, active)
 
                         if next_chunk_start is not None and out_f >= next_chunk_start:
-                            tail_overlap_tracks[out_f] = [t.to_dict() for t in active_tracks]
+                            tail_overlap_tracks[out_f] = [t.to_dict() for t in active]
+
+                # If first keyframe is strictly after chunk.start_frame, propagate intervening frames
+                if c_keyframes and c_keyframes[0] > chunk.start_frame:
+                    _propagate_range(chunk.start_frame + 1, c_keyframes[0])
 
                 # Process keyframes in this chunk
                 for k_i, kf_frame_idx in enumerate(c_keyframes):
@@ -975,32 +983,7 @@ class VideoProcessor:
                         t_discovery_sec += (time.perf_counter() - t_disc_start)
 
                         if is_kf_proxy:
-                            for m in masks_info:
-                                # run_segmentation yields masks without polygons; extract them in proxy
-                                # space here so they get remapped like bbox/centroid below. Otherwise
-                                # the tracker derives them later from the proxy mask, unscaled.
-                                if not m.get("polygon") and m.get("mask") is not None:
-                                    m["polygon"] = mask_to_polygon(m["mask"], tolerance=1.5)
-                                if "polygon" in m and m["polygon"]:
-                                    m["polygon"] = [
-                                        [int(round(pt[0] * kf_scale_x)), int(round(pt[1] * kf_scale_y))]
-                                        for pt in m["polygon"]
-                                    ]
-                                if "bbox" in m:
-                                    bx, by, bw, bh = m["bbox"]
-                                    m["bbox"] = [
-                                        int(round(bx * kf_scale_x)),
-                                        int(round(by * kf_scale_y)),
-                                        max(1, int(round(bw * kf_scale_x))),
-                                        max(1, int(round(bh * kf_scale_y))),
-                                    ]
-                                if "centroid" in m:
-                                    cx, cy = m["centroid"]
-                                    m["centroid"] = (int(round(cx * kf_scale_x)), int(round(cy * kf_scale_y)))
-                                if "area" in m:
-                                    m["area"] = int(round(m["area"] * kf_scale_x * kf_scale_y))
-                                if "area_px" in m:
-                                    m["area_px"] = int(round(m["area_px"] * kf_scale_x * kf_scale_y))
+                            rescale_detections_to_full_res(masks_info, kf_scale_x, kf_scale_y)
 
                         tracker.match_keyframe_detections(
                             new_detections=masks_info,
@@ -1025,18 +1008,7 @@ class VideoProcessor:
                                         obj_id=trk.track_id,
                                         binary_mask=m_corr,
                                         is_correction=True,
-                                        metadata={
-                                            "track_id": trk.track_id,
-                                            "genus": trk.taxonomy.get("genus", "Coral"),
-                                            "growth_form": trk.taxonomy.get("growth_form", "-"),
-                                            "taxon_conf": trk.taxonomy.get("confidence_pct", 85.0),
-                                            "condition": trk.bleaching.get("status", "Healthy"),
-                                            "condition_conf": trk.bleaching.get("confidence_pct", 90.0),
-                                            "is_bleached": trk.bleaching.get("is_bleached", False),
-                                            "color_hex": trk.color_hex,
-                                            "first_seen_frame": trk.first_seen_frame,
-                                            "predicted_iou": trk.predicted_iou,
-                                        },
+                                        metadata=track_metadata(trk),
                                     )
                                 except Exception as corr_err:
                                     _set_stage(log_entry=f"Warning registering correction for coral {trk.track_id}: {corr_err}")
@@ -1065,18 +1037,7 @@ class VideoProcessor:
                                             obj_id=trk.track_id,
                                             binary_mask=m_reg,
                                             is_correction=False,
-                                            metadata={
-                                                "track_id": trk.track_id,
-                                                "genus": trk.taxonomy.get("genus", "Coral"),
-                                                "growth_form": trk.taxonomy.get("growth_form", "-"),
-                                                "taxon_conf": trk.taxonomy.get("confidence_pct", 85.0),
-                                                "condition": trk.bleaching.get("status", "Healthy"),
-                                                "condition_conf": trk.bleaching.get("confidence_pct", 90.0),
-                                                "is_bleached": trk.bleaching.get("is_bleached", False),
-                                                "color_hex": trk.color_hex,
-                                                "first_seen_frame": kf_frame_idx,
-                                                "predicted_iou": trk.predicted_iou,
-                                            },
+                                                metadata=track_metadata(trk, kf_frame_idx),
                                         )
                                     except Exception as reg_err:
                                         _set_stage(log_entry=f"Warning registering coral {trk.track_id} into SAM: {reg_err}")
@@ -1086,18 +1047,8 @@ class VideoProcessor:
                                 kf_rgb = frame_buffer.get_keyframe_raw_rgb(kf_frame_idx)
 
                             pil_img = Image.fromarray(kf_rgb)
-                            crops = []
                             task_tracks = list(new_tracks)
-                            for trk in task_tracks:
-                                x, y, bw, bh = trk.bbox
-                                x0 = max(0, x - int(bw * 0.1))
-                                y0 = max(0, y - int(bh * 0.1))
-                                x1 = min(width, x + bw + int(bw * 0.1))
-                                y1 = min(height, y + bh + int(bh * 0.1))
-                                if (x1 - x0) >= 10 and (y1 - y0) >= 10:
-                                    crops.append(pil_img.crop((x0, y0, x1, y1)))
-                                else:
-                                    crops.append(pil_img.crop((x, y, max(x + 10, x + bw), max(y + 10, y + bh))))
+                            crops = crop_track_regions(pil_img, task_tracks, width, height)
 
                             if crops:
                                 def _enrich_worker(c_crops, c_tracks, f_idx):
@@ -1153,45 +1104,7 @@ class VideoProcessor:
                     # Propagate to next keyframe or chunk end
                     next_kf_or_end = c_keyframes[k_i + 1] if k_i + 1 < len(c_keyframes) else chunk.end_frame
                     if next_kf_or_end > kf_frame_idx + 1:
-                        for out_f, det_tracks in sam2_tracker.propagate(
-                            start_frame_idx=kf_frame_idx + 1,
-                            end_frame_idx=next_kf_or_end,
-                            scale_x=scale_x,
-                            scale_y=scale_y,
-                        ):
-                            if job["cancel_requested"]:
-                                break
-                            for det in det_tracks:
-                                trk_id = det["track_id"]
-                                if trk_id in tracker._tracks:
-                                    t = tracker._tracks[trk_id]
-                                    t.update_geometry(
-                                        bbox=det["bbox"],
-                                        polygon=det["polygon"],
-                                        centroid=det["centroid"],
-                                        area_px=det["area_px"],
-                                        area_pct=round(det["area_px"] / max(width * height, 1) * 100.0, 4),
-                                        frame_idx=out_f,
-                                        predicted_iou=det.get("predicted_iou"),
-                                    )
-
-                            active = tracker.get_active_tracks()
-                            _save_overlap_snapshot(out_f, active)
-                            if chunk.has_overlap and chunk.reconcile_start <= out_f < chunk.reconcile_end:
-                                incoming_chunk_overlap_tracks[out_f] = [t.to_dict() for t in active]
-                                if out_f == chunk.reconcile_end - 1 and previous_chunk_overlap_frames:
-                                    rec_map = reconcile_chunk_identities(
-                                        previous_chunk_overlap_frames,
-                                        incoming_chunk_overlap_tracks,
-                                        iou_threshold=0.50,
-                                    )
-                                    tracker.apply_id_reconciliation(rec_map)
-
-                            if chunk.commit_start <= out_f < chunk.commit_end:
-                                _record_frame_state(out_f, active)
-
-                            if next_chunk_start is not None and out_f >= next_chunk_start:
-                                tail_overlap_tracks[out_f] = [t.to_dict() for t in active]
+                        _propagate_range(kf_frame_idx + 1, next_kf_or_end)
 
                 # Accumulate timings and complete chunk
                 timings = sam2_tracker.get_timings()
@@ -1233,91 +1146,28 @@ class VideoProcessor:
                     detail="Writing survey deliverables to cache",
                 )
 
-                transect_csv = os.path.join(self.cache_dir, f"{job_id}_transect.csv")
-                coco_json = os.path.join(self.cache_dir, f"{job_id}_coco_video.json")
-                annotated_mp4 = os.path.join(self.cache_dir, f"{job_id}_annotated.mp4")
-
                 time_series_data = self.store.get_time_series(job_id)
                 frame_adapter = StoreFrameMapAdapter(self.store, job_id)
-
-                export_errors: Dict[str, str] = {}
-                export_paths: Dict[str, Optional[str]] = {
-                    "annotated_mp4": None,
-                    "transect_csv": None,
-                    "coco_json": None,
-                }
-
-                # 1. Export CSV
-                t_exp_d = time.perf_counter()
-                try:
-                    export_transect_csv(
-                        output_csv_path=transect_csv,
-                        time_series_records=time_series_data,
-                    )
-                    if os.path.isfile(transect_csv) and os.path.getsize(transect_csv) > 0:
-                        export_paths["transect_csv"] = transect_csv
-                    else:
-                        export_errors["transect_csv"] = "CSV file was not created or has 0 bytes"
-                except Exception as csv_err:
-                    export_errors["transect_csv"] = str(csv_err)
-                    _set_stage(log_entry=f"CSV export error: {csv_err}")
-
-                # 2. Export COCO JSON
-                try:
-                    export_coco_video(
-                        output_json_path=coco_json,
-                        video_filename=job["filename"],
-                        width=width,
-                        height=height,
-                        total_frames=total_frames,
-                        fps=video_fps,
-                        all_tracks=list(tracker._tracks.values()),
-                        frame_tracks_map=frame_adapter,
-                    )
-                    if os.path.isfile(coco_json) and os.path.getsize(coco_json) > 0:
-                        export_paths["coco_json"] = coco_json
-                    else:
-                        export_errors["coco_json"] = "COCO JSON file was not created or has 0 bytes"
-                except Exception as coco_err:
-                    export_errors["coco_json"] = str(coco_err)
-                    _set_stage(log_entry=f"COCO JSON export error: {coco_err}")
-                t_export_deliv_sec = time.perf_counter() - t_exp_d
-
-                # 3. Optional MP4 overlay generation
                 export_mp4_enabled = opts.get("export_mp4", True)
-                if export_mp4_enabled:
-                    t_exp_m = time.perf_counter()
-                    try:
-                        _set_stage(
-                            stage="Rendering annotated video overlay...",
-                            action="Encoding H.264 preview video",
-                        )
-                        export_annotated_video(
-                            input_video_path=video_path,
-                            output_mp4_path=annotated_mp4,
-                            frame_tracks_map=frame_adapter,
-                        )
-                        if os.path.isfile(annotated_mp4) and os.path.getsize(annotated_mp4) > 0:
-                            export_paths["annotated_mp4"] = annotated_mp4
-                        else:
-                            export_errors["annotated_mp4"] = "Annotated MP4 file was not created or has 0 bytes"
-                    except Exception as mp4_err:
-                        export_errors["annotated_mp4"] = str(mp4_err)
-                        _set_stage(log_entry=f"MP4 export error: {mp4_err}")
-                    t_export_mp4_sec = time.perf_counter() - t_exp_m
 
-                # Determine overall export status based on verified deliverables (Fixes P1 Issue 7)
-                expected_exports = ["transect_csv", "coco_json"]
-                if export_mp4_enabled:
-                    expected_exports.append("annotated_mp4")
-
-                successful_exports = [k for k in expected_exports if export_paths.get(k) is not None]
-                if len(successful_exports) == len(expected_exports):
-                    export_status = "ready"
-                elif len(successful_exports) > 0:
-                    export_status = "partial"
-                else:
-                    export_status = "failed"
+                exports = run_deliverable_exports(
+                    cache_dir=self.cache_dir,
+                    job_id=job_id,
+                    filename=job["filename"],
+                    video_path=video_path,
+                    width=width,
+                    height=height,
+                    total_frames=total_frames,
+                    fps=video_fps,
+                    tracks=list(tracker._tracks.values()),
+                    time_series_data=time_series_data,
+                    frame_adapter=frame_adapter,
+                    export_mp4=export_mp4_enabled,
+                    set_stage=_set_stage,
+                )
+                export_paths, export_errors, export_status = exports.paths, exports.errors, exports.status
+                t_export_deliv_sec = exports.deliverables_sec
+                t_export_mp4_sec = exports.mp4_sec
 
                 elapsed_total = round(time.time() - pipeline_start_t, 2)
                 _set_stage(
@@ -1333,51 +1183,25 @@ class VideoProcessor:
                 total_transfer_sec = accumulated_transfer_sec + tracker_timings.get("transfer_sec", 0.0)
                 total_geometry_sec = accumulated_geometry_sec + tracker_timings.get("geometry_sec", 0.0)
                 total_queue_wait_sec = accumulated_queue_wait_sec + tracker_timings.get("queue_wait_sec", 0.0)
-                total_decode_prep_sec = t_motion_scan_sec + t_chunk_prep_sec
-
-                # Critical path elapsed duration and sequential stage budget
-                critical_path_stages_sec = (
-                    total_decode_prep_sec
-                    + total_prop_sec
-                    + total_transfer_sec
-                    + total_geometry_sec
-                    + t_discovery_sec
-                    + t_persistence_sec
-                    + t_export_deliv_sec
-                    + t_export_mp4_sec
+                pipeline_timings = build_pipeline_timings(
+                    elapsed_total=elapsed_total,
+                    compile_warmup_sec=compile_warmup_sec,
+                    initialization_sec=accumulated_init_sec,
+                    motion_scan_sec=t_motion_scan_sec,
+                    chunk_prep_sec=t_chunk_prep_sec,
+                    propagation_sec=total_prop_sec,
+                    transfer_sec=total_transfer_sec,
+                    geometry_sec=total_geometry_sec,
+                    queue_wait_sec=total_queue_wait_sec,
+                    discovery_sec=t_discovery_sec,
+                    classification_sec=t_classification_sec,
+                    persistence_sec=t_persistence_sec,
+                    export_deliverables_sec=t_export_deliv_sec,
+                    export_mp4_sec=t_export_mp4_sec,
+                    unique_colonies=tracker.total_unique_colonies,
+                    keyframes_count=len(keyframe_indices),
+                    committed_frames=len(committed_frames),
                 )
-                unaccounted_idle_sec = max(0.0, elapsed_total - critical_path_stages_sec)
-
-                pipeline_timings = {
-                    "total_elapsed_sec": round(elapsed_total, 3),
-                    "critical_path_elapsed_sec": round(elapsed_total, 3),
-                    "compile_warmup_sec": round(compile_warmup_sec, 3),
-                    "initialization_sec": round(accumulated_init_sec, 3),
-                    "video_decode_prep_sec": round(total_decode_prep_sec, 3),
-                    "motion_scan_sec": round(t_motion_scan_sec, 3),
-                    "chunk_prep_sec": round(t_chunk_prep_sec, 3),
-                    "synchronized_gpu_inference_sec": round(total_prop_sec, 3),
-                    "mask_transfer_sec": round(total_transfer_sec, 3),
-                    "geometry_extraction_sec": round(total_geometry_sec, 3),
-                    "queue_wait_sec": round(total_queue_wait_sec, 3),
-                    "keyframe_discovery_sec": round(t_discovery_sec, 3),
-                    "background_classification_sec": round(t_classification_sec, 3),
-                    "keyframe_classification_sec": round(t_classification_sec, 3),
-                    "persistence_sec": round(t_persistence_sec, 3),
-                    "export_deliverables_sec": round(t_export_deliv_sec, 3),
-                    "export_annotated_mp4_sec": round(t_export_mp4_sec, 3),
-                    "unaccounted_idle_sec": round(unaccounted_idle_sec, 3),
-                    "pct_gpu_inference": round((total_prop_sec / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "pct_video_decode_prep": round((total_decode_prep_sec / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "pct_keyframe_discovery": round((t_discovery_sec / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "pct_geometry_and_transfer": round(((total_geometry_sec + total_transfer_sec) / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "pct_persistence": round((t_persistence_sec / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "pct_export": round(((t_export_deliv_sec + t_export_mp4_sec) / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "pct_unaccounted_idle": round((unaccounted_idle_sec / max(elapsed_total, 0.001)) * 100.0, 1),
-                    "unique_colonies_count": tracker.total_unique_colonies,
-                    "keyframes_count": len(keyframe_indices),
-                    "committed_frames": len(committed_frames),
-                }
 
                 with self._lock:
                     job["timings"] = pipeline_timings
