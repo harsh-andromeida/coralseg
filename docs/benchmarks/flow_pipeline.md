@@ -1,7 +1,6 @@
 # Flow pipeline: camera-motion mask propagation (Modal, 8 s / 202-frame sample, 1920x1080)
 
-Code: `backend/flow_pipeline.py` (standalone script, not wired into the app), runner: `backend/modal_flow.py`.
-Raw results per GPU: `raw/flow_<gpu>.json`. SAM2 pipeline reference: `video_pipeline_gpu_bench.md` (96.7 s on a T4).
+Code: `backend/core/video/flow_tracking.py` (used by the app's video engine, `core/video/engine.py`). The per-GPU table below was measured with the standalone script that preceded it (same logic); the app-level numbers are in the next section. Benchmark harness: `backend/bench_app_flow.py`, Modal runner: `backend/modal_flow.py`. SAM2 pipeline reference: `video_pipeline_gpu_bench.md` (96.7 s on a T4).
 
 ## How it works
 Corals are static and the camera moves, so instead of tracking each colony with SAM2 (about 20 ms per colony per frame):
@@ -43,8 +42,20 @@ The mask decoder (about 63% of T4 time) costs per prompt point and is compute-bo
 - **Timing dependent.** Keyframe corrections arrive later on slower GPUs (lag column); results are not bit-for-bit reproducible.
 - **Host CPU bound** from an A10G upward; a slow host CPU limits it.
 
+## In the app (real `VideoProcessor`, Modal T4, same 8 s clip, MP4 + CSV + COCO exports included)
+
+| | SAM2 pipeline (before) | flow pipeline (app engine) |
+|---|---:|---:|
+| wall time, end to end with exports | 96.7 s | 16.3 s |
+| end-to-end FPS | 2.1 | 12.4 |
+| processing loop only (what the job's FPS readout shows) | 2.1 | about 18 |
+| colonies | 27 | 31 |
+
+Main-thread cost per frame in the app: decode 8.5 ms, ego-motion 5 ms, flow + warp 13 ms, label-to-polygon geometry 16 ms; CoralSCOP keyframes (0.78 s each) run in the background. Geometry extraction is now the largest single per-frame cost and the next thing to optimise.
+The annotated MP4 export used to be rejected as "unreadable or corrupted" on every run (ffmpeg was not given time to finalise the file); that is fixed.
+
 ## Reproduce
 ```bash
-python backend/flow_pipeline.py --video demo_images/sample_reef_transect_25fps.mp4 --classify   # local / Colab
-BENCH_GPU=T4 modal run backend/modal_flow.py --extra "--classify"                               # Modal
+python backend/bench_app_flow.py --runs 3                       # local / Colab, drives the real engine
+BENCH_GPU=T4 modal run backend/modal_flow.py                    # Modal
 ```

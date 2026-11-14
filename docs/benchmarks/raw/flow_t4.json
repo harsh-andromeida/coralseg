@@ -24,41 +24,39 @@
     "cold": {
       "frames": 202,
       "video_sec": 8.08,
-      "wall_sec": 18.957,
-      "fps": 10.66,
-      "realtime_factor": 0.426,
+      "wall_sec": 18.759,
+      "fps": 10.77,
+      "realtime_factor": 0.431,
       "keyframes": 9,
       "unique_corals": 31,
       "bleaching_pct": 16.7,
-      "export_status": "partial",
+      "export_status": "ready",
       "exports": {
-        "annotated_mp4": false,
+        "annotated_mp4": true,
         "transect_csv": true,
         "coco_json": true
       },
-      "export_errors": {
-        "annotated_mp4": "Exported MP4 is unreadable or corrupted: /tmp/bench_cache_c7l1qji0/vjob_1794660921671_annotated.mp4"
-      },
+      "export_errors": {},
       "stage_timings": {
-        "total_elapsed_sec": 16.65,
-        "model_load_sec": 2.107,
-        "video_decode_sec": 1.751,
-        "ego_motion_sec": 1.116,
-        "optical_flow_and_warp_sec": 2.604,
-        "geometry_extraction_sec": 2.995,
+        "total_elapsed_sec": 15.99,
+        "model_load_sec": 2.662,
+        "video_decode_sec": 1.739,
+        "ego_motion_sec": 1.091,
+        "optical_flow_and_warp_sec": 2.444,
+        "geometry_extraction_sec": 3.011,
         "blocked_on_keyframe_sec": 0.0,
-        "keyframe_segmentation_sec": 7.731,
-        "classification_sec": 2.885,
-        "persistence_sec": 0.217,
-        "export_deliverables_sec": 0.444,
-        "export_annotated_mp4_sec": 4.546,
-        "unaccounted_idle_sec": 2.977,
-        "pct_video_decode": 10.5,
-        "pct_optical_flow_and_warp": 15.6,
-        "pct_geometry": 18.0,
-        "pct_persistence": 1.3,
-        "pct_export": 30.0,
-        "pct_unaccounted_idle": 17.9,
+        "keyframe_segmentation_sec": 7.691,
+        "classification_sec": 3.038,
+        "persistence_sec": 0.219,
+        "export_deliverables_sec": 0.427,
+        "export_annotated_mp4_sec": 4.105,
+        "unaccounted_idle_sec": 2.954,
+        "pct_video_decode": 10.9,
+        "pct_optical_flow_and_warp": 15.3,
+        "pct_geometry": 18.8,
+        "pct_persistence": 1.4,
+        "pct_export": 28.3,
+        "pct_unaccounted_idle": 18.5,
         "unique_colonies_count": 31,
         "keyframes_count": 9,
         "committed_frames": 202
@@ -66,93 +64,91 @@
       "call_stats": {
         "keyframe_segmentation": {
           "calls": 9,
-          "total_sec": 7.7095,
-          "mean_ms": 856.61,
-          "p50_ms": 752.26,
-          "p95_ms": 1730.01,
-          "max_ms": 1730.01
+          "total_sec": 7.6682,
+          "mean_ms": 852.03,
+          "p50_ms": 751.43,
+          "p95_ms": 1707.5,
+          "max_ms": 1707.5
         },
         "tracker_step (per frame)": {
           "calls": 202,
-          "total_sec": 6.5979,
-          "mean_ms": 32.66,
-          "p50_ms": 21.78,
-          "p95_ms": 50.28,
-          "max_ms": 1765.62
+          "total_sec": 6.3737,
+          "mean_ms": 31.55,
+          "p50_ms": 20.84,
+          "p95_ms": 47.84,
+          "max_ms": 1743.5
         },
         "labels_to_geometry": {
           "calls": 202,
-          "total_sec": 2.869,
-          "mean_ms": 14.2,
-          "p50_ms": 14.04,
-          "p95_ms": 19.32,
-          "max_ms": 52.72
+          "total_sec": 2.8326,
+          "mean_ms": 14.02,
+          "p50_ms": 14.31,
+          "p95_ms": 18.53,
+          "max_ms": 54.37
         },
         "bioclip_batch": {
           "calls": 8,
-          "total_sec": 0.4488,
-          "mean_ms": 56.1,
-          "p50_ms": 36.09,
-          "p95_ms": 156.31,
-          "max_ms": 156.31
+          "total_sec": 0.512,
+          "mean_ms": 64.01,
+          "p50_ms": 49.17,
+          "p95_ms": 195.76,
+          "max_ms": 195.76
         },
         "yolo_bleaching_batch": {
           "calls": 8,
-          "total_sec": 2.4365,
-          "mean_ms": 304.56,
-          "p50_ms": 317.58,
-          "p95_ms": 732.08,
-          "max_ms": 732.08
+          "total_sec": 2.5263,
+          "mean_ms": 315.78,
+          "p50_ms": 489.58,
+          "p95_ms": 640.83,
+          "max_ms": 640.83
         },
         "export_all": {
           "calls": 1,
-          "total_sec": 4.9896,
-          "mean_ms": 4989.55,
-          "p50_ms": 4989.55,
-          "p95_ms": 4989.55,
-          "max_ms": 4989.55
+          "total_sec": 4.5326,
+          "mean_ms": 4532.59,
+          "p50_ms": 4532.59,
+          "p95_ms": 4532.59,
+          "max_ms": 4532.59
         }
       },
-      "peak_rss_mb": 4387.9
+      "peak_rss_mb": 4404.1
     },
     "warm_median": {
       "frames": 202,
       "video_sec": 8.08,
-      "wall_sec": 18.957,
-      "fps": 10.66,
-      "realtime_factor": 0.426,
+      "wall_sec": 16.257,
+      "fps": 12.43,
+      "realtime_factor": 0.497,
       "keyframes": 9,
       "unique_corals": 31,
-      "bleaching_pct": 16.7,
-      "export_status": "partial",
+      "bleaching_pct": 38.9,
+      "export_status": "ready",
       "exports": {
-        "annotated_mp4": false,
+        "annotated_mp4": true,
         "transect_csv": true,
         "coco_json": true
       },
-      "export_errors": {
-        "annotated_mp4": "Exported MP4 is unreadable or corrupted: /tmp/bench_cache_c7l1qji0/vjob_1794660921671_annotated.mp4"
-      },
+      "export_errors": {},
       "stage_timings": {
-        "total_elapsed_sec": 16.65,
-        "model_load_sec": 2.107,
-        "video_decode_sec": 1.751,
-        "ego_motion_sec": 1.116,
-        "optical_flow_and_warp_sec": 2.604,
-        "geometry_extraction_sec": 2.995,
+        "total_elapsed_sec": 16.07,
+        "model_load_sec": 0.007,
+        "video_decode_sec": 1.715,
+        "ego_motion_sec": 1.074,
+        "optical_flow_and_warp_sec": 2.597,
+        "geometry_extraction_sec": 3.217,
         "blocked_on_keyframe_sec": 0.0,
-        "keyframe_segmentation_sec": 7.731,
-        "classification_sec": 2.885,
-        "persistence_sec": 0.217,
-        "export_deliverables_sec": 0.444,
-        "export_annotated_mp4_sec": 4.546,
-        "unaccounted_idle_sec": 2.977,
-        "pct_video_decode": 10.5,
-        "pct_optical_flow_and_warp": 15.6,
-        "pct_geometry": 18.0,
-        "pct_persistence": 1.3,
-        "pct_export": 30.0,
-        "pct_unaccounted_idle": 17.9,
+        "keyframe_segmentation_sec": 7.015,
+        "classification_sec": 0.487,
+        "persistence_sec": 0.258,
+        "export_deliverables_sec": 0.448,
+        "export_annotated_mp4_sec": 4.739,
+        "unaccounted_idle_sec": 2.021,
+        "pct_video_decode": 10.7,
+        "pct_optical_flow_and_warp": 16.2,
+        "pct_geometry": 20.0,
+        "pct_persistence": 1.6,
+        "pct_export": 32.3,
+        "pct_unaccounted_idle": 12.6,
         "unique_colonies_count": 31,
         "keyframes_count": 9,
         "committed_frames": 202
@@ -160,94 +156,92 @@
       "call_stats": {
         "keyframe_segmentation": {
           "calls": 9,
-          "total_sec": 7.7095,
-          "mean_ms": 856.61,
-          "p50_ms": 752.26,
-          "p95_ms": 1730.01,
-          "max_ms": 1730.01
+          "total_sec": 6.9925,
+          "mean_ms": 776.95,
+          "p50_ms": 796.69,
+          "p95_ms": 826.84,
+          "max_ms": 826.84
         },
         "tracker_step (per frame)": {
           "calls": 202,
-          "total_sec": 6.5979,
-          "mean_ms": 32.66,
-          "p50_ms": 21.78,
-          "p95_ms": 50.28,
-          "max_ms": 1765.62
+          "total_sec": 5.5838,
+          "mean_ms": 27.64,
+          "p50_ms": 21.3,
+          "p95_ms": 49.92,
+          "max_ms": 828.3
         },
         "labels_to_geometry": {
           "calls": 202,
-          "total_sec": 2.869,
-          "mean_ms": 14.2,
-          "p50_ms": 14.04,
-          "p95_ms": 19.32,
-          "max_ms": 52.72
+          "total_sec": 2.9401,
+          "mean_ms": 14.55,
+          "p50_ms": 13.81,
+          "p95_ms": 18.76,
+          "max_ms": 106.39
         },
         "bioclip_batch": {
           "calls": 8,
-          "total_sec": 0.4488,
-          "mean_ms": 56.1,
-          "p50_ms": 36.09,
-          "p95_ms": 156.31,
-          "max_ms": 156.31
+          "total_sec": 0.3782,
+          "mean_ms": 47.28,
+          "p50_ms": 35.33,
+          "p95_ms": 115.89,
+          "max_ms": 115.89
         },
         "yolo_bleaching_batch": {
           "calls": 8,
-          "total_sec": 2.4365,
-          "mean_ms": 304.56,
-          "p50_ms": 317.58,
-          "p95_ms": 732.08,
-          "max_ms": 732.08
+          "total_sec": 0.1084,
+          "mean_ms": 13.55,
+          "p50_ms": 14.06,
+          "p95_ms": 27.02,
+          "max_ms": 27.02
         },
         "export_all": {
           "calls": 1,
-          "total_sec": 4.9896,
-          "mean_ms": 4989.55,
-          "p50_ms": 4989.55,
-          "p95_ms": 4989.55,
-          "max_ms": 4989.55
+          "total_sec": 5.1874,
+          "mean_ms": 5187.42,
+          "p50_ms": 5187.42,
+          "p95_ms": 5187.42,
+          "max_ms": 5187.42
         }
       },
-      "peak_rss_mb": 4387.9
+      "peak_rss_mb": 4489.2
     },
     "all_runs": [
       {
         "frames": 202,
         "video_sec": 8.08,
-        "wall_sec": 18.957,
-        "fps": 10.66,
-        "realtime_factor": 0.426,
+        "wall_sec": 18.759,
+        "fps": 10.77,
+        "realtime_factor": 0.431,
         "keyframes": 9,
         "unique_corals": 31,
         "bleaching_pct": 16.7,
-        "export_status": "partial",
+        "export_status": "ready",
         "exports": {
-          "annotated_mp4": false,
+          "annotated_mp4": true,
           "transect_csv": true,
           "coco_json": true
         },
-        "export_errors": {
-          "annotated_mp4": "Exported MP4 is unreadable or corrupted: /tmp/bench_cache_c7l1qji0/vjob_1794660921671_annotated.mp4"
-        },
+        "export_errors": {},
         "stage_timings": {
-          "total_elapsed_sec": 16.65,
-          "model_load_sec": 2.107,
-          "video_decode_sec": 1.751,
-          "ego_motion_sec": 1.116,
-          "optical_flow_and_warp_sec": 2.604,
-          "geometry_extraction_sec": 2.995,
+          "total_elapsed_sec": 15.99,
+          "model_load_sec": 2.662,
+          "video_decode_sec": 1.739,
+          "ego_motion_sec": 1.091,
+          "optical_flow_and_warp_sec": 2.444,
+          "geometry_extraction_sec": 3.011,
           "blocked_on_keyframe_sec": 0.0,
-          "keyframe_segmentation_sec": 7.731,
-          "classification_sec": 2.885,
-          "persistence_sec": 0.217,
-          "export_deliverables_sec": 0.444,
-          "export_annotated_mp4_sec": 4.546,
-          "unaccounted_idle_sec": 2.977,
-          "pct_video_decode": 10.5,
-          "pct_optical_flow_and_warp": 15.6,
-          "pct_geometry": 18.0,
-          "pct_persistence": 1.3,
-          "pct_export": 30.0,
-          "pct_unaccounted_idle": 17.9,
+          "keyframe_segmentation_sec": 7.691,
+          "classification_sec": 3.038,
+          "persistence_sec": 0.219,
+          "export_deliverables_sec": 0.427,
+          "export_annotated_mp4_sec": 4.105,
+          "unaccounted_idle_sec": 2.954,
+          "pct_video_decode": 10.9,
+          "pct_optical_flow_and_warp": 15.3,
+          "pct_geometry": 18.8,
+          "pct_persistence": 1.4,
+          "pct_export": 28.3,
+          "pct_unaccounted_idle": 18.5,
           "unique_colonies_count": 31,
           "keyframes_count": 9,
           "committed_frames": 202
@@ -255,54 +249,238 @@
         "call_stats": {
           "keyframe_segmentation": {
             "calls": 9,
-            "total_sec": 7.7095,
-            "mean_ms": 856.61,
-            "p50_ms": 752.26,
-            "p95_ms": 1730.01,
-            "max_ms": 1730.01
+            "total_sec": 7.6682,
+            "mean_ms": 852.03,
+            "p50_ms": 751.43,
+            "p95_ms": 1707.5,
+            "max_ms": 1707.5
           },
           "tracker_step (per frame)": {
             "calls": 202,
-            "total_sec": 6.5979,
-            "mean_ms": 32.66,
-            "p50_ms": 21.78,
-            "p95_ms": 50.28,
-            "max_ms": 1765.62
+            "total_sec": 6.3737,
+            "mean_ms": 31.55,
+            "p50_ms": 20.84,
+            "p95_ms": 47.84,
+            "max_ms": 1743.5
           },
           "labels_to_geometry": {
             "calls": 202,
-            "total_sec": 2.869,
-            "mean_ms": 14.2,
-            "p50_ms": 14.04,
-            "p95_ms": 19.32,
-            "max_ms": 52.72
+            "total_sec": 2.8326,
+            "mean_ms": 14.02,
+            "p50_ms": 14.31,
+            "p95_ms": 18.53,
+            "max_ms": 54.37
           },
           "bioclip_batch": {
             "calls": 8,
-            "total_sec": 0.4488,
-            "mean_ms": 56.1,
-            "p50_ms": 36.09,
-            "p95_ms": 156.31,
-            "max_ms": 156.31
+            "total_sec": 0.512,
+            "mean_ms": 64.01,
+            "p50_ms": 49.17,
+            "p95_ms": 195.76,
+            "max_ms": 195.76
           },
           "yolo_bleaching_batch": {
             "calls": 8,
-            "total_sec": 2.4365,
-            "mean_ms": 304.56,
-            "p50_ms": 317.58,
-            "p95_ms": 732.08,
-            "max_ms": 732.08
+            "total_sec": 2.5263,
+            "mean_ms": 315.78,
+            "p50_ms": 489.58,
+            "p95_ms": 640.83,
+            "max_ms": 640.83
           },
           "export_all": {
             "calls": 1,
-            "total_sec": 4.9896,
-            "mean_ms": 4989.55,
-            "p50_ms": 4989.55,
-            "p95_ms": 4989.55,
-            "max_ms": 4989.55
+            "total_sec": 4.5326,
+            "mean_ms": 4532.59,
+            "p50_ms": 4532.59,
+            "p95_ms": 4532.59,
+            "max_ms": 4532.59
           }
         },
-        "peak_rss_mb": 4387.9
+        "peak_rss_mb": 4404.1
+      },
+      {
+        "frames": 202,
+        "video_sec": 8.08,
+        "wall_sec": 15.858,
+        "fps": 12.74,
+        "realtime_factor": 0.51,
+        "keyframes": 9,
+        "unique_corals": 31,
+        "bleaching_pct": 33.3,
+        "export_status": "ready",
+        "exports": {
+          "annotated_mp4": true,
+          "transect_csv": true,
+          "coco_json": true
+        },
+        "export_errors": {},
+        "stage_timings": {
+          "total_elapsed_sec": 15.71,
+          "model_load_sec": 0.013,
+          "video_decode_sec": 1.728,
+          "ego_motion_sec": 1.055,
+          "optical_flow_and_warp_sec": 2.496,
+          "geometry_extraction_sec": 3.16,
+          "blocked_on_keyframe_sec": 0.0,
+          "keyframe_segmentation_sec": 6.747,
+          "classification_sec": 0.477,
+          "persistence_sec": 0.249,
+          "export_deliverables_sec": 0.511,
+          "export_annotated_mp4_sec": 4.52,
+          "unaccounted_idle_sec": 1.992,
+          "pct_video_decode": 11.0,
+          "pct_optical_flow_and_warp": 15.9,
+          "pct_geometry": 20.1,
+          "pct_persistence": 1.6,
+          "pct_export": 32.0,
+          "pct_unaccounted_idle": 12.7,
+          "unique_colonies_count": 31,
+          "keyframes_count": 9,
+          "committed_frames": 202
+        },
+        "call_stats": {
+          "keyframe_segmentation": {
+            "calls": 9,
+            "total_sec": 6.7113,
+            "mean_ms": 745.7,
+            "p50_ms": 734.32,
+            "p95_ms": 811.42,
+            "max_ms": 811.42
+          },
+          "tracker_step (per frame)": {
+            "calls": 202,
+            "total_sec": 5.4354,
+            "mean_ms": 26.91,
+            "p50_ms": 20.73,
+            "p95_ms": 47.93,
+            "max_ms": 803.5
+          },
+          "labels_to_geometry": {
+            "calls": 202,
+            "total_sec": 2.9822,
+            "mean_ms": 14.76,
+            "p50_ms": 13.98,
+            "p95_ms": 21.05,
+            "max_ms": 97.42
+          },
+          "bioclip_batch": {
+            "calls": 8,
+            "total_sec": 0.3824,
+            "mean_ms": 47.8,
+            "p50_ms": 34.13,
+            "p95_ms": 114.63,
+            "max_ms": 114.63
+          },
+          "yolo_bleaching_batch": {
+            "calls": 8,
+            "total_sec": 0.0937,
+            "mean_ms": 11.72,
+            "p50_ms": 11.05,
+            "p95_ms": 25.95,
+            "max_ms": 25.95
+          },
+          "export_all": {
+            "calls": 1,
+            "total_sec": 5.0306,
+            "mean_ms": 5030.57,
+            "p50_ms": 5030.57,
+            "p95_ms": 5030.57,
+            "max_ms": 5030.57
+          }
+        },
+        "peak_rss_mb": 4477.5
+      },
+      {
+        "frames": 202,
+        "video_sec": 8.08,
+        "wall_sec": 16.257,
+        "fps": 12.43,
+        "realtime_factor": 0.497,
+        "keyframes": 9,
+        "unique_corals": 31,
+        "bleaching_pct": 38.9,
+        "export_status": "ready",
+        "exports": {
+          "annotated_mp4": true,
+          "transect_csv": true,
+          "coco_json": true
+        },
+        "export_errors": {},
+        "stage_timings": {
+          "total_elapsed_sec": 16.07,
+          "model_load_sec": 0.007,
+          "video_decode_sec": 1.715,
+          "ego_motion_sec": 1.074,
+          "optical_flow_and_warp_sec": 2.597,
+          "geometry_extraction_sec": 3.217,
+          "blocked_on_keyframe_sec": 0.0,
+          "keyframe_segmentation_sec": 7.015,
+          "classification_sec": 0.487,
+          "persistence_sec": 0.258,
+          "export_deliverables_sec": 0.448,
+          "export_annotated_mp4_sec": 4.739,
+          "unaccounted_idle_sec": 2.021,
+          "pct_video_decode": 10.7,
+          "pct_optical_flow_and_warp": 16.2,
+          "pct_geometry": 20.0,
+          "pct_persistence": 1.6,
+          "pct_export": 32.3,
+          "pct_unaccounted_idle": 12.6,
+          "unique_colonies_count": 31,
+          "keyframes_count": 9,
+          "committed_frames": 202
+        },
+        "call_stats": {
+          "keyframe_segmentation": {
+            "calls": 9,
+            "total_sec": 6.9925,
+            "mean_ms": 776.95,
+            "p50_ms": 796.69,
+            "p95_ms": 826.84,
+            "max_ms": 826.84
+          },
+          "tracker_step (per frame)": {
+            "calls": 202,
+            "total_sec": 5.5838,
+            "mean_ms": 27.64,
+            "p50_ms": 21.3,
+            "p95_ms": 49.92,
+            "max_ms": 828.3
+          },
+          "labels_to_geometry": {
+            "calls": 202,
+            "total_sec": 2.9401,
+            "mean_ms": 14.55,
+            "p50_ms": 13.81,
+            "p95_ms": 18.76,
+            "max_ms": 106.39
+          },
+          "bioclip_batch": {
+            "calls": 8,
+            "total_sec": 0.3782,
+            "mean_ms": 47.28,
+            "p50_ms": 35.33,
+            "p95_ms": 115.89,
+            "max_ms": 115.89
+          },
+          "yolo_bleaching_batch": {
+            "calls": 8,
+            "total_sec": 0.1084,
+            "mean_ms": 13.55,
+            "p50_ms": 14.06,
+            "p95_ms": 27.02,
+            "max_ms": 27.02
+          },
+          "export_all": {
+            "calls": 1,
+            "total_sec": 5.1874,
+            "mean_ms": 5187.42,
+            "p50_ms": 5187.42,
+            "p95_ms": 5187.42,
+            "max_ms": 5187.42
+          }
+        },
+        "peak_rss_mb": 4489.2
       }
     ]
   }

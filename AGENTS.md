@@ -138,16 +138,15 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 | `core/visualization.py` | Overlay rendering, distinct colours |
 | `core/batch_processor.py` | `BatchProcessor` worker thread for image batches |
 | `core/image_export.py` | COCO JSON/zip/dataset export for images |
-| `core/video/engine.py` | `VideoProcessor`; `_run_job_pipeline` is the whole video pipeline (prepare, discover, track, classify, persist, export) |
-| `core/video/pipeline_stages.py` | Pure, unit-tested pipeline pieces: proxy rescaling, track metadata, crops, deliverable exports, timing report (`backend/test_pipeline_stages.py`) |
+| `core/video/engine.py` | `VideoProcessor`; `_run_job_pipeline` is the whole video pipeline (load models, flow-track frames, persist, classify, export) |
+| `core/video/pipeline_stages.py` | Pure, unit-tested pieces: label image -> polygons/bboxes, colony colours, deliverable exports, timing report (`backend/test_pipeline_stages.py`) |
 | `core/video/store.py` | `VideoJobStore` SQLite (WAL) persistence for jobs/chunks/frames/metrics |
-| `core/video/scheduler.py` | Chunk planning, worker admission, identity reconciliation across chunks |
-| `core/video/preprocessor.py` | 25 fps standardisation, bounded frame extraction |
+| `core/video/preprocessor.py` | 25 fps standardisation |
 | `core/video/keyframe_selector.py` | Ego-motion keyframe selection |
-| `core/video/tracker.py` | `CoralTrack`, `BenthicColonyTracker` (IoU identity matching) |
-| `core/video/sam2_tracker.py`, `efficienttam_tracker.py` | Neural temporal mask propagation backends |
+| `core/video/tracker.py` | `CoralTrack` (per-colony state used for persistence and exports) |
+| `core/video/flow_tracking.py` | `FlowTracker`: DIS optical-flow label warp, async guided CoralSCOP keyframes, async BioCLIP/YOLO classification (`backend/test_flow_tracking.py`) |
 | `core/video/video_export.py` | Annotated MP4, transect CSV, COCO video export |
-| `test_api.py`, `test_video_pipeline.py` | Existing tests; benchmark/Colab scripts also live in `backend/` |
+| `test_api.py`, `test_video_pipeline.py`, `test_flow_tracking.py`, `test_pipeline_stages.py` | Tests; `bench_app_flow.py` (engine benchmark) and `modal_flow.py` also live in `backend/` |
 
 **Frontend (`src/`, React 19 + Vite, dev port 1425)**
 
@@ -167,6 +166,6 @@ Search tip: `.ignore` hides `dist/`, `.agents/`, `demo_images/`, lock files. Do 
 
 **Data flow**
 - Image: `register` -> `/api/analysis/segment` (SAM) -> `/enrich` (BioCLIP + bleaching) -> `/overlay`; batch mode runs the same steps in `core/batch_processor.py`. Results live in `app/state.py` caches (in memory only).
-- Video: `/api/video/upload` -> `/process` -> `VideoProcessor` thread -> frames written to SQLite -> UI polls `/api/video/status` and frame deltas -> export endpoints.
+- Video: `/api/video/upload` -> `/process` -> `VideoProcessor` thread (`FlowTracker` per frame) -> frames written to SQLite -> UI polls `/api/video/status` and frame deltas -> export endpoints.
 
 **Naming**: every source filename in `backend/` is unique; grep by filename is safe.
