@@ -290,9 +290,12 @@ def export_annotated_video(
         cap.release()
         if ffmpeg_proc:
             try:
-                if ffmpeg_proc.stdin and not ffmpeg_proc.stdin.closed:
-                    ffmpeg_proc.stdin.close()
-                _, err_bytes = ffmpeg_proc.communicate(timeout=15)
+                err_bytes = None
+                if ffmpeg_proc.poll() is None:
+                    # communicate() closes stdin itself and waits for the muxer to finalize the file. Closing stdin
+                    # first makes communicate() raise "flush of closed file" and skips the wait, leaving an
+                    # unfinished MP4 (no moov atom) that fails verification.
+                    _, err_bytes = ffmpeg_proc.communicate(timeout=120)
                 if ffmpeg_proc.returncode != 0 and not ffmpeg_error_msg:
                     ffmpeg_error_msg = err_bytes.decode("utf-8", errors="replace")[-500:] if err_bytes else f"Exit code {ffmpeg_proc.returncode}"
             except Exception as e:

@@ -104,7 +104,7 @@ def run_job(processor, video: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "unique_corals": job.get("total_unique_corals"), "bleaching_pct": job.get("bleaching_prevalence_pct"),
         "export_status": job.get("export_status"),
         "exports": {k: bool(v) and os.path.isfile(v) for k, v in (job.get("export_paths") or {}).items()},
-        "export_errors": job.get("export_errors"), "stage_timings": job.get("timings") or {},
+        "export_errors": processor._jobs.get(job_id, {}).get("export_errors"), "stage_timings": job.get("timings") or {},
         "call_stats": summarize_samples(), "peak_rss_mb": peak_rss_mb(),
     }
 
