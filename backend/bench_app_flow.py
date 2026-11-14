@@ -96,19 +96,6 @@ def install_probes():
     SAM2BenthicTracker.propagate = propagate
 
 
-def override_tracker_kwargs(kwargs: Dict[str, Any]):
-    """A/B hook: force SAM2BenthicTracker constructor kwargs (e.g. offload_to_cpu=false)."""
-    if not kwargs:
-        return
-    orig_init = SAM2BenthicTracker.__init__
-
-    def init(self, *a, **k):
-        k.update(kwargs)
-        orig_init(self, *a, **k)
-
-    SAM2BenthicTracker.__init__ = init
-
-
 def pct(xs: List[float], p: float) -> float:
     if not xs:
         return 0.0
@@ -262,7 +249,6 @@ def main():
     ap.add_argument("--trim-sec", type=float, default=None)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--override", action="append", default=[], help="k=v param override (json value)")
-    ap.add_argument("--tracker-override", action="append", default=[], help="SAM2BenthicTracker kwarg k=v (json)")
     ap.add_argument("--out-json", default="bench_result.json")
     ap.add_argument("--out-md", default="bench_result.md")
     args = ap.parse_args()
@@ -290,7 +276,6 @@ def main():
         return loader
 
     install_probes()
-    override_tracker_kwargs({kv.split("=", 1)[0]: json.loads(kv.split("=", 1)[1]) for kv in args.tracker_override})
     cache = tempfile.mkdtemp(prefix="bench_cache_")
     processor = engine.VideoProcessor(
         sam_loader=wrap_loader("coralscop", load_coralscop_model),
@@ -316,7 +301,6 @@ def main():
         "tracker_device": getattr(tracker, "device", None),
         "tracker_dtype": str(getattr(tracker, "dtype", None)),
         "params": params,
-        "tracker_override": args.tracker_override,
         "cold": runs[0],
         "warm_median": median_run,
         "all_runs": runs,

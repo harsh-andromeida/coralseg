@@ -95,7 +95,6 @@ def run_segmentation(
     custom_prompt_points: Optional[np.ndarray] = None,
     discovery_mask: Optional[np.ndarray] = None,
     decode_scale: float = 1.0,
-    decoder_batch_size: Optional[int] = None,
 ) -> Tuple[List[Segment], Dict[str, Any]]:
     """
     Executes CoralSCOP SAM dense instance segmentation using pure ONNX Runtime & NumPy.
@@ -106,7 +105,6 @@ def run_segmentation(
     Speed options (defaults reproduce the previous behaviour exactly):
       decode_scale: decode masks at this fraction of the image size (e.g. 0.5). The decoder's final upsample and all
           mask post-processing shrink with the pixel count; returned masks/bbox/centroid are then in that smaller frame.
-      decoder_batch_size: prompt points per decoder call (default 16 for >=1080p, else 32).
     """
     from core.visualization import generate_distinct_colors
 
@@ -217,7 +215,7 @@ def run_segmentation(
     orig_im_size = np.array([float(out_h), float(out_w)], dtype=np.float32)
 
     # 3. Batch decode masks for grid points (adaptive batch size to prevent OOM in constrained environments like Colab)
-    batch_size = decoder_batch_size or (16 if full_pixels >= (1920 * 1080) else 32)
+    batch_size = 16 if full_pixels >= (1920 * 1080) else 32
     for i in range(0, len(scaled_pts), batch_size):
         batch_pts = scaled_pts[i:i + batch_size]
         batch_orig_pts = orig_pts[i:i + batch_size]

@@ -91,3 +91,6 @@ exports/benchmark_cache/
 
 # Build output (rebuilt by `npm run build` and the Colab launcher)
 dist/
+
+# Benchmark output videos
+docs/benchmarks/raw/*.mp4

@@ -1,299 +1,372 @@
 {
   "ok": true,
   "env": {
-    "nvidia_smi": "Tesla T4, 15360 MiB, 620.70.06",
+    "nvidia_smi": "Tesla T4, 15360 MiB, 610.57.04",
     "vcpus": 17
   },
   "report": {
-    "coralscop_load_sec": 2.986,
+    "frames": 202,
+    "video_sec": 8.08,
+    "resolution": "1920x1080",
+    "wall_sec": 10.265,
+    "fps": 19.68,
+    "realtime_factor": 0.787,
+    "stage_sec": {
+      "decode+proxy": 2.139,
+      "ego_motion_keyframe_select": 1.541,
+      "keyframe_segmentation (thread)": 8.261,
+      "dense_flow": 1.938,
+      "warp_labels": 0.347,
+      "render_overlay (thread)": 7.221,
+      "encode_write (thread)": 1.186,
+      "classify_bioclip (thread)": 0.612,
+      "classify_yolo_bleaching (thread)": 0.377,
+      "blocked_waiting_for_keyframe": 0.881,
+      "keyframe_reanchor": 0.476,
+      "classify_drain (wait at end)": 0.035
+    },
+    "stage_ms_per_call": {
+      "decode+proxy": 10.59,
+      "ego_motion_keyframe_select": 7.63,
+      "keyframe_segmentation (thread)": 917.85,
+      "dense_flow": 9.64,
+      "warp_labels": 1.73,
+      "render_overlay (thread)": 35.75,
+      "encode_write (thread)": 5.87,
+      "classify_bioclip (thread)": 68.0,
+      "classify_yolo_bleaching (thread)": 41.94,
+      "blocked_waiting_for_keyframe": 110.18,
+      "keyframe_reanchor": 59.46,
+      "classify_drain (wait at end)": 34.7
+    },
+    "keyframes_applied": 9,
+    "keyframes_skipped": 0,
+    "keyframe_lag_frames": [
+      0,
+      25,
+      26,
+      25,
+      25,
+      23,
+      22,
+      24,
+      1
+    ],
+    "colonies_seen": 33,
+    "mean_iou_warped_vs_fresh_detection": 0.699,
+    "classification": {
+      "classified": 33,
+      "genus_counts": {
+        "Galaxea": 3,
+        "Goniopora": 2,
+        "Millepora": 21,
+        "Porites": 7
+      },
+      "bleached": 14,
+      "colonies": {
+        "1": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 47.5,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 57.8,
+          "first_frame": 0
+        },
+        "2": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 95.7,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 62.4,
+          "first_frame": 0
+        },
+        "3": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 99.9,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 69.0,
+          "first_frame": 0
+        },
+        "4": {
+          "genus": "Porites",
+          "growth_form": "Columnar",
+          "taxon_conf": 56.8,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 63.8,
+          "first_frame": 0
+        },
+        "5": {
+          "genus": "Goniopora",
+          "growth_form": "Massive",
+          "taxon_conf": 49.5,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 71.5,
+          "first_frame": 0
+        },
+        "6": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 29.3,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 68.7,
+          "first_frame": 0
+        },
+        "7": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 97.7,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 58.2,
+          "first_frame": 0
+        },
+        "8": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 99.2,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 71.5,
+          "first_frame": 0
+        },
+        "9": {
+          "genus": "Galaxea",
+          "growth_form": "Massive",
+          "taxon_conf": 51.4,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 72.7,
+          "first_frame": 0
+        },
+        "10": {
+          "genus": "Porites",
+          "growth_form": "Columnar",
+          "taxon_conf": 57.0,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 71.7,
+          "first_frame": 50
+        },
+        "11": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 70.4,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 51.2,
+          "first_frame": 50
+        },
+        "12": {
+          "genus": "Galaxea",
+          "growth_form": "Massive",
+          "taxon_conf": 49.1,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 72.9,
+          "first_frame": 50
+        },
+        "13": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 92.6,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 72.6,
+          "first_frame": 76
+        },
+        "14": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 99.9,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 59.5,
+          "first_frame": 76
+        },
+        "15": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 51.6,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 70.3,
+          "first_frame": 76
+        },
+        "16": {
+          "genus": "Porites",
+          "growth_form": "Columnar",
+          "taxon_conf": 34.8,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 55.8,
+          "first_frame": 76
+        },
+        "17": {
+          "genus": "Goniopora",
+          "growth_form": "Massive",
+          "taxon_conf": 50.6,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 61.0,
+          "first_frame": 76
+        },
+        "18": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 93.3,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 50.7,
+          "first_frame": 76
+        },
+        "19": {
+          "genus": "Porites",
+          "growth_form": "Columnar",
+          "taxon_conf": 34.8,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 70.7,
+          "first_frame": 100
+        },
+        "20": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 93.2,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 68.6,
+          "first_frame": 100
+        },
+        "21": {
+          "genus": "Porites",
+          "growth_form": "Columnar",
+          "taxon_conf": 51.9,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 50.8,
+          "first_frame": 125
+        },
+        "22": {
+          "genus": "Galaxea",
+          "growth_form": "Massive",
+          "taxon_conf": 57.8,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 69.6,
+          "first_frame": 148
+        },
+        "23": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 98.8,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 53.8,
+          "first_frame": 172
+        },
+        "24": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 99.7,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 69.9,
+          "first_frame": 172
+        },
+        "25": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 45.7,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 71.4,
+          "first_frame": 199
+        },
+        "26": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 91.6,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 59.8,
+          "first_frame": 199
+        },
+        "27": {
+          "genus": "Porites",
+          "growth_form": "Columnar",
+          "taxon_conf": 43.4,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 60.3,
+          "first_frame": 199
+        },
+        "28": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 96.8,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 58.7,
+          "first_frame": 199
+        },
+        "29": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 94.1,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 58.1,
+          "first_frame": 199
+        },
+        "30": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 99.8,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 56.2,
+          "first_frame": 199
+        },
+        "31": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 68.0,
+          "condition": "Bleached",
+          "is_bleached": true,
+          "condition_conf": 54.7,
+          "first_frame": 201
+        },
+        "32": {
+          "genus": "Porites",
+          "growth_form": "Columnar",
+          "taxon_conf": 40.4,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 70.3,
+          "first_frame": 201
+        },
+        "33": {
+          "genus": "Millepora",
+          "growth_form": "Branching / Encrusting",
+          "taxon_conf": 99.0,
+          "condition": "Healthy",
+          "is_bleached": false,
+          "condition_conf": 68.9,
+          "first_frame": 201
+        }
+      }
+    },
+    "model_load_sec": 3.49,
     "ort_providers": [
       "CUDAExecutionProvider",
       "CPUExecutionProvider"
-    ],
-    "opts": {
-      "overlap_threshold": 0.7,
-      "min_stride": 10,
-      "max_stride": 25,
-      "points_per_side": 16,
-      "flow_preset": "medium"
-    },
-    "first_pass": {
-      "frames": 202,
-      "video_sec": 8.08,
-      "resolution": "1920x1080",
-      "flow_resolution": "853x480",
-      "wall_sec": 36.317,
-      "e2e_fps": 5.56,
-      "realtime_factor": 0.222,
-      "stage_sec": {
-        "decode+proxy": 1.338,
-        "ego_motion_keyframe_select": 1.003,
-        "keyframe_segmentation(CoralSCOP)": 13.85,
-        "keyframe_match_reanchor": 0.117,
-        "render_overlay": 13.487,
-        "encode_write(ffmpeg)": 0.804,
-        "dense_flow(DIS)": 4.26,
-        "warp_labels(remap)": 0.212,
-        "encode_flush": 0.041
-      },
-      "stage_ms_per_call": {
-        "decode+proxy": 6.63,
-        "ego_motion_keyframe_select": 4.96,
-        "keyframe_segmentation(CoralSCOP)": 1538.93,
-        "keyframe_match_reanchor": 13.01,
-        "render_overlay": 66.77,
-        "encode_write(ffmpeg)": 3.98,
-        "dense_flow(DIS)": 21.2,
-        "warp_labels(remap)": 1.06,
-        "encode_flush": 40.97
-      },
-      "stage_calls": {
-        "decode+proxy": 202,
-        "ego_motion_keyframe_select": 202,
-        "keyframe_segmentation(CoralSCOP)": 9,
-        "keyframe_match_reanchor": 9,
-        "render_overlay": 202,
-        "encode_write(ffmpeg)": 202,
-        "dense_flow(DIS)": 201,
-        "warp_labels(remap)": 201,
-        "encode_flush": 1
-      },
-      "stage_pct_wall": {
-        "decode+proxy": 3.7,
-        "ego_motion_keyframe_select": 2.8,
-        "keyframe_segmentation(CoralSCOP)": 38.1,
-        "keyframe_match_reanchor": 0.3,
-        "render_overlay": 37.1,
-        "encode_write(ffmpeg)": 2.2,
-        "dense_flow(DIS)": 11.7,
-        "warp_labels(remap)": 0.6,
-        "encode_flush": 0.1
-      },
-      "keyframes": [
-        {
-          "new": 9,
-          "matched": 0,
-          "dropped": 0,
-          "frame": 0,
-          "detections": 9
-        },
-        {
-          "new": 3,
-          "matched": 4,
-          "dropped": 0,
-          "frame": 25,
-          "detections": 7
-        },
-        {
-          "new": 7,
-          "matched": 6,
-          "dropped": 3,
-          "frame": 50,
-          "detections": 13
-        },
-        {
-          "new": 4,
-          "matched": 4,
-          "dropped": 2,
-          "frame": 75,
-          "detections": 8
-        },
-        {
-          "new": 1,
-          "matched": 4,
-          "dropped": 8,
-          "frame": 100,
-          "detections": 5
-        },
-        {
-          "new": 1,
-          "matched": 2,
-          "dropped": 4,
-          "frame": 125,
-          "detections": 3
-        },
-        {
-          "new": 4,
-          "matched": 4,
-          "dropped": 1,
-          "frame": 150,
-          "detections": 8
-        },
-        {
-          "new": 9,
-          "matched": 6,
-          "dropped": 1,
-          "frame": 175,
-          "detections": 15
-        },
-        {
-          "new": 5,
-          "matched": 6,
-          "dropped": 2,
-          "frame": 200,
-          "detections": 11
-        }
-      ],
-      "colonies_seen": 43,
-      "colonies_per_frame_max": 18,
-      "reanchor_iou_mean": 0.749,
-      "reanchor_iou_by_age_frames": {
-        "1-10": {
-          "n": 0,
-          "mean_iou": null
-        },
-        "11-20": {
-          "n": 0,
-          "mean_iou": null
-        },
-        "21-30": {
-          "n": 33,
-          "mean_iou": 0.746
-        },
-        ">30": {
-          "n": 3,
-          "mean_iou": 0.788
-        }
-      }
-    },
-    "final_pass": {
-      "frames": 202,
-      "video_sec": 8.08,
-      "resolution": "1920x1080",
-      "flow_resolution": "853x480",
-      "wall_sec": 35.436,
-      "e2e_fps": 5.7,
-      "realtime_factor": 0.228,
-      "stage_sec": {
-        "decode+proxy": 1.317,
-        "ego_motion_keyframe_select": 1.007,
-        "keyframe_segmentation(CoralSCOP)": 13.122,
-        "keyframe_match_reanchor": 0.118,
-        "render_overlay": 13.416,
-        "encode_write(ffmpeg)": 0.811,
-        "dense_flow(DIS)": 4.189,
-        "warp_labels(remap)": 0.21,
-        "encode_flush": 0.039
-      },
-      "stage_ms_per_call": {
-        "decode+proxy": 6.52,
-        "ego_motion_keyframe_select": 4.98,
-        "keyframe_segmentation(CoralSCOP)": 1458.05,
-        "keyframe_match_reanchor": 13.07,
-        "render_overlay": 66.42,
-        "encode_write(ffmpeg)": 4.02,
-        "dense_flow(DIS)": 20.84,
-        "warp_labels(remap)": 1.05,
-        "encode_flush": 39.27
-      },
-      "stage_calls": {
-        "decode+proxy": 202,
-        "ego_motion_keyframe_select": 202,
-        "keyframe_segmentation(CoralSCOP)": 9,
-        "keyframe_match_reanchor": 9,
-        "render_overlay": 202,
-        "encode_write(ffmpeg)": 202,
-        "dense_flow(DIS)": 201,
-        "warp_labels(remap)": 201,
-        "encode_flush": 1
-      },
-      "stage_pct_wall": {
-        "decode+proxy": 3.7,
-        "ego_motion_keyframe_select": 2.8,
-        "keyframe_segmentation(CoralSCOP)": 37.0,
-        "keyframe_match_reanchor": 0.3,
-        "render_overlay": 37.9,
-        "encode_write(ffmpeg)": 2.3,
-        "dense_flow(DIS)": 11.8,
-        "warp_labels(remap)": 0.6,
-        "encode_flush": 0.1
-      },
-      "keyframes": [
-        {
-          "new": 9,
-          "matched": 0,
-          "dropped": 0,
-          "frame": 0,
-          "detections": 9
-        },
-        {
-          "new": 3,
-          "matched": 4,
-          "dropped": 0,
-          "frame": 25,
-          "detections": 7
-        },
-        {
-          "new": 7,
-          "matched": 6,
-          "dropped": 3,
-          "frame": 50,
-          "detections": 13
-        },
-        {
-          "new": 4,
-          "matched": 4,
-          "dropped": 2,
-          "frame": 75,
-          "detections": 8
-        },
-        {
-          "new": 1,
-          "matched": 4,
-          "dropped": 8,
-          "frame": 100,
-          "detections": 5
-        },
-        {
-          "new": 1,
-          "matched": 2,
-          "dropped": 4,
-          "frame": 125,
-          "detections": 3
-        },
-        {
-          "new": 4,
-          "matched": 4,
-          "dropped": 1,
-          "frame": 150,
-          "detections": 8
-        },
-        {
-          "new": 9,
-          "matched": 6,
-          "dropped": 1,
-          "frame": 175,
-          "detections": 15
-        },
-        {
-          "new": 5,
-          "matched": 6,
-          "dropped": 2,
-          "frame": 200,
-          "detections": 11
-        }
-      ],
-      "colonies_seen": 43,
-      "colonies_per_frame_max": 18,
-      "reanchor_iou_mean": 0.749,
-      "reanchor_iou_by_age_frames": {
-        "1-10": {
-          "n": 0,
-          "mean_iou": null
-        },
-        "11-20": {
-          "n": 0,
-          "mean_iou": null
-        },
-        "21-30": {
-          "n": 33,
-          "mean_iou": 0.746
-        },
-        ">30": {
-          "n": 3,
-          "mean_iou": 0.788
-        }
-      }
-    }
+    ]
   }
 }

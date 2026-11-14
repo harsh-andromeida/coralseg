@@ -1,5 +1,5 @@
 """
-Run flow_prototype.py (dense optical-flow mask propagation) on a Modal GPU and fetch the masked video.
+Run flow_pipeline.py on a Modal GPU and fetch the masked video + timings.
 
 The GPU is chosen with BENCH_GPU at launch (decoration time), one `modal run` per GPU:
 
@@ -40,7 +40,7 @@ image = (
 
 
 @app.function(image=image, gpu=GPU, volumes={"/hf": hf_cache}, timeout=3000)
-def flow(script: str, extra: str = "") -> dict:
+def flow(extra: str = "") -> dict:
     def sh(cmd: str) -> str:
         return subprocess.run(cmd, shell=True, text=True, capture_output=True).stdout.strip()
 
@@ -49,7 +49,7 @@ def flow(script: str, extra: str = "") -> dict:
         "vcpus": os.cpu_count(),
     }
     cmd = (
-        f"cd /root/backend && python {script} "
+        "cd /root/backend && python flow_pipeline.py "
         "--video /root/demo_images/sample_reef_transect_25fps.mp4 "
         f"--out-video /tmp/flow_masked.mp4 --out-json /tmp/flow.json {extra} > /tmp/run.log 2>&1"
     )
@@ -67,11 +67,11 @@ def flow(script: str, extra: str = "") -> dict:
 
 
 @app.local_entrypoint()
-def main(extra: str = "", script: str = "flow_prototype.py", tag: str = ""):
+def main(extra: str = "", tag: str = "flow"):
     out_dir = ROOT / "docs" / "benchmarks" / "raw"
     out_dir.mkdir(parents=True, exist_ok=True)
-    res = flow.remote(script, extra)
-    tag = f"{tag or script.split('.')[0]}_{GPU.lower()}"
+    res = flow.remote(extra)
+    tag = f"{tag}_{GPU.lower()}"
     if not res["ok"]:
         print(f"[{GPU}] FAILED\n{res['log_tail']}")
         return
@@ -79,10 +79,5 @@ def main(extra: str = "", script: str = "flow_prototype.py", tag: str = ""):
     if vid:
         (out_dir / f"{tag}_masked.mp4").write_bytes(vid)
     (out_dir / f"{tag}.json").write_text(json.dumps(res, indent=2, default=str))
-    rep = res["report"]
-    if "final_pass" in rep:
-        r = rep["final_pass"]
-        print(f"[{GPU}/{tag}] wall {r['wall_sec']}s | e2e {r['e2e_fps']} FPS | colonies {r['colonies_seen']} | skipped kf {r.get('keyframes_skipped')} | iou {r['reanchor_iou_mean']}")
-    else:
-        for r in rep["results"]:
-            print(f"[{GPU}] {r['config']:48s} total {r['total_ms']:7.1f} ms  enc {r['encoder_ms']:6.1f}  dec {r['decoder_ms']:6.1f}  masks {r['masks_per_keyframe']} agree {r['mask_agreement_vs_baseline']}")
+    r = res["report"]
+    print(f"[{GPU}] wall {r['wall_sec']}s | {r['fps']} FPS | colonies {r['colonies_seen']} | skipped kf {r['keyframes_skipped']} | {r['ort_providers'][0]}")

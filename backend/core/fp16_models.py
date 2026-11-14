@@ -24,5 +24,3 @@ def build_fp16_session(fp32_path: str, providers: Any, sess_options: Optional[or
         onnx.save(model16, fp16_path)
     return ort.InferenceSession(fp16_path, sess_options=sess_options, providers=providers)
 
-
-build_fp16_encoder_session = build_fp16_session  # backwards-compatible name
