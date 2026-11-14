@@ -28,6 +28,8 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "libgl1", "libglib2.0-0")
     .pip_install_from_requirements(str(HERE / "requirements-gpu.txt"))
+    # onnxruntime-gpu's CUDA provider needs CUDA runtime libs (curand, cufft, ...) that torch's wheel does not pull in
+    .pip_install("onnxruntime-gpu[cuda,cudnn]")
     .env({"HF_HOME": "/hf", "PYTHONUNBUFFERED": "1"})
     .add_local_dir(
         str(HERE), "/root/backend", ignore=["uploads", "exports", "__pycache__", "*.pyc"]
@@ -47,6 +49,15 @@ def bench(runs: int = 3, extra: str = "") -> dict:
         "cpu": sh("lscpu | grep -E 'Model name' | head -1"),
         "vcpus": os.cpu_count(),
     }
+    env["ort_diag"] = sh(
+        "python - <<'PY' 2>&1\n"
+        "import torch, onnxruntime as ort\n"
+        "print('torch', torch.__version__, 'cuda', torch.version.cuda, torch.cuda.is_available())\n"
+        "print('ort', ort.__version__, ort.get_available_providers())\n"
+        "PY\n"
+        "pip list 2>/dev/null | grep -iE 'onnxruntime|nvidia-(cudnn|cublas|cuda-runtime)'\n"
+        "ldd $(python -c \"import onnxruntime,os;print(os.path.join(os.path.dirname(onnxruntime.__file__),'capi','libonnxruntime_providers_cuda.so'))\") 2>&1 | grep -E 'not found|cudnn|cublas' | head"
+    )
     cmd = (
         "cd /root/backend && python bench_app_flow.py "
         "--video /root/demo_images/sample_reef_transect_25fps.mp4 "
@@ -54,6 +65,7 @@ def bench(runs: int = 3, extra: str = "") -> dict:
     )
     rc = subprocess.run(cmd, shell=True).returncode
     log_tail = sh("tail -c 3000 /tmp/run.log")
+    env["model_log"] = sh("grep -iE '\\[Model\\]|provider|cuda' /tmp/run.log | cut -c1-400 | head -20")
     hf_cache.commit()
     if rc != 0 or not os.path.exists("/tmp/r.json"):
         return {"ok": False, "env": env, "log_tail": log_tail}

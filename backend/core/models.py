@@ -498,6 +498,18 @@ def download_coralscop_checkpoint(cache_dir: Optional[str] = None) -> str:
     return find_or_download_onnx_model(HF_SAM_ENCODER_FILE, cache_dir=cache_dir)
 
 
+
+def _report_cuda_load(label: str, actual_prov: str) -> None:
+    """ONNX Runtime silently falls back to CPU when libcudnn/libcublas/libcurand cannot be loaded,
+    so only claim GPU success when the CUDA provider is really the active one."""
+    if actual_prov == "CUDAExecutionProvider":
+        print(f"  ⚡ [Model] {label} successfully loaded on NVIDIA CUDA GPU ({actual_prov})!")
+    else:
+        print(
+            f"  ⚠️ [Model] {label} requested CUDA but is running on {actual_prov}; "
+            "ONNX Runtime could not load the CUDA provider (missing CUDA/cuDNN libraries?). Expect much slower inference."
+        )
+
 def load_coralscop_model(
     device: Optional[str] = None,
     progress_callback: Optional[Callable] = None,
@@ -528,7 +540,7 @@ def load_coralscop_model(
             encoder_sess = ort.InferenceSession(enc_path, sess_options=sess_options, providers=cuda_providers)
             decoder_sess = ort.InferenceSession(dec_path, sess_options=sess_options, providers=cuda_providers)
             actual_prov = encoder_sess.get_providers()[0]
-            print(f"  ⚡ [Model] CoralSCOP SAM sessions successfully loaded on NVIDIA CUDA GPU ({actual_prov})!")
+            _report_cuda_load("CoralSCOP SAM sessions", actual_prov)
             _SAM_BUNDLE = {
                 "encoder": encoder_sess,
                 "decoder": decoder_sess,
@@ -579,7 +591,7 @@ def load_bioclip_model(
             cuda_providers = [("CUDAExecutionProvider", get_cuda_provider_options())]
             session = ort.InferenceSession(model_path, sess_options=sess_options, providers=cuda_providers)
             actual_prov = session.get_providers()[0]
-            print(f"  ⚡ [Model] BioCLIP session successfully loaded on NVIDIA CUDA GPU ({actual_prov})!")
+            _report_cuda_load("BioCLIP session", actual_prov)
             _BIOCLIP_BUNDLE = {
                 "session": session,
                 "text_features": text_features,
@@ -628,7 +640,7 @@ def load_bleaching_model(
             cuda_providers = [("CUDAExecutionProvider", get_cuda_provider_options())]
             _BLEACHING_SESSION = ort.InferenceSession(pt_path, sess_options=sess_options, providers=cuda_providers)
             actual_prov = _BLEACHING_SESSION.get_providers()[0]
-            print(f"  ⚡ [Model] Bleaching YOLO11n session successfully loaded on NVIDIA CUDA GPU ({actual_prov})!")
+            _report_cuda_load("Bleaching YOLO11n session", actual_prov)
             return _BLEACHING_SESSION
         except Exception as cuda_init_err:
             print(f"  ⚠️ [Model] Bleaching YOLO CUDA provider error ({cuda_init_err}); falling back to CPUExecutionProvider...")
