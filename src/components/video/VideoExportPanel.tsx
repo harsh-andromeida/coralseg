@@ -85,7 +85,7 @@ export const VideoExportPanel: React.FC<VideoExportPanelProps> = ({
           <span>Export & Transect Data Inspector</span>
         </CardTitle>
         <CardDescription className="text-xs text-muted-foreground mt-0.5">
-          Export full transect telemetry time-series, annotated video with overlaid SAM 2 masks, and MOT/COCO-Video datasets
+          Export full transect telemetry time-series, annotated video with overlaid colony masks, and MOT/COCO-Video datasets
         </CardDescription>
       </CardHeader>
 

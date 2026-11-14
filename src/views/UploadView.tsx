@@ -54,6 +54,8 @@ import {
 } from "../services/api";
 import { MODEL_GROUPS, isGroupReady } from "../components/upload/modelGroups";
 import { HardwareAccelerationCard } from "../components/upload/HardwareAccelerationCard";
+import { SystemStatusSummary } from "../components/upload/SystemStatusSummary";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ImageUploadTab } from "../components/upload/ImageUploadTab";
 import { SampleLibraryTab } from "../components/upload/SampleLibraryTab";
 import { VideoTransectTab } from "../components/upload/VideoTransectTab";
@@ -85,6 +87,7 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [devicePref, setDevicePref] = useState<string>("auto");
   const [concurrency, setConcurrency] = useState<number>(1);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
 
   // Video State
   const [uploadedVideo, setUploadedVideo] = useState<UploadedVideoItem | null>(activeVideo || null);
@@ -92,9 +95,6 @@ export const UploadView: React.FC<UploadViewProps> = ({
   const [isPausingResumingVideo, setIsPausingResumingVideo] = useState<boolean>(false);
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
   const [isStartingVideoJob, setIsStartingVideoJob] = useState<boolean>(false);
-  const [modelProfile, setModelProfile] = useState<"sam2" | "efficienttam">("sam2");
-  const [modelSize, setModelSize] = useState<512 | 1024>(512);
-  const [workerCount, setWorkerCount] = useState<number>(1);
   const [videoError, setVideoError] = useState<string | null>(null);
 
   // Batch Background Processing State
@@ -573,24 +573,8 @@ export const UploadView: React.FC<UploadViewProps> = ({
     setIsStartingVideoJob(true);
     setVideoError(null);
 
-    const cfg = {
-      max_stride: 25,
-      min_stride: 10,
-      points_per_side: 16,
-      overlap_threshold: 0.70,
-    };
-
     try {
-      const procRes = await processVideo({
-        video_name: uploadedVideo.video_name,
-        overlap_threshold: cfg.overlap_threshold,
-        min_stride: cfg.min_stride,
-        max_stride: cfg.max_stride,
-        points_per_side: cfg.points_per_side,
-        model_profile: modelProfile,
-        model_size: modelSize,
-        worker_count: workerCount,
-      });
+      const procRes = await processVideo({ video_name: uploadedVideo.video_name });
 
       onSetActiveVideo?.(uploadedVideo);
       onSetActiveVideoJobId?.(procRes.job_id);
@@ -664,25 +648,15 @@ export const UploadView: React.FC<UploadViewProps> = ({
   return (
     <div className="portal-container">
       <div className="portal-card">
-        {/* Left Column: System Status & Hardware Acceleration */}
+        {/* Left Column: brand + one-line system status (full configuration lives in Settings) */}
         <div className="portal-brand-col">
           <BrandLogo />
-          <HardwareAccelerationCard
+          <SystemStatusSummary
             isBackendConnected={isBackendConnected}
             isCheckingBackend={isCheckingBackend}
             allDownloaded={allDownloaded}
-            modelsList={modelsList}
             deviceInfo={deviceInfo}
-            devicePref={devicePref}
-            concurrency={concurrency}
-            downloadProgress={downloadProgress}
-            isDeletingModel={isDeletingModel}
-            onManualRetry={handleManualRetry}
-            onOpenRemoteModal={() => setShowRemoteModal(true)}
-            onOpenDeleteModal={() => setShowDeleteModal(true)}
-            onDeleteModel={handleDeleteModel}
-            onDeviceChange={handleDeviceChange}
-            onConcurrencyChange={handleConcurrencyChange}
+            onOpenSettings={() => setShowSettings(true)}
           />
         </div>
 
@@ -1015,12 +989,6 @@ export const UploadView: React.FC<UploadViewProps> = ({
                   videoError={videoError}
                   isUploadingVideo={isUploadingVideo}
                   isStartingVideoJob={isStartingVideoJob}
-                  modelProfile={modelProfile}
-                  onSelectModelProfile={setModelProfile}
-                  modelSize={modelSize}
-                  onSelectModelSize={setModelSize}
-                  workerCount={workerCount}
-                  onSelectWorkerCount={setWorkerCount}
                   videoJobStatus={videoJobStatus}
                   isBackendConnected={isBackendConnected}
                   isPausingResumingVideo={isPausingResumingVideo}
@@ -1034,6 +1002,32 @@ export const UploadView: React.FC<UploadViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Settings: compute device, concurrency and model management */}
+      <Dialog open={showSettings} onOpenChange={setShowSettings}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+          </DialogHeader>
+          <HardwareAccelerationCard
+            isBackendConnected={isBackendConnected}
+            isCheckingBackend={isCheckingBackend}
+            allDownloaded={allDownloaded}
+            modelsList={modelsList}
+            deviceInfo={deviceInfo}
+            devicePref={devicePref}
+            concurrency={concurrency}
+            downloadProgress={downloadProgress}
+            isDeletingModel={isDeletingModel}
+            onManualRetry={handleManualRetry}
+            onOpenRemoteModal={() => setShowRemoteModal(true)}
+            onOpenDeleteModal={() => setShowDeleteModal(true)}
+            onDeleteModel={handleDeleteModel}
+            onDeviceChange={handleDeviceChange}
+            onConcurrencyChange={handleConcurrencyChange}
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Model Management Modal */}
       <ModelManagementModal

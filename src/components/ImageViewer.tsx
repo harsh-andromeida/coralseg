@@ -154,7 +154,7 @@ export const ImageViewer: React.FC<ImageViewerProps> = ({
                 ? "Classifying Coral Taxa (BioCLIP & YOLO11)..."
                 : analysisStage === "rendering"
                 ? "Synthesizing Spatial Masks & Telemetry..."
-                : "Segmenting Colonies (SAM ViT-B)..."}
+                : "Segmenting colonies..."}
             </div>
           </div>
         )}

@@ -33,7 +33,6 @@ import {
   runEnrichment,
   renderOverlay,
   getDevice,
-  setDevicePreference,
   getBatchStatus,
   pauseBatch,
   resumeBatch,
@@ -71,7 +70,6 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
 
   // Device Info
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
-  const [devicePref, setDevicePref] = useState<string>("auto");
 
   // Analysis State
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -150,16 +148,6 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
       .then(setDeviceInfo)
       .catch((e: unknown) => console.error("Device fetch failed", e));
   }, []);
-
-  const handleDeviceChange = async (val: string) => {
-    setDevicePref(val);
-    try {
-      const updated = await setDevicePreference(val);
-      setDeviceInfo(updated);
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   // Reset overlay & telemetry when switching images
   useEffect(() => {
@@ -540,9 +528,6 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({
           segments={segments}
           selectedMaskId={selectedMaskId}
           onSelectMaskId={setSelectedMaskId}
-          deviceInfo={deviceInfo}
-          devicePreference={devicePref}
-          onDevicePreferenceChange={handleDeviceChange}
         />
 
         {/* Main Studio Canvas & Results with Natural Rhythm */}

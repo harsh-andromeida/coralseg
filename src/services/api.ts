@@ -551,12 +551,7 @@ export async function processVideo(req: {
   min_stride?: number;
   max_stride?: number;
   points_per_side?: number;
-  iou_match_threshold?: number;
-  tracker_mode?: string;
-  model_profile?: "sam2" | "efficienttam";
-  model_size?: 512 | 1024;
-  worker_count?: number;
-  precision?: string | null;
+  classify?: boolean;
   export_mp4?: boolean;
 }): Promise<{
   status: string;

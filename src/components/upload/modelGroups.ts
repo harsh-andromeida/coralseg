@@ -13,7 +13,7 @@ export const MODEL_GROUPS: ModelGroupDef[] = [
   {
     id: "sam",
     name: "Segmentation Model",
-    fullName: "SAM ViT-B Segmentation Model",
+    fullName: "CoralSCOP Segmentation Model",
     task: "Dense Instance Segmentation",
     size: "~383 MB",
     filenames: ["sam_image_encoder.onnx", "sam_mask_decoder.onnx"],

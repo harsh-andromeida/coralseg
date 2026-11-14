@@ -290,10 +290,6 @@ export interface VideoJobStatus {
   stage_detail?: string;
   stage_progress_pct?: number;
   logs?: string[];
-  tracker_mode?: string;
-  model_profile?: "sam2" | "efficienttam";
-  model_size?: 512 | 1024;
-  worker_count?: number;
 }
 
 export interface VideoProcessParams {
@@ -302,13 +298,9 @@ export interface VideoProcessParams {
   min_stride?: number;
   max_stride?: number;
   points_per_side?: number;
-  iou_match_threshold?: number;
   pred_iou_thresh?: number;
   stability_thresh?: number;
-  model_profile?: "sam2" | "efficienttam";
-  model_size?: 512 | 1024;
-  worker_count?: number;
-  precision?: string | null;
+  classify?: boolean;
   export_mp4?: boolean;
 }
 

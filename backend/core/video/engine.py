@@ -89,7 +89,7 @@ class StoreFrameMapAdapter:
 class VideoProcessor:
     """
     Manages asynchronous underwater video processing pipelines with bounded concurrency,
-    strict SAM-only execution, snapshot configuration, durable SQLite storage, and isolated error reporting.
+    snapshot configuration, durable SQLite storage, and isolated error reporting.
     """
 
     def __init__(

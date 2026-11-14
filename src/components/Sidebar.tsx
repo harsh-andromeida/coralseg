@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Sliders,
   Palette,
-  Cpu,
   Minus,
   Plus,
   PanelLeftClose,
@@ -29,20 +28,22 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { InfoTooltip } from "./InfoTooltip";
-import { DeviceInfo, CoralSegment } from "../types";
+import { CoralSegment } from "../types";
 
 interface SidebarProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onSetCollapsed?: (val: boolean) => void;
-  pointsPerSide: number;
-  onPointsPerSideChange: (val: number) => void;
-  iouThresh: number;
-  onIouThreshChange: (val: number) => void;
-  stabilityThresh: number;
-  onStabilityThreshChange: (val: number) => void;
-  minAreaPx: number;
-  onMinAreaPxChange: (val: number) => void;
+  /** "video" shows display controls only: a video job's inference settings are fixed when it starts. */
+  mode?: "image" | "video";
+  pointsPerSide?: number;
+  onPointsPerSideChange?: (val: number) => void;
+  iouThresh?: number;
+  onIouThreshChange?: (val: number) => void;
+  stabilityThresh?: number;
+  onStabilityThreshChange?: (val: number) => void;
+  minAreaPx?: number;
+  onMinAreaPxChange?: (val: number) => void;
   layoutMode: string;
   onLayoutModeChange: (val: string) => void;
   colorMode: string;
@@ -58,10 +59,9 @@ interface SidebarProps {
   segments: CoralSegment[];
   selectedMaskId: number | null;
   onSelectMaskId: (id: number | null) => void;
-  deviceInfo: DeviceInfo | null;
-  devicePreference: string;
-  onDevicePreferenceChange: (val: string) => void;
 }
+
+const noop = () => {};
 
 const DEFAULT_SIDEBAR_WIDTH = 320;
 const MIN_SIDEBAR_WIDTH = 240;
@@ -87,14 +87,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
   onSetCollapsed,
-  pointsPerSide,
-  onPointsPerSideChange,
-  iouThresh,
-  onIouThreshChange,
-  stabilityThresh,
-  onStabilityThreshChange,
-  minAreaPx,
-  onMinAreaPxChange,
+  mode = "image",
+  pointsPerSide = 12,
+  onPointsPerSideChange = noop,
+  iouThresh = 0.45,
+  onIouThreshChange = noop,
+  stabilityThresh = 0.45,
+  onStabilityThreshChange = noop,
+  minAreaPx = 80,
+  onMinAreaPxChange = noop,
   layoutMode,
   onLayoutModeChange,
   colorMode,
@@ -110,10 +111,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   segments,
   selectedMaskId,
   onSelectMaskId,
-  deviceInfo,
-  devicePreference,
-  onDevicePreferenceChange,
 }) => {
+  const isVideo = mode === "video";
   const [width, setWidth] = useState<number>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -339,7 +338,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex h-14 items-center justify-between border-b border-border px-5 shrink-0 bg-card">
         <div className="flex items-center gap-2.5 font-semibold text-xs uppercase tracking-wider text-foreground">
           <Sliders className="h-4 w-4 text-primary" />
-          <span>Analysis Controls</span>
+          <span>{isVideo ? "Display Controls" : "Analysis Controls"}</span>
         </div>
         <Button
           variant="ghost"
@@ -356,10 +355,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex-1 overflow-y-auto px-5 py-3 text-xs">
         <Accordion
           type="multiple"
-          defaultValue={["params", "display", "hardware"]}
+          defaultValue={isVideo ? ["display"] : ["params", "display"]}
           className="w-full flex flex-col gap-1"
         >
-          {/* 1. Inference Parameters */}
+          {/* 1. Inference Parameters (images only) */}
+          {!isVideo && (
           <AccordionItem value="params" className="border-b border-border/80">
             <AccordionTrigger className="py-3.5 text-xs font-semibold text-foreground hover:text-primary transition-colors">
               <div className="flex items-center gap-2">
@@ -437,8 +437,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </AccordionContent>
           </AccordionItem>
 
+          )}
+
           {/* 2. Display Controls */}
-          <AccordionItem value="display" className="border-b border-border/80">
+          <AccordionItem value="display" className="border-b-0">
             <AccordionTrigger className="py-3.5 text-xs font-semibold text-foreground hover:text-primary transition-colors">
               <div className="flex items-center gap-2">
                 <Palette className="h-3.5 w-3.5 text-primary" />
@@ -578,36 +580,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         Coral #{s.id} [{s.genus}] ({s.condition})
                       </SelectItem>
                     ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-
-          {/* 3. Compute Engine */}
-          <AccordionItem value="hardware" className="border-b-0">
-            <AccordionTrigger className="py-3.5 text-xs font-semibold text-foreground hover:text-primary transition-colors">
-              <div className="flex items-center gap-2">
-                <Cpu className="h-3.5 w-3.5 text-primary" />
-                <span>Compute Engine</span>
-              </div>
-            </AccordionTrigger>
-            <AccordionContent className="flex flex-col gap-3 pt-1 pb-5">
-              <div className="flex flex-col gap-2">
-                <Label className="text-xs text-muted-foreground font-medium">Device Preference</Label>
-                <Select value={devicePreference} onValueChange={onDevicePreferenceChange}>
-                  <SelectTrigger className="h-9 text-xs bg-background">
-                    <SelectValue placeholder="Select device" />
-                  </SelectTrigger>
-                  <SelectContent position="popper" sideOffset={4}>
-                    <SelectItem value="auto">Auto (Recommended)</SelectItem>
-                    <SelectItem value="gpu" disabled={!deviceInfo?.gpu_available}>
-                      {deviceInfo?.gpu_available ? `GPU (${deviceInfo.gpu_name})` : "GPU [Unavailable]"}
-                    </SelectItem>
-                    <SelectItem value="multithread_cpu">
-                      Multi-Thread CPU ({deviceInfo?.cpu_count || 4} Threads)
-                    </SelectItem>
-                    <SelectItem value="cpu">Single-Thread CPU</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

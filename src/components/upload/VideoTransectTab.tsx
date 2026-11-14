@@ -12,12 +12,6 @@ export interface VideoTransectTabProps {
   videoError: string | null;
   isUploadingVideo: boolean;
   isStartingVideoJob: boolean;
-  modelProfile: "sam2" | "efficienttam";
-  onSelectModelProfile: (profile: "sam2" | "efficienttam") => void;
-  modelSize: 512 | 1024;
-  onSelectModelSize: (size: 512 | 1024) => void;
-  workerCount: number;
-  onSelectWorkerCount: (count: number) => void;
   videoJobStatus: VideoJobStatus | null;
   isBackendConnected: boolean;
   isPausingResumingVideo: boolean;
@@ -35,12 +29,6 @@ export const VideoTransectTab: React.FC<VideoTransectTabProps> = ({
   videoError,
   isUploadingVideo,
   isStartingVideoJob,
-  modelProfile,
-  onSelectModelProfile,
-  modelSize,
-  onSelectModelSize,
-  workerCount,
-  onSelectWorkerCount,
   videoJobStatus,
   isBackendConnected,
   isPausingResumingVideo,
@@ -153,148 +141,10 @@ export const VideoTransectTab: React.FC<VideoTransectTabProps> = ({
               </Button>
             </div>
 
-            {/* Survey Cadence Status */}
-            <div className="space-y-1.5 pt-1 border-t border-cyan-100">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-700">
-                  Survey Cadence Preset
-                </span>
-                <span className="text-[10px] text-cyan-700 font-medium bg-cyan-100/70 px-1.5 py-0.5 rounded">
-                  Max Accuracy
-                </span>
-              </div>
-              <div className="p-2 rounded-lg border border-cyan-200 bg-cyan-50/50 text-left">
-                <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-600" />
-                  High Accuracy Cadence
-                </div>
-                <div className="text-[10px] text-slate-500 mt-0.5">
-                  Dense 10-25 frame keyframe census with 70% benthic overlap gate
-                </div>
-              </div>
-            </div>
-
-            {/* SAM Video Model Profile */}
-            <div className="space-y-1.5 pt-1 border-t border-cyan-100">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-700">
-                  SAM Video Model Profile
-                </span>
-                <span className="text-[10px] text-cyan-700 font-mono">
-                  {modelProfile === "sam2" ? "SAM 2.1 Tiny (Hiera)" : "EfficientTAM Tiny (Fast)"}
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => onSelectModelProfile("sam2")}
-                  className={`p-2 rounded-lg border text-left transition-all ${
-                    modelProfile === "sam2"
-                      ? "bg-cyan-50/80 border-cyan-500 ring-1 ring-cyan-500/30"
-                      : "bg-white/60 border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-500" />
-                      SAM 2.1 Tiny
-                    </span>
-                    <span className="text-[9px] bg-cyan-100 text-cyan-800 font-bold px-1.5 py-0.5 rounded">
-                      Reference
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">
-                    Spatio-temporal memory attention (Golden reference)
-                  </div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => onSelectModelProfile("efficienttam")}
-                  className={`p-2 rounded-lg border text-left transition-all ${
-                    modelProfile === "efficienttam"
-                      ? "bg-emerald-50/80 border-emerald-500 ring-1 ring-emerald-500/30"
-                      : "bg-white/60 border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  <div className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      EfficientTAM Tiny
-                    </span>
-                    <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
-                      Experimental
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-slate-500 mt-0.5">
-                    Ultra-fast tracking profile for high throughput
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            {/* Model Input Size & Worker Concurrency */}
-            <div className="grid grid-cols-2 gap-3 pt-1 border-t border-cyan-100">
-              <div className="space-y-1">
-                <span className="text-[11px] font-semibold text-slate-700">
-                  Input Resolution
-                </span>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onSelectModelSize(512)}
-                    className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
-                      modelSize === 512
-                        ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
-                        : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
-                    }`}
-                  >
-                    512 px (Fast)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSelectModelSize(1024)}
-                    className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
-                      modelSize === 1024
-                        ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
-                        : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
-                    }`}
-                  >
-                    1024 px (Full)
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <span className="text-[11px] font-semibold text-slate-700">
-                  Inference Workers
-                </span>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onSelectWorkerCount(1)}
-                    className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
-                      workerCount === 1
-                        ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
-                        : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
-                    }`}
-                  >
-                    1 (Apple/T4)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onSelectWorkerCount(2)}
-                    className={`px-2 py-1.5 rounded-lg border text-center text-xs font-medium transition-all ${
-                      workerCount === 2
-                        ? "bg-cyan-50 border-cyan-500 text-cyan-900 font-bold"
-                        : "bg-white/60 border-slate-200 text-slate-600 hover:border-slate-300"
-                    }`}
-                  >
-                    2 (Parallel)
-                  </button>
-                </div>
-              </div>
-            </div>
+            <p className="pt-1 border-t border-cyan-100 text-[11px] text-slate-500">
+              Colonies are segmented on keyframes and carried between them by camera-motion tracking, then
+              classified once each for genus and bleaching.
+            </p>
           </div>
         )}
       </div>

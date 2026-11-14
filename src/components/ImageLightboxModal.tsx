@@ -548,7 +548,7 @@ export const ImageLightboxModal: React.FC<ImageLightboxModalProps> = ({
                 </div>
 
                 <div className="coral-hud-row">
-                  <span className="hud-label">SAM IoU</span>
+                  <span className="hud-label">Mask IoU</span>
                   <span className="hud-val">{hoveredSegment.predicted_iou}</span>
                 </div>
               </div>

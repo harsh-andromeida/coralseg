@@ -32,7 +32,6 @@ import {
   getVideoFrameAnnotations,
   getVideoFramesDelta,
   getDevice,
-  setDevicePreference,
   pauseVideoJob,
   resumeVideoJob,
   cancelVideoJob,
@@ -66,7 +65,6 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     const raw = typeof np === "string" ? np : np?.recommended_sam_precision;
     return typeof raw === "string" && raw ? raw.toUpperCase() : null;
   }, [deviceInfo]);
-  const [devicePref, setDevicePref] = useState<string>("auto");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [showLogs, setShowLogs] = useState<boolean>(true);
   const [isTogglingPause, setIsTogglingPause] = useState<boolean>(false);
@@ -84,12 +82,6 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
   const [drawLabels, setDrawLabels] = useState<boolean>(true);
   const [drawBoxes, setDrawBoxes] = useState<boolean>(false);
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
-
-  // Threshold & Model Parameters (passed to Sidebar for complete consistency)
-  const [pointsPerSide, setPointsPerSide] = useState<number>(12);
-  const [iouThresh, setIouThresh] = useState<number>(0.45);
-  const [stabilityThresh, setStabilityThresh] = useState<number>(0.45);
-  const [minAreaPx, setMinAreaPx] = useState<number>(80);
 
   // Active frame tracks
   const [currentTracks, setCurrentTracks] = useState<VideoTrackItem[]>([]);
@@ -118,15 +110,6 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
     getDevice().then(setDeviceInfo).catch(() => {});
   }, []);
 
-  const handleDeviceChange = async (newPref: string) => {
-    setDevicePref(newPref);
-    try {
-      const updated = await setDevicePreference(newPref);
-      setDeviceInfo(updated);
-    } catch {
-      // quiet fail
-    }
-  };
 
   const isFollowingLiveRef = useRef(isFollowingLive);
   isFollowingLiveRef.current = isFollowingLive;
@@ -464,14 +447,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
           isCollapsed={isSidebarCollapsed}
           onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
           onSetCollapsed={setIsSidebarCollapsed}
-          pointsPerSide={pointsPerSide}
-          onPointsPerSideChange={setPointsPerSide}
-          iouThresh={iouThresh}
-          onIouThreshChange={setIouThresh}
-          stabilityThresh={stabilityThresh}
-          onStabilityThreshChange={setStabilityThresh}
-          minAreaPx={minAreaPx}
-          onMinAreaPxChange={setMinAreaPx}
+          mode="video"
           layoutMode={layoutMode}
           onLayoutModeChange={setLayoutMode}
           colorMode={colorMode}
@@ -487,9 +463,6 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
           segments={segments}
           selectedMaskId={selectedTrackId}
           onSelectMaskId={setSelectedTrackId}
-          deviceInfo={deviceInfo}
-          devicePreference={devicePref}
-          onDevicePreferenceChange={handleDeviceChange}
         />
 
         {/* Main Studio Canvas & Results with Natural Rhythm */}
@@ -558,16 +531,10 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                       </span>
 
                       {jobStatus && ((jobStatus.analysis_fps ?? jobStatus.fps_realtime) > 0) && (
-                        <span className="text-[10px] font-mono font-bold text-cyan-800 bg-cyan-100/70 border border-cyan-200/60 px-1.5 py-0.5 rounded" title="Total pipeline source throughput">
-                          {(jobStatus.analysis_fps ?? jobStatus.fps_realtime).toFixed(1)} Source FPS
+                        <span className="text-[10px] font-mono font-bold text-cyan-800 bg-cyan-100/70 border border-cyan-200/60 px-1.5 py-0.5 rounded" title="Frames processed per second">
+                          {(jobStatus.analysis_fps ?? jobStatus.fps_realtime).toFixed(1)} FPS
                         </span>
                       )}
-
-                      {jobStatus?.tracker_fps && jobStatus.tracker_fps > 0 ? (
-                        <span className="text-[10px] font-mono font-bold text-teal-800 bg-teal-100/70 border border-teal-200/60 px-1.5 py-0.5 rounded" title="Pure SAM tracker inference throughput">
-                          {jobStatus.tracker_fps.toFixed(1)} Tracker FPS
-                        </span>
-                      ) : null}
                     </div>
                   </div>
 
@@ -741,7 +708,7 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
                             <span>↓</span>
                           </button>
                         ) : (
-                          <span>Engine: {jobStatus?.tracker_mode === "efficienttam" ? "EfficientTAM (experimental)" : "SAM 2.1 Video Predictor"}</span>
+                          <span>Engine: optical-flow tracker + CoralSCOP</span>
                         )}
                       </div>
                     </div>

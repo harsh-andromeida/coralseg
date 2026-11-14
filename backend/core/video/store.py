@@ -217,7 +217,7 @@ class VideoJobStore:
                 0, 0, 0.0,
                 0, json.dumps([]), None, 0,
                 0, now, json.dumps({}), "pending",
-                current_stage, "SAM 2.1 Video Predictor", current_action,
+                current_stage, "Optical-flow tracker + CoralSCOP", current_action,
                 f"Video: {metadata.get('total_frames', 0)} frames @ {metadata.get('width', 0)}x{metadata.get('height', 0)}",
                 0.0, json.dumps(logs or []), tracker_mode,
             ))
@@ -862,7 +862,7 @@ class VideoJobStore:
             "export_paths": json.loads(r["export_paths_json"]) if r["export_paths_json"] else {},
             "export_status": r["export_status"] or "pending",
             "current_stage": r["current_stage"] or "Processing",
-            "current_model": r["current_model"] or "SAM 2.1 Video Predictor",
+            "current_model": r["current_model"] or "Optical-flow tracker + CoralSCOP",
             "current_action": r["current_action"] or "",
             "stage_detail": r["stage_detail"] or "",
             "stage_progress_pct": float(r["stage_progress_pct"] or 0.0),
