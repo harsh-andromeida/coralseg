@@ -1,0 +1,350 @@
+{
+  "ok": true,
+  "env": {
+    "nvidia_smi": "Tesla T4, 15360 MiB, 620.70.06",
+    "vcpus": 17
+  },
+  "report": {
+    "coralscop_load_sec": 2.108,
+    "ort_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "opts": {
+      "overlap_threshold": 0.7,
+      "min_stride": 10,
+      "max_stride": 25,
+      "points_per_side": 16,
+      "flow_preset": "fast",
+      "flow_scale": 0.5,
+      "guided_prompts": true,
+      "render_thread": true,
+      "async_keyframes": false,
+      "decode_scale": 0.5,
+      "decoder_batch": 128,
+      "fp16_encoder": true
+    },
+    "first_pass": {
+      "frames": 202,
+      "video_sec": 8.08,
+      "resolution": "1920x1080",
+      "flow_resolution": "853x480",
+      "wall_sec": 15.254,
+      "e2e_fps": 13.24,
+      "realtime_factor": 0.53,
+      "stage_sec": {
+        "decode+proxy": 2.639,
+        "ego_motion_keyframe_select": 1.178,
+        "keyframe_segmentation(CoralSCOP)": 7.044,
+        "keyframe_match_reanchor": 0.109,
+        "dense_flow(DIS)": 2.528,
+        "warp_labels(remap)": 0.262,
+        "render_overlay": 4.166,
+        "encode_write(ffmpeg)": 0.89,
+        "render_drain(wait)": 0.026,
+        "encode_flush": 0.049
+      },
+      "stage_ms_per_call": {
+        "decode+proxy": 13.06,
+        "ego_motion_keyframe_select": 5.83,
+        "keyframe_segmentation(CoralSCOP)": 782.65,
+        "keyframe_match_reanchor": 12.14,
+        "dense_flow(DIS)": 12.57,
+        "warp_labels(remap)": 1.3,
+        "render_overlay": 20.62,
+        "encode_write(ffmpeg)": 4.41,
+        "render_drain(wait)": 26.31,
+        "encode_flush": 48.53
+      },
+      "stage_calls": {
+        "decode+proxy": 202,
+        "ego_motion_keyframe_select": 202,
+        "keyframe_segmentation(CoralSCOP)": 9,
+        "keyframe_match_reanchor": 9,
+        "dense_flow(DIS)": 201,
+        "warp_labels(remap)": 201,
+        "render_overlay": 202,
+        "encode_write(ffmpeg)": 202,
+        "render_drain(wait)": 1,
+        "encode_flush": 1
+      },
+      "stage_pct_wall": {
+        "decode+proxy": 17.3,
+        "ego_motion_keyframe_select": 7.7,
+        "keyframe_segmentation(CoralSCOP)": 46.2,
+        "keyframe_match_reanchor": 0.7,
+        "dense_flow(DIS)": 16.6,
+        "warp_labels(remap)": 1.7,
+        "render_overlay": 27.3,
+        "encode_write(ffmpeg)": 5.8,
+        "render_drain(wait)": 0.2,
+        "encode_flush": 0.3
+      },
+      "keyframes": [
+        {
+          "new": 9,
+          "matched": 0,
+          "dropped": 0,
+          "kept_stale": 0,
+          "frame": 0,
+          "detections": 9,
+          "lag": 0
+        },
+        {
+          "new": 3,
+          "matched": 3,
+          "dropped": 0,
+          "kept_stale": 6,
+          "frame": 25,
+          "detections": 6,
+          "lag": 0
+        },
+        {
+          "new": 7,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 4,
+          "frame": 50,
+          "detections": 14,
+          "lag": 0
+        },
+        {
+          "new": 2,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 11,
+          "frame": 75,
+          "detections": 9,
+          "lag": 0
+        },
+        {
+          "new": 1,
+          "matched": 4,
+          "dropped": 3,
+          "kept_stale": 13,
+          "frame": 100,
+          "detections": 5,
+          "lag": 0
+        },
+        {
+          "new": 1,
+          "matched": 2,
+          "dropped": 1,
+          "kept_stale": 15,
+          "frame": 125,
+          "detections": 3,
+          "lag": 0
+        },
+        {
+          "new": 2,
+          "matched": 5,
+          "dropped": 5,
+          "kept_stale": 6,
+          "frame": 150,
+          "detections": 7,
+          "lag": 0
+        },
+        {
+          "new": 8,
+          "matched": 8,
+          "dropped": 2,
+          "kept_stale": 3,
+          "frame": 175,
+          "detections": 16,
+          "lag": 0
+        },
+        {
+          "new": 3,
+          "matched": 10,
+          "dropped": 1,
+          "kept_stale": 7,
+          "frame": 200,
+          "detections": 13,
+          "lag": 0
+        }
+      ],
+      "colonies_seen": 36,
+      "colonies_per_frame_max": 20,
+      "reanchor_iou_mean": 0.708,
+      "reanchor_iou_by_age_frames": {
+        "1-10": {
+          "n": 0,
+          "mean_iou": null
+        },
+        "11-20": {
+          "n": 0,
+          "mean_iou": null
+        },
+        "21-30": {
+          "n": 39,
+          "mean_iou": 0.714
+        },
+        ">30": {
+          "n": 7,
+          "mean_iou": 0.673
+        }
+      }
+    },
+    "final_pass": {
+      "frames": 202,
+      "video_sec": 8.08,
+      "resolution": "1920x1080",
+      "flow_resolution": "853x480",
+      "wall_sec": 14.609,
+      "e2e_fps": 13.83,
+      "realtime_factor": 0.553,
+      "stage_sec": {
+        "decode+proxy": 2.612,
+        "ego_motion_keyframe_select": 1.167,
+        "keyframe_segmentation(CoralSCOP)": 6.371,
+        "keyframe_match_reanchor": 0.111,
+        "dense_flow(DIS)": 2.557,
+        "warp_labels(remap)": 0.279,
+        "render_overlay": 4.255,
+        "encode_write(ffmpeg)": 0.907,
+        "render_drain(wait)": 0.024,
+        "encode_flush": 0.044
+      },
+      "stage_ms_per_call": {
+        "decode+proxy": 12.93,
+        "ego_motion_keyframe_select": 5.78,
+        "keyframe_segmentation(CoralSCOP)": 707.92,
+        "keyframe_match_reanchor": 12.31,
+        "dense_flow(DIS)": 12.72,
+        "warp_labels(remap)": 1.39,
+        "render_overlay": 21.07,
+        "encode_write(ffmpeg)": 4.49,
+        "render_drain(wait)": 24.26,
+        "encode_flush": 44.12
+      },
+      "stage_calls": {
+        "decode+proxy": 202,
+        "ego_motion_keyframe_select": 202,
+        "keyframe_segmentation(CoralSCOP)": 9,
+        "keyframe_match_reanchor": 9,
+        "dense_flow(DIS)": 201,
+        "warp_labels(remap)": 201,
+        "render_overlay": 202,
+        "encode_write(ffmpeg)": 202,
+        "render_drain(wait)": 1,
+        "encode_flush": 1
+      },
+      "stage_pct_wall": {
+        "decode+proxy": 17.9,
+        "ego_motion_keyframe_select": 8.0,
+        "keyframe_segmentation(CoralSCOP)": 43.6,
+        "keyframe_match_reanchor": 0.8,
+        "dense_flow(DIS)": 17.5,
+        "warp_labels(remap)": 1.9,
+        "render_overlay": 29.1,
+        "encode_write(ffmpeg)": 6.2,
+        "render_drain(wait)": 0.2,
+        "encode_flush": 0.3
+      },
+      "keyframes": [
+        {
+          "new": 9,
+          "matched": 0,
+          "dropped": 0,
+          "kept_stale": 0,
+          "frame": 0,
+          "detections": 9,
+          "lag": 0
+        },
+        {
+          "new": 3,
+          "matched": 3,
+          "dropped": 0,
+          "kept_stale": 6,
+          "frame": 25,
+          "detections": 6,
+          "lag": 0
+        },
+        {
+          "new": 7,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 4,
+          "frame": 50,
+          "detections": 14,
+          "lag": 0
+        },
+        {
+          "new": 2,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 11,
+          "frame": 75,
+          "detections": 9,
+          "lag": 0
+        },
+        {
+          "new": 1,
+          "matched": 4,
+          "dropped": 3,
+          "kept_stale": 13,
+          "frame": 100,
+          "detections": 5,
+          "lag": 0
+        },
+        {
+          "new": 1,
+          "matched": 2,
+          "dropped": 1,
+          "kept_stale": 15,
+          "frame": 125,
+          "detections": 3,
+          "lag": 0
+        },
+        {
+          "new": 2,
+          "matched": 5,
+          "dropped": 5,
+          "kept_stale": 6,
+          "frame": 150,
+          "detections": 7,
+          "lag": 0
+        },
+        {
+          "new": 8,
+          "matched": 8,
+          "dropped": 2,
+          "kept_stale": 3,
+          "frame": 175,
+          "detections": 16,
+          "lag": 0
+        },
+        {
+          "new": 3,
+          "matched": 10,
+          "dropped": 1,
+          "kept_stale": 7,
+          "frame": 200,
+          "detections": 13,
+          "lag": 0
+        }
+      ],
+      "colonies_seen": 36,
+      "colonies_per_frame_max": 20,
+      "reanchor_iou_mean": 0.708,
+      "reanchor_iou_by_age_frames": {
+        "1-10": {
+          "n": 0,
+          "mean_iou": null
+        },
+        "11-20": {
+          "n": 0,
+          "mean_iou": null
+        },
+        "21-30": {
+          "n": 39,
+          "mean_iou": 0.714
+        },
+        ">30": {
+          "n": 7,
+          "mean_iou": 0.673
+        }
+      }
+    }
+  }
+}

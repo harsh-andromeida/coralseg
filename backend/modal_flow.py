@@ -31,6 +31,7 @@ image = (
     # onnxruntime-gpu's CUDA provider needs CUDA runtime libs (curand, cufft, ...) that torch's wheel does not pull in
     .pip_install("onnxruntime-gpu[cuda,cudnn]")
     .env({"HF_HOME": "/hf", "PYTHONUNBUFFERED": "1"})
+    .pip_install("onnx")
     .add_local_dir(
         str(HERE), "/root/backend", ignore=["uploads", "exports", "__pycache__", "*.pyc"]
     )
@@ -39,7 +40,7 @@ image = (
 
 
 @app.function(image=image, gpu=GPU, volumes={"/hf": hf_cache}, timeout=3000)
-def flow(extra: str = "") -> dict:
+def flow(script: str, extra: str = "") -> dict:
     def sh(cmd: str) -> str:
         return subprocess.run(cmd, shell=True, text=True, capture_output=True).stdout.strip()
 
@@ -48,7 +49,7 @@ def flow(extra: str = "") -> dict:
         "vcpus": os.cpu_count(),
     }
     cmd = (
-        "cd /root/backend && python flow_prototype.py "
+        f"cd /root/backend && python {script} "
         "--video /root/demo_images/sample_reef_transect_25fps.mp4 "
         f"--out-video /tmp/flow_masked.mp4 --out-json /tmp/flow.json {extra} > /tmp/run.log 2>&1"
     )
@@ -61,20 +62,27 @@ def flow(extra: str = "") -> dict:
         "ok": True,
         "env": env,
         "report": json.load(open("/tmp/flow.json")),
-        "video": open("/tmp/flow_masked.mp4", "rb").read(),
+        "video": open("/tmp/flow_masked.mp4", "rb").read() if os.path.exists("/tmp/flow_masked.mp4") else None,
     }
 
 
 @app.local_entrypoint()
-def main(extra: str = ""):
+def main(extra: str = "", script: str = "flow_prototype.py", tag: str = ""):
     out_dir = ROOT / "docs" / "benchmarks" / "raw"
     out_dir.mkdir(parents=True, exist_ok=True)
-    res = flow.remote(extra)
-    tag = f"flow_{GPU.lower()}"
+    res = flow.remote(script, extra)
+    tag = f"{tag or script.split('.')[0]}_{GPU.lower()}"
     if not res["ok"]:
         print(f"[{GPU}] FAILED\n{res['log_tail']}")
         return
-    (out_dir / f"{tag}_masked.mp4").write_bytes(res.pop("video"))
+    vid = res.pop("video")
+    if vid:
+        (out_dir / f"{tag}_masked.mp4").write_bytes(vid)
     (out_dir / f"{tag}.json").write_text(json.dumps(res, indent=2, default=str))
-    r = res["report"]["final_pass"]
-    print(f"[{GPU}] wall {r['wall_sec']}s | e2e {r['e2e_fps']} FPS | providers {res['report']['ort_providers']}")
+    rep = res["report"]
+    if "final_pass" in rep:
+        r = rep["final_pass"]
+        print(f"[{GPU}/{tag}] wall {r['wall_sec']}s | e2e {r['e2e_fps']} FPS | colonies {r['colonies_seen']} | iou {r['reanchor_iou_mean']}")
+    else:
+        for r in rep["results"]:
+            print(f"[{GPU}] {r['config']:48s} total {r['total_ms']:7.1f} ms  enc {r['encoder_ms']:6.1f}  dec {r['decoder_ms']:6.1f}  masks {r['masks_per_keyframe']} agree {r['mask_agreement_vs_baseline']}")

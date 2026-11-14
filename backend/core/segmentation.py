@@ -94,12 +94,19 @@ def run_segmentation(
     image_name: Optional[str] = None,
     custom_prompt_points: Optional[np.ndarray] = None,
     discovery_mask: Optional[np.ndarray] = None,
+    decode_scale: float = 1.0,
+    decoder_batch_size: Optional[int] = None,
 ) -> Tuple[List[Segment], Dict[str, Any]]:
     """
     Executes CoralSCOP SAM dense instance segmentation using pure ONNX Runtime & NumPy.
     Implements standard ResizeLongestSide aspect-ratio preservation and prompt scaling.
     Applies CoralSCOP category classification head to reject background, fish, and open water.
     Shares image embeddings with SAM_SESSION for instant manual annotation response.
+
+    Speed options (defaults reproduce the previous behaviour exactly):
+      decode_scale: decode masks at this fraction of the image size (e.g. 0.5). The decoder's final upsample and all
+          mask post-processing shrink with the pixel count; returned masks/bbox/centroid are then in that smaller frame.
+      decoder_batch_size: prompt points per decoder call (default 16 for >=1080p, else 32).
     """
     from core.visualization import generate_distinct_colors
 
@@ -114,6 +121,12 @@ def run_segmentation(
 
     orig_h, orig_w = image_np.shape[:2]
     total_pixels = orig_h * orig_w
+    full_pixels = total_pixels
+    out_h = max(1, int(round(orig_h * decode_scale)))
+    out_w = max(1, int(round(orig_w * decode_scale)))
+    if decode_scale != 1.0:
+        total_pixels = out_h * out_w
+        min_mask_region_area = max(1, int(min_mask_region_area * decode_scale * decode_scale))
 
     sess_enc = model["encoder"]
     dec_sess = model["decoder"]
@@ -201,10 +214,10 @@ def run_segmentation(
 
     mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
     has_mask_input = np.array([0.0], dtype=np.float32)
-    orig_im_size = np.array([float(orig_h), float(orig_w)], dtype=np.float32)
+    orig_im_size = np.array([float(out_h), float(out_w)], dtype=np.float32)
 
     # 3. Batch decode masks for grid points (adaptive batch size to prevent OOM in constrained environments like Colab)
-    batch_size = 16 if total_pixels >= (1920 * 1080) else 32
+    batch_size = decoder_batch_size or (16 if full_pixels >= (1920 * 1080) else 32)
     for i in range(0, len(scaled_pts), batch_size):
         batch_pts = scaled_pts[i:i + batch_size]
         batch_orig_pts = orig_pts[i:i + batch_size]
@@ -311,7 +324,7 @@ def run_segmentation(
 
     masks_info = []
     total_coral_pixels = 0
-    union_mask = np.zeros((orig_h, orig_w), dtype=bool)
+    union_mask = np.zeros((out_h, out_w), dtype=bool)
 
     distinct_colors = generate_distinct_colors(len(keep_indices))
 

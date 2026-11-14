@@ -1,0 +1,151 @@
+{
+  "ok": true,
+  "env": {
+    "nvidia_smi": "NVIDIA L40S, 46068 MiB, 610.57.04",
+    "vcpus": 17
+  },
+  "report": {
+    "providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "results": [
+      {
+        "config": "baseline (fp32 enc+dec, 32 pts/batch, full-res masks)",
+        "total_ms": 415.8,
+        "encoder_ms": 72.1,
+        "decoder_ms": 266.6,
+        "other_ms": 77.1,
+        "masks_per_keyframe": [
+          9,
+          5,
+          10
+        ],
+        "mask_agreement_vs_baseline": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "config": "fp16 encoder only",
+        "total_ms": 383.0,
+        "encoder_ms": 44.9,
+        "decoder_ms": 266.5,
+        "other_ms": 71.6,
+        "masks_per_keyframe": [
+          9,
+          5,
+          10
+        ],
+        "mask_agreement_vs_baseline": [
+          0.998,
+          0.996,
+          1.0
+        ]
+      },
+      {
+        "config": "fp16 encoder + decoder",
+        "total_ms": 266.9,
+        "encoder_ms": 45.1,
+        "decoder_ms": 148.9,
+        "other_ms": 72.9,
+        "masks_per_keyframe": [
+          9,
+          5,
+          10
+        ],
+        "mask_agreement_vs_baseline": [
+          0.997,
+          0.992,
+          0.985
+        ]
+      },
+      {
+        "config": "fp16 enc+dec, batch 128, 0.5x masks",
+        "total_ms": 232.8,
+        "encoder_ms": 45.0,
+        "decoder_ms": 137.5,
+        "other_ms": 50.3,
+        "masks_per_keyframe": [
+          9,
+          5,
+          10
+        ],
+        "mask_agreement_vs_baseline": [
+          0.947,
+          0.946,
+          0.948
+        ]
+      },
+      {
+        "config": "  ...same, 12x12 grid (144 pts)",
+        "total_ms": 157.5,
+        "encoder_ms": 44.8,
+        "decoder_ms": 76.3,
+        "other_ms": 36.4,
+        "masks_per_keyframe": [
+          9,
+          3,
+          8
+        ],
+        "mask_agreement_vs_baseline": [
+          0.512,
+          0.333,
+          0.564
+        ]
+      },
+      {
+        "config": "  ...same, 8x8 grid (64 pts)",
+        "total_ms": 101.7,
+        "encoder_ms": 44.9,
+        "decoder_ms": 34.4,
+        "other_ms": 22.4,
+        "masks_per_keyframe": [
+          5,
+          0,
+          6
+        ],
+        "mask_agreement_vs_baseline": [
+          0.4,
+          0.0,
+          0.373
+        ]
+      },
+      {
+        "config": "fp32 enc+dec, 12x12 grid (144 pts)",
+        "total_ms": 278.9,
+        "encoder_ms": 72.2,
+        "decoder_ms": 148.5,
+        "other_ms": 58.2,
+        "masks_per_keyframe": [
+          9,
+          3,
+          8
+        ],
+        "mask_agreement_vs_baseline": [
+          0.521,
+          0.339,
+          0.577
+        ]
+      },
+      {
+        "config": "fp32 enc+dec, 8x8 grid (64 pts)",
+        "total_ms": 172.3,
+        "encoder_ms": 72.2,
+        "decoder_ms": 67.1,
+        "other_ms": 33.0,
+        "masks_per_keyframe": [
+          5,
+          0,
+          6
+        ],
+        "mask_agreement_vs_baseline": [
+          0.406,
+          0.0,
+          0.378
+        ]
+      }
+    ]
+  }
+}
