@@ -1,10 +1,11 @@
 """
 Unit tests for ReefVision Video Processing and Benthic Tracking Pipeline.
-Tests SAM 2.1 Video Predictor adapter, camera motion scheduling, colony tracking,
-durable geometries, hardware reporting, optical-flow mode rejection, and API endpoints.
+Tests camera-motion keyframe selection, durable job storage, exports, hardware reporting and the video API
+(the flow tracker itself is covered by test_flow_tracking.py).
 """
 
 import os
+import shutil
 import tempfile
 import time
 import numpy as np
@@ -13,11 +14,9 @@ from PIL import Image
 
 from core.device import check_torch_capabilities, get_memory_budget, resolve_hardware_tier
 from core.video.keyframe_selector import EgoMotionKeyframeSelector
-from core.video.tracker import BenthicColonyTracker, CoralTrack, compute_box_iou
-from core.video.sam2_tracker import SAM2BenthicTracker, BaseVideoTracker
+from core.video.tracker import CoralTrack
 from core.video.video_export import export_transect_csv, export_coco_video, render_video_overlay
 from core.video.store import VideoJobStore
-from core.video.preprocessor import prepare_bounded_chunk_frames, cleanup_chunk_dir
 
 
 def test_video_job_store():
@@ -28,7 +27,7 @@ def test_video_job_store():
 
     # 1. Create job
     meta = {"width": 1920, "height": 1080, "fps": 25.0, "total_frames": 100}
-    opts = {"model_size": 512, "model_profile": "sam2"}
+    opts = {"min_stride": 10, "max_stride": 25}
     job = store.create_job(
         job_id="job_001",
         video_path="/path/test.mp4",
@@ -105,64 +104,8 @@ def test_video_job_store():
     assert ts[0]["coral_coverage_pct"] == 5.5
 
     store.close()
-    cleanup_chunk_dir(temp_dir)
+    shutil.rmtree(temp_dir, ignore_errors=True)
     print("  VideoJobStore verified successfully.")
-
-
-def test_chunk_scheduler():
-    print("Testing VideoChunkScheduler planning and reconciliation...")
-    from core.video.scheduler import calculate_chunk_plan, reconcile_chunk_identities, admit_workers_for_device
-
-    # 1. Chunk planning for 202 frames with chunk_size=128, overlap=16
-    plan = calculate_chunk_plan(202, chunk_size=128, overlap_frames=16)
-    assert len(plan) == 2
-    c0, c1 = plan[0], plan[1]
-    assert c0.start_frame == 0 and c0.end_frame == 128
-    assert c0.commit_start == 0 and c0.commit_end == 128
-    assert c1.start_frame == 112 and c1.end_frame == 202
-    assert c1.reconcile_start == 112 and c1.reconcile_end == 128
-    assert c1.commit_start == 128 and c1.commit_end == 202
-
-    # Verify every frame from 0 to 201 is committed exactly once
-    committed_ranges = set()
-    for c in plan:
-        for f in range(c.commit_start, c.commit_end):
-            assert f not in committed_ranges, f"Frame {f} committed multiple times"
-            committed_ranges.add(f)
-    assert len(committed_ranges) == 202
-
-    # 2. Identity reconciliation across overlap
-    ex_overlap = {
-        112: [{"track_id": 5, "global_colony_id": 5, "bbox": [100, 100, 50, 50]}],
-        113: [{"track_id": 5, "global_colony_id": 5, "bbox": [102, 100, 50, 50]}],
-    }
-    inc_overlap = {
-        112: [{"track_id": 1, "bbox": [101, 100, 50, 50]}],
-        113: [{"track_id": 1, "bbox": [103, 100, 50, 50]}],
-    }
-    recon = reconcile_chunk_identities(ex_overlap, inc_overlap, iou_threshold=0.50)
-    assert recon.get(1) == 5, f"Expected incoming track 1 to reconcile to global 5, got {recon}"
-
-    # 3. Worker admission
-    workers = admit_workers_for_device("auto", 4)
-    assert workers >= 1
-    print("  VideoChunkScheduler verified successfully.")
-
-
-def test_sam2_tracker_adapter():
-    print("Testing SAM2BenthicTracker adapter boundary & methods...")
-    tracker = SAM2BenthicTracker(device="cpu", model_size=512)
-    assert tracker.device == "cpu"
-    assert tracker.initialized is False
-    assert tracker.total_tracks_count == 0
-    assert isinstance(tracker, BaseVideoTracker)
-    assert tracker.model_size == 512
-
-    timings = tracker.get_timings()
-    assert "initialization_sec" in timings
-    assert "propagation_sec" in timings
-    assert "geometry_sec" in timings
-    print("  SAM2BenthicTracker adapter and timings verified.")
 
 
 def test_device_capabilities_and_precision():
@@ -219,77 +162,6 @@ def test_keyframe_selector():
     print("  Keyframe selector passed.")
 
 
-def test_benthic_colony_tracker_lifecycle():
-    print("Testing BenthicColonyTracker canonical geometry & retirement...")
-    tracker = BenthicColonyTracker(iou_match_threshold=0.30, fps=25.0, grace_period_sec=2.0)
-
-    # Keyframe 1: 2 coral detections
-    dets_f1 = [
-        {
-            "bbox": [10, 10, 30, 30],
-            "polygon": [[10, 10], [40, 10], [40, 40], [10, 40]],
-            "area_px": 900,
-            "predicted_iou": 0.92,
-            "centroid": (25, 25),
-        },
-        {
-            "bbox": [60, 60, 20, 20],
-            "polygon": [[60, 60], [80, 60], [80, 80], [60, 80]],
-            "area_px": 400,
-            "predicted_iou": 0.88,
-            "centroid": (70, 70),
-        },
-    ]
-
-    tracks_f1 = tracker.match_keyframe_detections(dets_f1, frame_idx=0, frame_w=1920, frame_h=1080)
-    assert len(tracks_f1) == 2
-    assert tracks_f1[0].track_id == 1
-    assert tracks_f1[1].track_id == 2
-    assert tracks_f1[0].area_px == 900
-    assert tracks_f1[0].area_pct > 0.0
-    print(f"  Spawned {len(tracks_f1)} tracks on frame 0 with canonical area/percentage.")
-
-    # Keyframe 2: Matched-object correction (track 1 shifted slightly, track 2 temporarily disappears)
-    dets_f2 = [
-        {
-            "bbox": [12, 11, 30, 30],
-            "polygon": [[12, 11], [42, 11], [42, 41], [12, 41]],
-            "area_px": 900,
-            "predicted_iou": 0.94,
-            "centroid": (27, 26),
-        },
-    ]
-
-    tracks_f2 = tracker.match_keyframe_detections(dets_f2, frame_idx=25, frame_w=1920, frame_h=1080)
-    # Track 2 is absent at frame 25, but 25 frames <= grace period (50 frames at 25fps)
-    assert tracks_f2[0].track_id == 1, "Track ID 1 must persist"
-    assert len(tracks_f2) == 2, "Track 2 must remain active during 2s grace period"
-    print("  Grace period persistence verified.")
-
-    # Keyframe 3: Frame 75 (50 frames after last seen) -> Track 2 must retire
-    dets_f3 = [
-        {
-            "bbox": [14, 12, 30, 30],
-            "polygon": [[14, 12], [44, 12], [44, 42], [14, 42]],
-            "area_px": 900,
-            "predicted_iou": 0.95,
-            "centroid": (29, 27),
-        },
-    ]
-    tracks_f3 = tracker.match_keyframe_detections(dets_f3, frame_idx=75, frame_w=1920, frame_h=1080)
-    active_ids = [t.track_id for t in tracks_f3]
-    assert 2 not in active_ids, "Track 2 must retire after grace period expires"
-    assert 1 in active_ids
-    print("  Colony retirement after grace period verified.")
-
-    # Test global ID mapping without spurious increment
-    tracker.map_local_id_to_global(local_id=1, global_id=10)
-    assert tracker.get_global_id(1) == 10
-    assert tracker._tracks[1].global_colony_id == 10
-    assert tracker._tracks[1].to_dict()["id"] == 10
-    print("  Deterministic global ID mapping verified.")
-
-
 def test_export_utilities():
     print("Testing Video Export utilities...")
     temp_dir = tempfile.mkdtemp(prefix="reefvision_test_vid_")
@@ -336,14 +208,6 @@ def test_video_api_endpoints():
 
     client = TestClient(app)
 
-    # 1. Test rejection of unsupported tracker mode
-    resp_reject = client.post("/api/video/process", json={
-        "video_name": "non_existent.mp4",
-        "tracker_mode": "unsupported_legacy_mode",
-    })
-    assert resp_reject.status_code == 422, f"Expected 422 for unsupported tracker mode rejection, got {resp_reject.status_code}"
-    print("  Rejected unsupported tracker mode verified with 422.")
-
     # 2. Test rejection of invalid strides
     resp_stride = client.post("/api/video/process", json={
         "video_name": "non_existent.mp4",
@@ -375,14 +239,12 @@ def test_video_api_endpoints():
         assert upload_data["metadata"]["total_frames"] > 0
         print("  POST /api/video/upload verified (standardized to 25 FPS).")
 
-        # 5. Process video with SAM 2 mode
+        # 5. Process video
         resp = client.post("/api/video/process", json={
             "video_name": upload_data["video_name"],
             "overlap_threshold": 0.75,
             "min_stride": 2,
             "max_stride": 5,
-            "tracker_mode": "sam2",
-            "model_size": 1024,
         })
         assert resp.status_code == 200, f"Process video failed: {resp.text}"
         job_data = resp.json()
@@ -440,7 +302,7 @@ def test_video_api_endpoints():
 
 
 def test_real_video_sample_pipeline():
-    """Verifies end-to-end SAM 2 tracking, keyframing, and export on real underwater reef footage."""
+    """Verifies end-to-end flow tracking, keyframing, and export on real underwater reef footage."""
     print("\n--- Testing Real Underwater Video Sample Pipeline ---")
     from fastapi.testclient import TestClient
     from app.main import app
@@ -457,15 +319,13 @@ def test_real_video_sample_pipeline():
     assert meta["fps"] == 25.0
     assert meta["total_frames"] > 0
 
-    # 2. Launch processing job with SAM 2 Tiny 512 mode
+    # 2. Launch processing job
     p_resp = client.post("/api/video/process", json={
         "video_name": video_name,
         "overlap_threshold": 0.70,
         "min_stride": 15,
         "max_stride": 45,
         "points_per_side": 8,
-        "tracker_mode": "sam2",
-        "model_size": 512,
     })
     assert p_resp.status_code == 200, f"Start job failed: {p_resp.text}"
     job_id = p_resp.json()["job_id"]
@@ -505,10 +365,7 @@ def test_real_video_sample_pipeline():
 
 if __name__ == "__main__":
     test_video_job_store()
-    test_chunk_scheduler()
     test_keyframe_selector()
-    test_benthic_colony_tracker_lifecycle()
-    test_sam2_tracker_adapter()
     test_device_capabilities_and_precision()
     test_export_utilities()
     test_video_api_endpoints()

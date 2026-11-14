@@ -5,69 +5,55 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np
-from PIL import Image
 
 from core.video import pipeline_stages as ps
 
 
-def test_rescale_detections():
-    mask = np.zeros((10, 10), dtype=bool)
-    mask[2:6, 3:7] = True
-    dets = [{"mask": mask, "bbox": [3, 2, 4, 4], "centroid": (5, 4), "area": 16, "area_px": 16, "polygon": [[3, 2], [6, 2], [6, 5]]}]
-    ps.rescale_detections_to_full_res(dets, 2.0, 3.0)
-    d = dets[0]
-    assert d["bbox"] == [6, 6, 8, 12]
-    assert d["centroid"] == (10, 12)
-    assert d["area"] == 96 and d["area_px"] == 96
-    assert d["polygon"] == [[6, 6], [12, 6], [12, 15]]
+def _blob(labels, cid, y0, y1, x0, x1):
+    labels[y0:y1, x0:x1] = cid
 
 
-def test_rescale_derives_missing_polygon():
-    mask = np.zeros((20, 20), dtype=bool)
-    mask[4:14, 4:14] = True
-    dets = [{"mask": mask, "bbox": [4, 4, 10, 10]}]
-    ps.rescale_detections_to_full_res(dets, 2.0, 2.0)
-    assert dets[0]["polygon"], "polygon should be extracted then scaled"
-    assert max(p[0] for p in dets[0]["polygon"]) >= 18
+def test_labels_to_geometry_scales_and_skips_tiny():
+    labels = np.zeros((20, 40), dtype=np.uint16)
+    _blob(labels, 3, 2, 12, 4, 14)    # 10x10 colony
+    _blob(labels, 5, 15, 16, 30, 32)  # 2 px speck, below min_pixels
+    geo = ps.labels_to_geometry(labels, width=160, height=80)  # 4x scale in both axes
+    assert sorted(geo) == [3]
+    g = geo[3]
+    assert g["bbox"] == [16, 8, 40, 40]
+    assert g["area_px"] == 100 * 16 and g["area_pct"] == round(1600 / (160 * 80) * 100.0, 4)
+    assert g["centroid"] == (int(round(8.5 * 4)), int(round(6.5 * 4)))
+    xs = [p[0] for p in g["polygon"]]
+    ys = [p[1] for p in g["polygon"]]
+    assert min(xs) == 16 and max(xs) == 52 and min(ys) == 8 and max(ys) == 44
 
 
-def _trk(**kw):
-    base = dict(track_id=7, taxonomy={}, bleaching={}, color_hex="#fff", first_seen_frame=3, predicted_iou=0.9, bbox=[10, 10, 50, 40])
-    base.update(kw)
-    return SimpleNamespace(**base)
+def test_labels_to_geometry_empty_and_multiple():
+    assert ps.labels_to_geometry(np.zeros((10, 10), np.uint16), 100, 100) == {}
+    labels = np.zeros((30, 30), dtype=np.uint16)
+    _blob(labels, 1, 0, 8, 0, 8)
+    _blob(labels, 7, 10, 25, 10, 25)
+    geo = ps.labels_to_geometry(labels, 30, 30)
+    assert sorted(geo) == [1, 7] and geo[7]["area_px"] == 225
 
 
-def test_track_metadata_defaults_and_override():
-    m = ps.track_metadata(_trk())
-    assert m["genus"] == "Coral" and m["condition"] == "Healthy" and m["taxon_conf"] == 85.0
-    assert m["first_seen_frame"] == 3
-    assert ps.track_metadata(_trk(), 11)["first_seen_frame"] == 11
-    m2 = ps.track_metadata(_trk(taxonomy={"genus": "Acropora"}, bleaching={"status": "Bleached", "is_bleached": True}))
-    assert m2["genus"] == "Acropora" and m2["is_bleached"] is True
-
-
-def test_crop_track_regions_padding_and_tiny_boxes():
-    img = Image.new("RGB", (200, 100))
-    crops = ps.crop_track_regions(img, [_trk(bbox=[10, 10, 50, 40]), _trk(bbox=[0, 0, 5, 5])], 200, 100)
-    assert crops[0].size == (60, 48)  # 10% padding each side
-    assert crops[1].size == (10, 10)  # minimum size fallback
+def test_colony_color_is_stable_and_distinct():
+    assert ps.colony_color(4) == ps.colony_color(4)
+    assert len({ps.colony_color(i) for i in range(1, 30)}) == 29
 
 
 def test_build_pipeline_timings():
     t = ps.build_pipeline_timings(
-        elapsed_total=100.0, compile_warmup_sec=1, initialization_sec=2, motion_scan_sec=5, chunk_prep_sec=5,
-        propagation_sec=50, transfer_sec=5, geometry_sec=5, queue_wait_sec=0, discovery_sec=10,
-        classification_sec=3, persistence_sec=2, export_deliverables_sec=1, export_mp4_sec=7,
-        unique_colonies=4, keyframes_count=9, committed_frames=202,
+        elapsed_total=100.0, model_load_sec=2, decode_sec=10, ego_motion_sec=5, flow_sec=40, geometry_sec=10,
+        keyframe_blocked_sec=3, keyframe_segmentation_sec=30, classification_sec=3, persistence_sec=2,
+        export_deliverables_sec=1, export_mp4_sec=7, unique_colonies=4, keyframes_count=9, committed_frames=202,
     )
-    assert t["video_decode_prep_sec"] == 10.0
-    assert t["unaccounted_idle_sec"] == 10.0  # 100 - (10+50+5+5+10+2+1+7)
-    assert t["pct_gpu_inference"] == 50.0 and t["pct_export"] == 8.0
+    assert t["unaccounted_idle_sec"] == 22.0  # 100 - (10+5+40+10+3+2+1+7); background threads are not on the path
+    assert t["pct_optical_flow_and_warp"] == 40.0 and t["pct_export"] == 8.0
     assert t["committed_frames"] == 202 and t["unique_colonies_count"] == 4
 
 

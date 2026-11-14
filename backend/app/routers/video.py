@@ -186,16 +186,10 @@ def process_video(req: VideoProcessRequest):
                 "min_stride": req.min_stride,
                 "max_stride": req.max_stride,
                 "points_per_side": req.points_per_side,
-                "iou_match_threshold": req.iou_match_threshold,
                 "pred_iou_thresh": req.pred_iou_thresh,
                 "stability_thresh": req.stability_thresh,
                 "device_pref": state._ACTIVE_DEVICE_PREF,
-                "tracker_mode": req.tracker_mode or "sam2",
-                "model_profile": req.model_profile,
-                "model_size": req.model_size,
-                "precision": req.precision,
-                "worker_count": req.worker_count,
-                "compile_tracker": req.compile_tracker,
+                "classify": req.classify,
                 "export_mp4": req.export_mp4,
             },
         )
@@ -246,7 +240,6 @@ def get_active_video_status():
         current_action=job.get("current_action"),
         stage_detail=job.get("stage_detail"),
         logs=job.get("logs", []),
-        tracker_mode=job.get("tracker_mode", "sam2"),
     )
 
 
@@ -284,7 +277,6 @@ def get_video_status(job_id: str, include_metrics: bool = False):
         current_action=job.get("current_action"),
         stage_detail=job.get("stage_detail"),
         logs=job.get("logs", []),
-        tracker_mode=job.get("tracker_mode", "sam2"),
     )
 
 

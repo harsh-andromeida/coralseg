@@ -1,9 +1,9 @@
 """
-High-FPS Video Processing, Benthic Colony Tracking, and Transect Analytics.
+Video transect processing: optical-flow colony tracking, survey analytics and exports.
 """
 
 from core.video.keyframe_selector import EgoMotionKeyframeSelector
-from core.video.tracker import CoralTrack, BenthicColonyTracker
+from core.video.tracker import CoralTrack
 from core.video.engine import VideoProcessor, VideoJobState
 from core.video.video_export import (
     render_video_overlay,
@@ -15,7 +15,6 @@ from core.video.video_export import (
 __all__ = [
     "EgoMotionKeyframeSelector",
     "CoralTrack",
-    "BenthicColonyTracker",
     "VideoProcessor",
     "VideoJobState",
     "render_video_overlay",

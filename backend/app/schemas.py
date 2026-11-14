@@ -175,65 +175,14 @@ class SaveAnnotationsRequest(BaseModel):
 
 class VideoProcessRequest(BaseModel):
     video_name: str = Field(description="Filename of registered video in uploads")
-    overlap_threshold: float = Field(default=0.75, ge=0.40, le=0.95, description="Scene overlap threshold triggering a keyframe")
-    min_stride: int = Field(default=15, ge=1, le=60, description="Minimum frame spacing between keyframes")
-    max_stride: int = Field(default=45, ge=5, le=120, description="Maximum frame spacing between keyframes")
-    points_per_side: int = Field(default=16, ge=8, le=32, description="SAM prompt grid density for keyframes")
-    iou_match_threshold: float = Field(default=0.30, ge=0.10, le=0.80, description="IoU threshold for tracking association")
-    pred_iou_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM predicted IoU threshold")
-    stability_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="SAM stability score threshold")
-    tracker_mode: Optional[str] = Field(default="sam2", description="Compatibility tracker mode ('sam2')")
-    model_profile: str = Field(default="sam2", description="Video tracker profile: 'sam2' (default reference) or 'efficienttam' (fast profile)")
-    model_size: int = Field(default=1024, description="Model input resolution: 1024 (reference) or 512 (fast)")
-    precision: Optional[str] = Field(default=None, description="Precision: 'float16', 'bfloat16', 'float32', or auto (None)")
-    worker_count: Union[int, str] = Field(default="auto", description="Inference worker instances: 'auto' or 1-8")
-    compile_tracker: bool = Field(default=False, description="Whether to compile SAM2/TAM via torch.compile (VOS optimized)")
+    overlap_threshold: float = Field(default=0.70, ge=0.40, le=0.95, description="Scene overlap threshold triggering a keyframe")
+    min_stride: int = Field(default=10, ge=1, le=60, description="Minimum frame spacing between keyframes")
+    max_stride: int = Field(default=25, ge=5, le=120, description="Maximum frame spacing between keyframes")
+    points_per_side: int = Field(default=16, ge=8, le=32, description="Prompt grid density for keyframe segmentation")
+    pred_iou_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="Predicted IoU threshold for keyframe masks")
+    stability_thresh: float = Field(default=0.50, ge=0.20, le=0.90, description="Stability score threshold for keyframe masks")
+    classify: bool = Field(default=True, description="Classify genus and bleaching for every new colony")
     export_mp4: bool = Field(default=True, description="Whether to render annotated MP4 video deliverable")
-
-    @field_validator("worker_count")
-    @classmethod
-    def validate_worker_count(cls, v: Union[int, str]) -> Union[int, str]:
-        if isinstance(v, str):
-            v_clean = v.strip().lower()
-            if v_clean == "auto":
-                return "auto"
-            try:
-                val = int(v_clean)
-                if 1 <= val <= 8:
-                    return val
-                raise ValueError("worker_count must be between 1 and 8")
-            except ValueError:
-                raise ValueError(f"Invalid worker_count '{v}'. Must be 'auto' or integer between 1 and 8.")
-        elif isinstance(v, int):
-            if 1 <= v <= 8:
-                return v
-            raise ValueError("worker_count must be between 1 and 8")
-        raise ValueError(f"Invalid worker_count type: {type(v)}")
-
-    @field_validator("tracker_mode")
-    @classmethod
-    def validate_tracker_mode(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None:
-            v_clean = v.strip().lower()
-            if v_clean not in ("sam2", "efficienttam"):
-                raise ValueError(f"Unsupported tracker mode '{v}'. Allowed: 'sam2', 'efficienttam'")
-            return v_clean
-        return "sam2"
-
-    @field_validator("model_profile")
-    @classmethod
-    def validate_model_profile(cls, v: str) -> str:
-        v_clean = v.strip().lower()
-        if v_clean not in ("sam2", "efficienttam"):
-            raise ValueError(f"Unsupported model profile '{v}'. Allowed: 'sam2', 'efficienttam'")
-        return v_clean
-
-    @field_validator("model_size")
-    @classmethod
-    def validate_model_size(cls, v: int) -> int:
-        if v not in (512, 1024):
-            raise ValueError(f"Unsupported model_size {v}. Allowed: 512, 1024")
-        return v
 
     @model_validator(mode="after")
     def validate_strides(self) -> "VideoProcessRequest":
@@ -281,7 +230,6 @@ class VideoStatusResponse(BaseModel):
     current_action: Optional[str] = None
     stage_detail: Optional[str] = None
     logs: Optional[List[str]] = None
-    tracker_mode: Optional[str] = "sam2"
     timings: Optional[Dict[str, Any]] = None
 
 

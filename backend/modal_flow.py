@@ -1,12 +1,12 @@
 """
-Run flow_pipeline.py on a Modal GPU and fetch the masked video + timings.
+Run bench_app_flow.py (the real VideoProcessor flow) on a Modal GPU and fetch the timings.
 
 The GPU is chosen with BENCH_GPU at launch (decoration time), one `modal run` per GPU:
 
     BENCH_GPU=L4 modal run backend/modal_flow.py
     for g in T4 L4 A10G L40S A100-40GB H100; do BENCH_GPU=$g modal run backend/modal_flow.py & done; wait
 
-Results are written to docs/benchmarks/raw/flow_<gpu>.json and flow_<gpu>_masked.mp4.
+Results are written to docs/benchmarks/raw/flow_<gpu>.json.
 """
 
 import json
@@ -49,9 +49,8 @@ def flow(extra: str = "") -> dict:
         "vcpus": os.cpu_count(),
     }
     cmd = (
-        "cd /root/backend && python flow_pipeline.py "
-        "--video /root/demo_images/sample_reef_transect_25fps.mp4 "
-        f"--out-video /tmp/flow_masked.mp4 --out-json /tmp/flow.json {extra} > /tmp/run.log 2>&1"
+        "cd /root/backend && python bench_app_flow.py "
+        f"--video /root/demo_images/sample_reef_transect_25fps.mp4 --out-json /tmp/flow.json --out-md /tmp/flow.md {extra} > /tmp/run.log 2>&1"
     )
     rc = subprocess.run(cmd, shell=True).returncode
     log_tail = sh("tail -c 3000 /tmp/run.log")
@@ -62,7 +61,6 @@ def flow(extra: str = "") -> dict:
         "ok": True,
         "env": env,
         "report": json.load(open("/tmp/flow.json")),
-        "video": open("/tmp/flow_masked.mp4", "rb").read() if os.path.exists("/tmp/flow_masked.mp4") else None,
     }
 
 
@@ -75,9 +73,6 @@ def main(extra: str = "", tag: str = "flow"):
     if not res["ok"]:
         print(f"[{GPU}] FAILED\n{res['log_tail']}")
         return
-    vid = res.pop("video")
-    if vid:
-        (out_dir / f"{tag}_masked.mp4").write_bytes(vid)
     (out_dir / f"{tag}.json").write_text(json.dumps(res, indent=2, default=str))
-    r = res["report"]
-    print(f"[{GPU}] wall {r['wall_sec']}s | {r['fps']} FPS | colonies {r['colonies_seen']} | skipped kf {r['keyframes_skipped']} | {r['ort_providers'][0]}")
+    w = res["report"]["warm_median"]
+    print(f"[{GPU}] wall {w['wall_sec']}s | {w['fps']} FPS | colonies {w['unique_corals']} | exports {w['export_status']} | {res['report']['ort_provider']}")
