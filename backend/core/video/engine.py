@@ -219,26 +219,25 @@ class VideoProcessor:
         return db_job
 
     def get_active_job(self) -> Optional[Dict[str, Any]]:
-        """Retrieves currently running job, or the most recent video job."""
-        with self._lock:
-            if self._jobs:
-                for j in reversed(list(self._jobs.values())):
-                    if j.get("state") in (
-                        VideoJobState.QUEUED,
-                        VideoJobState.PREPARING,
-                        VideoJobState.PROCESSING,
-                        VideoJobState.FINALIZING,
-                        VideoJobState.PAUSED,
-                    ):
-                        return self.get_job(j["job_id"])
-                sorted_jobs = sorted(self._jobs.values(), key=lambda j: j.get("created_at", 0), reverse=True)
-                if sorted_jobs:
-                    return self.get_job(sorted_jobs[0]["job_id"])
+        """Returns the job that is currently live (queued, running or paused), else None.
 
-        db_active = self.store.get_active_job()
-        if db_active:
-            return self.get_job(db_active["job_id"])
-        return None
+        Finished, failed or cancelled jobs are never returned, so reopening the app does not
+        resurrect old results from the persisted job history.
+        """
+        live_states = (
+            VideoJobState.QUEUED,
+            VideoJobState.PREPARING,
+            VideoJobState.PROCESSING,
+            VideoJobState.FINALIZING,
+            VideoJobState.PAUSED,
+            VideoJobState.CANCELLING,
+        )
+        with self._lock:
+            live = [j for j in self._jobs.values() if j.get("state") in live_states]
+        if not live:
+            return None
+        newest = max(live, key=lambda j: j.get("created_at", 0))
+        return self.get_job(newest["job_id"])
 
     def probe_video(self, video_path: str) -> Dict[str, Any]:
         """Probes video metadata using OpenCV."""

@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
         state.batch_processor.cancel_batch()
     if state.video_processor:
         active_job = state.video_processor.get_active_job()
-        if active_job and active_job.get("state") == "running":
+        if active_job:
             state.video_processor.cancel_job(active_job["job_id"])
 
 
