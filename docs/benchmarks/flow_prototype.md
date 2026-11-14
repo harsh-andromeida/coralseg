@@ -43,3 +43,21 @@ Keyframe jobs now queue (one running + one waiting) instead of being skipped: 0 
 | H100 | 6.1 | 33.4 | 1.33 | 162 | about 7 |
 
 Past an A10G the GPU no longer limits throughput: decode (about 6-10 ms), ego-motion (about 5 ms) and DIS flow (about 8-17 ms per frame) run on the host CPU, so the differences between the faster GPUs are mostly container CPU variance.
+
+## With classification (config E = D + `--classify`; `raw/flowE_*.json`)
+
+BioCLIP genus + YOLO bleaching run once per new colony in a background thread from a padded full-res crop (same functions the app uses),
+and the genus / BLEACHED tag is drawn on the masked video. Every colony got a label on every GPU.
+
+| GPU | wall (s) | FPS | x real time | wall without classification (s) | BioCLIP total (s) | YOLO total (s) |
+|---|---:|---:|---:|---:|---:|---:|
+| T4 | 9.9 | 20.5 | 0.82 | 9.4 | 0.43 | 0.09 |
+| L4 | 8.0 | 25.3 | 1.01 | 7.9 | 0.16 | 0.06 |
+| A10G | 6.3 | 32.2 | 1.29 | 6.4 | 0.15 | 0.05 |
+| L40S | 6.7 | 30.1 | 1.21 | 5.7 | 0.09 | 0.04 |
+| A100-40GB | 8.3 | 24.2 | 0.97 | 6.9 | 0.13 | 0.05 |
+| A100-80GB | 7.3 | 27.7 | 1.11 | 8.0 | 0.11 | 0.05 |
+| H100 | 5.7 | 35.7 | 1.43 | 6.1 | 0.10 | 0.04 |
+
+Classification itself is 0.1-0.5 s of GPU time over the whole clip, so it is effectively free; wall-time differences against config D are run-to-run CPU noise (about +/-1 s).
+Caveat: labels are not stable across runs. The genus mix on the same clip varied (e.g. Porites 5-10, Galaxea 2-6, 13-16 colonies flagged bleached) because crops are taken from the warped masks of the current frame, so slightly different mask extents and keyframe timing change the crop. There is no ground truth here, so accuracy is unverified.

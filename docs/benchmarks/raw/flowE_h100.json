@@ -1,0 +1,1081 @@
+{
+  "ok": true,
+  "env": {
+    "nvidia_smi": "NVIDIA H100 80GB HBM3, 81559 MiB, 610.57.04",
+    "vcpus": 17
+  },
+  "report": {
+    "coralscop_load_sec": 1.254,
+    "classifier_load_sec": 1.535,
+    "ort_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "opts": {
+      "overlap_threshold": 0.7,
+      "min_stride": 10,
+      "max_stride": 25,
+      "points_per_side": 16,
+      "flow_preset": "fast",
+      "flow_scale": 0.5,
+      "guided_prompts": true,
+      "render_thread": true,
+      "async_keyframes": true,
+      "decode_scale": 0.5,
+      "decoder_batch": 32,
+      "fp16_encoder": true
+    },
+    "first_pass": {
+      "frames": 202,
+      "video_sec": 8.08,
+      "resolution": "1920x1080",
+      "flow_resolution": "853x480",
+      "wall_sec": 6.676,
+      "e2e_fps": 30.26,
+      "realtime_factor": 1.21,
+      "stage_sec": {
+        "decode+proxy": 1.298,
+        "ego_motion_keyframe_select": 1.055,
+        "keyframe_segmentation(CoralSCOP)": 2.243,
+        "keyframe_match_reanchor": 0.008,
+        "classify_make_crops": 0.043,
+        "dense_flow(DIS)": 2.09,
+        "warp_labels(remap)": 0.205,
+        "render_overlay": 4.683,
+        "encode_write(ffmpeg)": 0.9,
+        "async_wait(blocked)": 0.146,
+        "keyframe_match_reanchor(+warp dets)": 0.185,
+        "classify_bioclip(async)": 0.34,
+        "classify_yolo_bleaching(async)": 1.949,
+        "classify_drain(wait at end)": 0.01,
+        "render_drain(wait)": 0.035,
+        "encode_flush": 0.042
+      },
+      "stage_ms_per_call": {
+        "decode+proxy": 6.43,
+        "ego_motion_keyframe_select": 5.22,
+        "keyframe_segmentation(CoralSCOP)": 249.26,
+        "keyframe_match_reanchor": 8.41,
+        "classify_make_crops": 4.81,
+        "dense_flow(DIS)": 10.4,
+        "warp_labels(remap)": 1.02,
+        "render_overlay": 23.18,
+        "encode_write(ffmpeg)": 4.46,
+        "async_wait(blocked)": 18.29,
+        "keyframe_match_reanchor(+warp dets)": 23.09,
+        "classify_bioclip(async)": 37.78,
+        "classify_yolo_bleaching(async)": 216.59,
+        "classify_drain(wait at end)": 10.05,
+        "render_drain(wait)": 34.74,
+        "encode_flush": 42.11
+      },
+      "stage_calls": {
+        "decode+proxy": 202,
+        "ego_motion_keyframe_select": 202,
+        "keyframe_segmentation(CoralSCOP)": 9,
+        "keyframe_match_reanchor": 1,
+        "classify_make_crops": 9,
+        "dense_flow(DIS)": 201,
+        "warp_labels(remap)": 201,
+        "render_overlay": 202,
+        "encode_write(ffmpeg)": 202,
+        "async_wait(blocked)": 8,
+        "keyframe_match_reanchor(+warp dets)": 8,
+        "classify_bioclip(async)": 9,
+        "classify_yolo_bleaching(async)": 9,
+        "classify_drain(wait at end)": 1,
+        "render_drain(wait)": 1,
+        "encode_flush": 1
+      },
+      "stage_pct_wall": {
+        "decode+proxy": 19.4,
+        "ego_motion_keyframe_select": 15.8,
+        "keyframe_segmentation(CoralSCOP)": 33.6,
+        "keyframe_match_reanchor": 0.1,
+        "classify_make_crops": 0.6,
+        "dense_flow(DIS)": 31.3,
+        "warp_labels(remap)": 3.1,
+        "render_overlay": 70.2,
+        "encode_write(ffmpeg)": 13.5,
+        "async_wait(blocked)": 2.2,
+        "keyframe_match_reanchor(+warp dets)": 2.8,
+        "classify_bioclip(async)": 5.1,
+        "classify_yolo_bleaching(async)": 29.2,
+        "classify_drain(wait at end)": 0.2,
+        "render_drain(wait)": 0.5,
+        "encode_flush": 0.6
+      },
+      "keyframes": [
+        {
+          "new": 9,
+          "matched": 0,
+          "dropped": 0,
+          "kept_stale": 0,
+          "frame": 0,
+          "detections": 9,
+          "lag": 0
+        },
+        {
+          "new": 3,
+          "matched": 3,
+          "dropped": 0,
+          "kept_stale": 5,
+          "frame": 32,
+          "submitted": 25,
+          "detections": 6,
+          "lag": 7
+        },
+        {
+          "new": 7,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 4,
+          "frame": 58,
+          "submitted": 50,
+          "detections": 14,
+          "lag": 8
+        },
+        {
+          "new": 2,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 11,
+          "frame": 82,
+          "submitted": 75,
+          "detections": 9,
+          "lag": 7
+        },
+        {
+          "new": 1,
+          "matched": 4,
+          "dropped": 3,
+          "kept_stale": 13,
+          "frame": 107,
+          "submitted": 100,
+          "detections": 5,
+          "lag": 7
+        },
+        {
+          "new": 1,
+          "matched": 2,
+          "dropped": 1,
+          "kept_stale": 15,
+          "frame": 131,
+          "submitted": 125,
+          "detections": 3,
+          "lag": 6
+        },
+        {
+          "new": 2,
+          "matched": 5,
+          "dropped": 4,
+          "kept_stale": 6,
+          "frame": 158,
+          "submitted": 150,
+          "detections": 7,
+          "lag": 8
+        },
+        {
+          "new": 7,
+          "matched": 8,
+          "dropped": 2,
+          "kept_stale": 3,
+          "frame": 183,
+          "submitted": 175,
+          "detections": 15,
+          "lag": 8
+        },
+        {
+          "new": 3,
+          "matched": 10,
+          "dropped": 1,
+          "kept_stale": 7,
+          "frame": 201,
+          "submitted": 200,
+          "detections": 13,
+          "lag": 1
+        }
+      ],
+      "colonies_seen": 35,
+      "keyframes_skipped": 0,
+      "classification": {
+        "classified": 35,
+        "genus_counts": {
+          "Galaxea": 4,
+          "Goniopora": 2,
+          "Millepora": 20,
+          "Porites": 9
+        },
+        "bleached": 16,
+        "colonies": {
+          "1": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 47.5,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 57.7,
+            "first_frame": 0
+          },
+          "2": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 95.7,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 62.4,
+            "first_frame": 0
+          },
+          "3": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.9,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 69.0,
+            "first_frame": 0
+          },
+          "4": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 56.7,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 63.7,
+            "first_frame": 0
+          },
+          "5": {
+            "genus": "Goniopora",
+            "growth_form": "Massive",
+            "taxon_conf": 49.5,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 71.5,
+            "first_frame": 0
+          },
+          "6": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 29.3,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 68.7,
+            "first_frame": 0
+          },
+          "7": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 97.7,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 58.1,
+            "first_frame": 0
+          },
+          "8": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.2,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.5,
+            "first_frame": 0
+          },
+          "9": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 51.4,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 72.7,
+            "first_frame": 0
+          },
+          "10": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 34.1,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 72.0,
+            "first_frame": 32
+          },
+          "11": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 79.9,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 52.6,
+            "first_frame": 32
+          },
+          "12": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 94.6,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 72.5,
+            "first_frame": 32
+          },
+          "13": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 50.8,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 56.7,
+            "first_frame": 58
+          },
+          "14": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 77.9,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.3,
+            "first_frame": 58
+          },
+          "15": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.9,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 54.7,
+            "first_frame": 58
+          },
+          "16": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 84.3,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 70.2,
+            "first_frame": 58
+          },
+          "17": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 63.5,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.0,
+            "first_frame": 58
+          },
+          "18": {
+            "genus": "Goniopora",
+            "growth_form": "Massive",
+            "taxon_conf": 50.4,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 55.5,
+            "first_frame": 58
+          },
+          "19": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.0,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 55.1,
+            "first_frame": 58
+          },
+          "20": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 31.4,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 70.7,
+            "first_frame": 82
+          },
+          "21": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.6,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 65.9,
+            "first_frame": 82
+          },
+          "22": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 56.7,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 52.7,
+            "first_frame": 107
+          },
+          "23": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 56.8,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 71.0,
+            "first_frame": 131
+          },
+          "24": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.7,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 53.0,
+            "first_frame": 158
+          },
+          "25": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.7,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 72.2,
+            "first_frame": 158
+          },
+          "26": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 31.3,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.7,
+            "first_frame": 183
+          },
+          "27": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 61.0,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 62.1,
+            "first_frame": 183
+          },
+          "28": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 36.9,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 65.7,
+            "first_frame": 183
+          },
+          "29": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 78.0,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 59.0,
+            "first_frame": 183
+          },
+          "30": {
+            "genus": "Porites",
+            "growth_form": "Massive",
+            "taxon_conf": 20.6,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 50.2,
+            "first_frame": 183
+          },
+          "31": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.2,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 56.9,
+            "first_frame": 183
+          },
+          "32": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 46.6,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 71.1,
+            "first_frame": 183
+          },
+          "33": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 40.5,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 70.2,
+            "first_frame": 201
+          },
+          "34": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.0,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 68.9,
+            "first_frame": 201
+          },
+          "35": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 68.0,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 55.6,
+            "first_frame": 201
+          }
+        }
+      },
+      "colonies_per_frame_max": 20,
+      "reanchor_iou_mean": 0.712,
+      "reanchor_iou_by_age_frames": {
+        "1-10": {
+          "n": 0,
+          "mean_iou": null
+        },
+        "11-20": {
+          "n": 10,
+          "mean_iou": 0.674
+        },
+        "21-30": {
+          "n": 26,
+          "mean_iou": 0.723
+        },
+        ">30": {
+          "n": 10,
+          "mean_iou": 0.721
+        }
+      }
+    },
+    "final_pass": {
+      "frames": 202,
+      "video_sec": 8.08,
+      "resolution": "1920x1080",
+      "flow_resolution": "853x480",
+      "wall_sec": 5.659,
+      "e2e_fps": 35.7,
+      "realtime_factor": 1.428,
+      "stage_sec": {
+        "decode+proxy": 1.135,
+        "ego_motion_keyframe_select": 0.955,
+        "keyframe_segmentation(CoralSCOP)": 1.407,
+        "keyframe_match_reanchor": 0.008,
+        "classify_make_crops": 0.046,
+        "dense_flow(DIS)": 1.625,
+        "warp_labels(remap)": 0.215,
+        "classify_bioclip(async)": 0.105,
+        "classify_yolo_bleaching(async)": 0.037,
+        "render_overlay": 4.828,
+        "encode_write(ffmpeg)": 0.593,
+        "async_wait(blocked)": 0.135,
+        "keyframe_match_reanchor(+warp dets)": 0.187,
+        "classify_drain(wait at end)": 0.016,
+        "render_drain(wait)": 0.041,
+        "encode_flush": 0.042
+      },
+      "stage_ms_per_call": {
+        "decode+proxy": 5.62,
+        "ego_motion_keyframe_select": 4.73,
+        "keyframe_segmentation(CoralSCOP)": 156.34,
+        "keyframe_match_reanchor": 8.03,
+        "classify_make_crops": 5.1,
+        "dense_flow(DIS)": 8.09,
+        "warp_labels(remap)": 1.07,
+        "classify_bioclip(async)": 11.71,
+        "classify_yolo_bleaching(async)": 4.08,
+        "render_overlay": 23.9,
+        "encode_write(ffmpeg)": 2.94,
+        "async_wait(blocked)": 16.86,
+        "keyframe_match_reanchor(+warp dets)": 23.4,
+        "classify_drain(wait at end)": 15.7,
+        "render_drain(wait)": 41.01,
+        "encode_flush": 42.22
+      },
+      "stage_calls": {
+        "decode+proxy": 202,
+        "ego_motion_keyframe_select": 202,
+        "keyframe_segmentation(CoralSCOP)": 9,
+        "keyframe_match_reanchor": 1,
+        "classify_make_crops": 9,
+        "dense_flow(DIS)": 201,
+        "warp_labels(remap)": 201,
+        "classify_bioclip(async)": 9,
+        "classify_yolo_bleaching(async)": 9,
+        "render_overlay": 202,
+        "encode_write(ffmpeg)": 202,
+        "async_wait(blocked)": 8,
+        "keyframe_match_reanchor(+warp dets)": 8,
+        "classify_drain(wait at end)": 1,
+        "render_drain(wait)": 1,
+        "encode_flush": 1
+      },
+      "stage_pct_wall": {
+        "decode+proxy": 20.1,
+        "ego_motion_keyframe_select": 16.9,
+        "keyframe_segmentation(CoralSCOP)": 24.9,
+        "keyframe_match_reanchor": 0.1,
+        "classify_make_crops": 0.8,
+        "dense_flow(DIS)": 28.7,
+        "warp_labels(remap)": 3.8,
+        "classify_bioclip(async)": 1.9,
+        "classify_yolo_bleaching(async)": 0.6,
+        "render_overlay": 85.3,
+        "encode_write(ffmpeg)": 10.5,
+        "async_wait(blocked)": 2.4,
+        "keyframe_match_reanchor(+warp dets)": 3.3,
+        "classify_drain(wait at end)": 0.3,
+        "render_drain(wait)": 0.7,
+        "encode_flush": 0.7
+      },
+      "keyframes": [
+        {
+          "new": 9,
+          "matched": 0,
+          "dropped": 0,
+          "kept_stale": 0,
+          "frame": 0,
+          "detections": 9,
+          "lag": 0
+        },
+        {
+          "new": 3,
+          "matched": 3,
+          "dropped": 0,
+          "kept_stale": 5,
+          "frame": 32,
+          "submitted": 25,
+          "detections": 6,
+          "lag": 7
+        },
+        {
+          "new": 8,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 4,
+          "frame": 58,
+          "submitted": 50,
+          "detections": 15,
+          "lag": 8
+        },
+        {
+          "new": 2,
+          "matched": 7,
+          "dropped": 0,
+          "kept_stale": 12,
+          "frame": 82,
+          "submitted": 75,
+          "detections": 9,
+          "lag": 7
+        },
+        {
+          "new": 1,
+          "matched": 4,
+          "dropped": 3,
+          "kept_stale": 14,
+          "frame": 107,
+          "submitted": 100,
+          "detections": 5,
+          "lag": 7
+        },
+        {
+          "new": 1,
+          "matched": 2,
+          "dropped": 1,
+          "kept_stale": 16,
+          "frame": 132,
+          "submitted": 125,
+          "detections": 3,
+          "lag": 7
+        },
+        {
+          "new": 2,
+          "matched": 5,
+          "dropped": 5,
+          "kept_stale": 6,
+          "frame": 157,
+          "submitted": 150,
+          "detections": 7,
+          "lag": 7
+        },
+        {
+          "new": 7,
+          "matched": 8,
+          "dropped": 2,
+          "kept_stale": 3,
+          "frame": 182,
+          "submitted": 175,
+          "detections": 15,
+          "lag": 7
+        },
+        {
+          "new": 3,
+          "matched": 10,
+          "dropped": 1,
+          "kept_stale": 7,
+          "frame": 201,
+          "submitted": 200,
+          "detections": 13,
+          "lag": 1
+        }
+      ],
+      "colonies_seen": 36,
+      "keyframes_skipped": 0,
+      "classification": {
+        "classified": 36,
+        "genus_counts": {
+          "Galaxea": 5,
+          "Goniopora": 2,
+          "Millepora": 22,
+          "Porites": 6,
+          "Seriatopora": 1
+        },
+        "bleached": 16,
+        "colonies": {
+          "1": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 47.5,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 57.7,
+            "first_frame": 0
+          },
+          "2": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 95.7,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 62.4,
+            "first_frame": 0
+          },
+          "3": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.9,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 69.0,
+            "first_frame": 0
+          },
+          "4": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 56.7,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 63.7,
+            "first_frame": 0
+          },
+          "5": {
+            "genus": "Goniopora",
+            "growth_form": "Massive",
+            "taxon_conf": 49.5,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 71.5,
+            "first_frame": 0
+          },
+          "6": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 29.3,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 68.7,
+            "first_frame": 0
+          },
+          "7": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 97.7,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 58.1,
+            "first_frame": 0
+          },
+          "8": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.2,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.5,
+            "first_frame": 0
+          },
+          "9": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 51.4,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 72.7,
+            "first_frame": 0
+          },
+          "10": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 34.1,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 72.0,
+            "first_frame": 32
+          },
+          "11": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 79.9,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 52.6,
+            "first_frame": 32
+          },
+          "12": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 94.6,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 72.5,
+            "first_frame": 32
+          },
+          "13": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 50.8,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 56.7,
+            "first_frame": 58
+          },
+          "14": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 77.9,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.3,
+            "first_frame": 58
+          },
+          "15": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.6,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 53.2,
+            "first_frame": 58
+          },
+          "16": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 84.3,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 70.2,
+            "first_frame": 58
+          },
+          "17": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 63.5,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.0,
+            "first_frame": 58
+          },
+          "18": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.0,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 55.1,
+            "first_frame": 58
+          },
+          "19": {
+            "genus": "Goniopora",
+            "growth_form": "Massive",
+            "taxon_conf": 50.5,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 55.5,
+            "first_frame": 58
+          },
+          "20": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.9,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 64.2,
+            "first_frame": 58
+          },
+          "21": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 31.4,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 70.7,
+            "first_frame": 82
+          },
+          "22": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.6,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 65.9,
+            "first_frame": 82
+          },
+          "23": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 56.7,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 52.7,
+            "first_frame": 107
+          },
+          "24": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 56.3,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 71.0,
+            "first_frame": 132
+          },
+          "25": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 98.8,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 53.2,
+            "first_frame": 157
+          },
+          "26": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.8,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 72.1,
+            "first_frame": 157
+          },
+          "27": {
+            "genus": "Galaxea",
+            "growth_form": "Massive",
+            "taxon_conf": 20.3,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 71.4,
+            "first_frame": 182
+          },
+          "28": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 88.2,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 66.6,
+            "first_frame": 182
+          },
+          "29": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 75.9,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 65.6,
+            "first_frame": 182
+          },
+          "30": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 67.0,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 60.2,
+            "first_frame": 182
+          },
+          "31": {
+            "genus": "Seriatopora",
+            "growth_form": "Branching",
+            "taxon_conf": 45.9,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 58.2,
+            "first_frame": 182
+          },
+          "32": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 98.6,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 56.3,
+            "first_frame": 182
+          },
+          "33": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 48.0,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 70.0,
+            "first_frame": 182
+          },
+          "34": {
+            "genus": "Porites",
+            "growth_form": "Columnar",
+            "taxon_conf": 40.5,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 70.2,
+            "first_frame": 201
+          },
+          "35": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 99.0,
+            "condition": "Healthy",
+            "is_bleached": false,
+            "condition_conf": 68.9,
+            "first_frame": 201
+          },
+          "36": {
+            "genus": "Millepora",
+            "growth_form": "Branching / Encrusting",
+            "taxon_conf": 68.0,
+            "condition": "Bleached",
+            "is_bleached": true,
+            "condition_conf": 55.6,
+            "first_frame": 201
+          }
+        }
+      },
+      "colonies_per_frame_max": 21,
+      "reanchor_iou_mean": 0.712,
+      "reanchor_iou_by_age_frames": {
+        "1-10": {
+          "n": 0,
+          "mean_iou": null
+        },
+        "11-20": {
+          "n": 10,
+          "mean_iou": 0.673
+        },
+        "21-30": {
+          "n": 26,
+          "mean_iou": 0.722
+        },
+        ">30": {
+          "n": 10,
+          "mean_iou": 0.722
+        }
+      }
+    }
+  }
+}
