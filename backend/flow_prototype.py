@@ -36,6 +36,7 @@ from core.segmentation import run_segmentation  # noqa: E402
 from core.video.keyframe_selector import EgoMotionKeyframeSelector  # noqa: E402
 
 IOU_MATCH = 0.30  # same threshold the app uses for keyframe association
+MAX_INFLIGHT = 2  # keyframe jobs allowed in flight (one running + one queued) before a new keyframe is skipped
 MAX_ASYNC_LAG = 90  # frames a keyframe result may lag before the main loop blocks on it
 MAX_MISSED_KEYFRAMES = 4  # drop a colony after it was not re-detected on this many consecutive keyframes
 CONTAIN_MATCH = 0.60  # detection/colony containment that also counts as a match
@@ -262,7 +263,8 @@ def run_once(
     kf_info: List[Dict[str, Any]] = []
     counts: List[int] = []
     seg_pool = ThreadPoolExecutor(max_workers=1)
-    pending = None
+    pendings: List[Dict[str, Any]] = []  # keyframe jobs in flight, oldest first (single worker => FIFO)
+    skipped = 0
 
     def segment(rgb, g_pts, g_mask):
         t0 = time.perf_counter()
@@ -332,19 +334,22 @@ def run_once(
             tm.add("warp_labels(remap)", time.perf_counter() - t0)
 
         info = None
-        if pending is not None:
+        for pend in pendings:
             if flow is not None:
-                pending["flows"].append(flow)
-            if pending["fut"].done() or (n - pending["start"]) > MAX_ASYNC_LAG:
-                t0 = time.perf_counter()
-                dets = pending["fut"].result()
-                tm.add("async_wait(blocked)", time.perf_counter() - t0)
-                labels, next_id, info = apply_async(dets, pending, labels, next_id, n)
-                pending = None
-        if n == 0 or (is_kf and not (opts["async_keyframes"] and pending is not None)):
+                pend["flows"].append(flow)
+        while pendings and (pendings[0]["fut"].done() or (n - pendings[0]["start"]) > MAX_ASYNC_LAG):
+            pend = pendings.pop(0)
+            t0 = time.perf_counter()
+            dets = pend["fut"].result()
+            tm.add("async_wait(blocked)", time.perf_counter() - t0)
+            labels, next_id, info = apply_async(dets, pend, labels, next_id, n)
+        if n == 0 or is_kf:
             g_pts, g_mask = guided_prompts(labels) if (opts["guided_prompts"] and n > 0) else (None, None)
             if opts["async_keyframes"] and n > 0:
-                pending = {"fut": seg_pool.submit(segment, proxy_rgb.copy(), g_pts, g_mask), "flows": [], "start": n}
+                if len(pendings) < MAX_INFLIGHT:
+                    pendings.append({"fut": seg_pool.submit(segment, proxy_rgb.copy(), g_pts, g_mask), "flows": [], "start": n})
+                else:
+                    skipped += 1
             else:
                 dets = segment(proxy_rgb, g_pts, g_mask)
                 t0 = time.perf_counter()
@@ -367,11 +372,11 @@ def run_once(
                 _render_and_write(frame_bgr, labels, text, bool(info))
         n += 1
 
-    if pending is not None:
+    for pend in pendings:
         t0 = time.perf_counter()
-        dets = pending["fut"].result()
+        dets = pend["fut"].result()
         tm.add("async_wait(blocked)", time.perf_counter() - t0)
-        labels, next_id, _ = apply_async(dets, pending, labels, next_id, n - 1)
+        labels, next_id, _ = apply_async(dets, pend, labels, next_id, n - 1)
     seg_pool.shutdown(wait=True)
     t0 = time.perf_counter()
     if render_thread is not None:
@@ -403,6 +408,7 @@ def run_once(
         "stage_pct_wall": {k: round(100 * v / wall, 1) for k, v in tm.t.items()},
         "keyframes": kf_info,
         "colonies_seen": next_id - 1,
+        "keyframes_skipped": skipped,
         "colonies_per_frame_max": max(counts) if counts else 0,
         "reanchor_iou_mean": round(float(np.mean([d[1] for d in drift])), 3) if drift else None,
         "reanchor_iou_by_age_frames": {

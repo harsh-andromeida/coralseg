@@ -27,3 +27,19 @@ Findings: the decoder (about 63% of T4 time) costs per prompt point and is compu
 Thinning the uniform grid is not an option; guided prompts (one point per known colony plus grid points only where nothing is known) cut points without losing colonies.
 The identity matching was also reworked (one-to-one greedy, containment match, stale colonies kept for 4 keyframes): 43 -> 37 colonies in config A.
 Re-anchor IoU of warped masks against fresh detections after ~25 frames of pure flow is about 0.71-0.73.
+
+## All Modal GPUs, async keyframes with queueing (config D; `raw/flowD_*.json`)
+
+Keyframe jobs now queue (one running + one waiting) instead of being skipped: 0 skipped on every GPU, all 9 keyframes ran, and the colony count settled at 34-36 everywhere.
+
+| GPU | wall (s) | FPS | x real time | CoralSCOP ms/keyframe | keyframe lag (frames) |
+|---|---:|---:|---:|---:|---|
+| T4 | 9.4 | 21.4 | 0.86 | 734 | about 21 |
+| L4 | 7.9 | 25.5 | 1.02 | 552 | about 18 |
+| A10G | 6.4 | 31.4 | 1.25 | 349 | about 14 |
+| L40S | 5.7 | 35.2 | 1.41 | 341 | about 15 |
+| A100-40GB | 6.9 | 29.2 | 1.17 | 248 | about 9 |
+| A100-80GB | 8.0 | 25.3 | 1.01 | 278 | about 9 |
+| H100 | 6.1 | 33.4 | 1.33 | 162 | about 7 |
+
+Past an A10G the GPU no longer limits throughput: decode (about 6-10 ms), ego-motion (about 5 ms) and DIS flow (about 8-17 ms per frame) run on the host CPU, so the differences between the faster GPUs are mostly container CPU variance.

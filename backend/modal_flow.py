@@ -82,7 +82,7 @@ def main(extra: str = "", script: str = "flow_prototype.py", tag: str = ""):
     rep = res["report"]
     if "final_pass" in rep:
         r = rep["final_pass"]
-        print(f"[{GPU}/{tag}] wall {r['wall_sec']}s | e2e {r['e2e_fps']} FPS | colonies {r['colonies_seen']} | iou {r['reanchor_iou_mean']}")
+        print(f"[{GPU}/{tag}] wall {r['wall_sec']}s | e2e {r['e2e_fps']} FPS | colonies {r['colonies_seen']} | skipped kf {r.get('keyframes_skipped')} | iou {r['reanchor_iou_mean']}")
     else:
         for r in rep["results"]:
             print(f"[{GPU}] {r['config']:48s} total {r['total_ms']:7.1f} ms  enc {r['encoder_ms']:6.1f}  dec {r['decoder_ms']:6.1f}  masks {r['masks_per_keyframe']} agree {r['mask_agreement_vs_baseline']}")
