@@ -1,0 +1,747 @@
+{
+  "ok": true,
+  "env": {
+    "gpu_requested": "T4",
+    "nvidia_smi": "Tesla T4, 15360 MiB, 620.70.06",
+    "cpu": "Model name:          unknown",
+    "vcpus": 17,
+    "ort_diag": "torch 2.15.0+cu132 cuda 13.2 True\nort 1.32.0 ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']\nnvidia-cublas          13.4.1.3\nnvidia-cuda-runtime    13.2.86\nnvidia-cudnn-cu13      9.26.0.51\nonnxruntime-gpu        1.32.0\n\tlibcublasLt.so.13 => not found\n\tlibcublas.so.13 => not found\n\tlibcurand.so.10 => not found\n\tlibcudart.so.13 => not found",
+    "model_log": "\u001b[0;93m2026-11-14 06:19:34.731757339 [W:onnxruntime:Default, onnxruntime_pybind_state.cc:824 operator()] No registered plugin EP device found for 'CUDAExecutionProvider' with device_id=0\u001b[m\n\u001b[0;93m2026-11-14 06:19:35.919487019 [W:onnxruntime:Default, onnxruntime_pybind_state.cc:824 operator()] No registered plugin EP device found for 'CUDAExecutionProvider' with device_id=0\u001b[m\n\u001b[0;93m2026-11-14 06:19:36.029807635 [W:onnxruntime:, transformer_memcpy.cc:111 ApplyImpl] 5 Memcpy nodes are added to the graph main_graph for CUDAExecutionProvider. It might have negative impact on performance (including unable to run CUDA graph). Set session_options.log_severity_level=1 to see the detail logs before this message.\u001b[m\n\u001b[0;93m2026-11-14 06:19:36.035248336 [W:onnxruntime:, session_state.cc:1618 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.\u001b[m\n  \u26a1 [Model] CoralSCOP SAM sessions successfully loaded on NVIDIA CUDA GPU (CUDAExecutionProvider)!\n\u001b[0;93m2026-11-14 06:19:36.502452377 [W:onnxruntime:Default, onnxruntime_pybind_state.cc:824 operator()] No registered plugin EP device found for 'CUDAExecutionProvider' with device_id=0\u001b[m\n\u001b[0;93m2026-11-14 06:19:36.742331099 [W:onnxruntime:, transformer_memcpy.cc:111 ApplyImpl] 12 Memcpy nodes are added to the graph main_graph for CUDAExecutionProvider. It might have negative impact on performance (including unable to run CUDA graph). Set session_options.log_severity_level=1 to see the detail logs before this message.\u001b[m\n\u001b[0;93m2026-11-14 06:19:36.751581160 [W:onnxruntime:, session_state.cc:1618 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.\u001b[m\n  \u26a1 [Model] BioCLIP session successfully loaded on NVIDIA CUDA GPU (CUDAExecutionProvider)!\n\u001b[0;93m2026-11-14 06:19:36.898138502 [W:onnxruntime:Default, onnxruntime_pybind_state.cc:824 operator()] No registered plugin EP device found for 'CUDAExecutionProvider' with device_id=0\u001b[m\n\u001b[0;93m2026-11-14 06:19:36.913013752 [W:onnxruntime:, session_state.cc:1618 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.\u001b[m\n  \u26a1 [Model] Bleaching YOLO11n session successfully loaded on NVIDIA CUDA GPU (CUDAExecutionProvider)!\n  \u26a1 [Pipeline] Foundation models active (CUDAExecutionProvider)\n  \u26a1 [Pipeline] Foundation models active (CUDAExecutionProvider)\n  \u26a1 [Pipeline] Foundation models active (CUDAExecutionProvider)\n- ORT providers: `['CUDAExecutionProvider', 'CPUExecutionProvider']`   tracker device: `cuda` dtype: `torch.float16`"
+  },
+  "report": {
+    "video": "sample_reef_transect_25fps.mp4",
+    "gpu": {
+      "cuda": true,
+      "name": "Tesla T4",
+      "vram_gib": 14.6,
+      "torch": "2.15.0+cu132"
+    },
+    "ort_providers": [
+      "CUDAExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "tracker_device": "cuda",
+    "tracker_dtype": "torch.float16",
+    "params": {
+      "overlap_threshold": 0.7,
+      "min_stride": 10,
+      "max_stride": 25,
+      "points_per_side": 16,
+      "iou_match_threshold": 0.3,
+      "pred_iou_thresh": 0.5,
+      "stability_thresh": 0.5,
+      "tracker_mode": "sam2",
+      "model_profile": "sam2",
+      "model_size": 512,
+      "precision": null,
+      "worker_count": 1,
+      "compile_tracker": false,
+      "export_mp4": true,
+      "device_pref": "auto"
+    },
+    "tracker_override": [],
+    "cold": {
+      "frames": 202,
+      "video_sec": 8.08,
+      "wall_sec": 101.774,
+      "submit_standardize_sec": 0.022,
+      "model_load_sec": {
+        "coralscop": 2.032,
+        "bioclip": 0.689,
+        "bleaching": 0.042
+      },
+      "pipeline_sec": 96.5,
+      "e2e_fps": 1.98,
+      "pipeline_fps": 2.09,
+      "analysis_fps_excl_export": 2.24,
+      "tracker_fps": 3.03,
+      "realtime_factor": 0.079,
+      "keyframes": 9,
+      "unique_corals": 27,
+      "export_status": "partial",
+      "exports": {
+        "annotated_mp4": false,
+        "transect_csv": true,
+        "coco_json": true
+      },
+      "export_errors": null,
+      "stage_timings": {
+        "total_elapsed_sec": 96.5,
+        "critical_path_elapsed_sec": 96.5,
+        "compile_warmup_sec": 0.0,
+        "initialization_sec": 5.962,
+        "video_decode_prep_sec": 2.231,
+        "motion_scan_sec": 0.0,
+        "chunk_prep_sec": 2.231,
+        "synchronized_gpu_inference_sec": 68.324,
+        "mask_transfer_sec": 0.159,
+        "geometry_extraction_sec": 1.278,
+        "queue_wait_sec": 25.223,
+        "keyframe_discovery_sec": 13.558,
+        "background_classification_sec": 2.171,
+        "keyframe_classification_sec": 2.171,
+        "persistence_sec": 0.167,
+        "export_deliverables_sec": 0.589,
+        "export_annotated_mp4_sec": 5.651,
+        "unaccounted_idle_sec": 4.543,
+        "pct_gpu_inference": 70.8,
+        "pct_video_decode_prep": 2.3,
+        "pct_keyframe_discovery": 14.0,
+        "pct_geometry_and_transfer": 1.5,
+        "pct_persistence": 0.2,
+        "pct_export": 6.5,
+        "pct_unaccounted_idle": 4.7,
+        "unique_colonies_count": 27,
+        "keyframes_count": 9,
+        "committed_frames": 202
+      },
+      "call_stats": {
+        "sam2_load": {
+          "calls": 3,
+          "total_sec": 1.8309,
+          "mean_ms": 610.29,
+          "p50_ms": 0.0,
+          "p95_ms": 1830.87,
+          "max_ms": 1830.87
+        },
+        "sam2_init_video": {
+          "calls": 2,
+          "total_sec": 2.2998,
+          "mean_ms": 1149.92,
+          "p50_ms": 648.13,
+          "p95_ms": 1651.7,
+          "max_ms": 1651.7
+        },
+        "keyframe_segmentation": {
+          "calls": 10,
+          "total_sec": 13.5578,
+          "mean_ms": 1355.78,
+          "p50_ms": 1325.75,
+          "p95_ms": 1583.44,
+          "max_ms": 1583.44
+        },
+        "sam2_register_mask": {
+          "calls": 144,
+          "total_sec": 3.0404,
+          "mean_ms": 21.11,
+          "p50_ms": 17.52,
+          "p95_ms": 30.61,
+          "max_ms": 348.11
+        },
+        "crop_regions": {
+          "calls": 10,
+          "total_sec": 0.0035,
+          "mean_ms": 0.35,
+          "p50_ms": 0.33,
+          "p95_ms": 0.64,
+          "max_ms": 0.64
+        },
+        "bioclip_taxonomy_batch": {
+          "calls": 10,
+          "total_sec": 1.3289,
+          "mean_ms": 132.89,
+          "p50_ms": 127.19,
+          "p95_ms": 238.18,
+          "max_ms": 238.18
+        },
+        "yolo_bleaching_batch": {
+          "calls": 10,
+          "total_sec": 0.8418,
+          "mean_ms": 84.18,
+          "p50_ms": 51.5,
+          "p95_ms": 233.38,
+          "max_ms": 233.38
+        },
+        "sam2_propagate_per_frame": {
+          "calls": 207,
+          "total_sec": 68.2459,
+          "mean_ms": 329.69,
+          "p50_ms": 324.3,
+          "p95_ms": 564.56,
+          "max_ms": 919.55
+        },
+        "sam2_retire_objects": {
+          "calls": 1,
+          "total_sec": 0.0044,
+          "mean_ms": 4.43,
+          "p50_ms": 4.43,
+          "p95_ms": 4.43,
+          "max_ms": 4.43
+        },
+        "export_all": {
+          "calls": 1,
+          "total_sec": 6.2396,
+          "mean_ms": 6239.6,
+          "p50_ms": 6239.6,
+          "p95_ms": 6239.6,
+          "max_ms": 6239.6
+        }
+      },
+      "peak_rss_mb": 8054.8,
+      "peak_vram_alloc_mib": 908.7
+    },
+    "warm_median": {
+      "frames": 202,
+      "video_sec": 8.08,
+      "wall_sec": 96.7,
+      "submit_standardize_sec": 0.017,
+      "model_load_sec": {
+        "coralscop": 0.005,
+        "bioclip": 0.0,
+        "bleaching": 0.0
+      },
+      "pipeline_sec": 96.46,
+      "e2e_fps": 2.09,
+      "pipeline_fps": 2.09,
+      "analysis_fps_excl_export": 2.22,
+      "tracker_fps": 3.02,
+      "realtime_factor": 0.084,
+      "keyframes": 9,
+      "unique_corals": 27,
+      "export_status": "partial",
+      "exports": {
+        "annotated_mp4": false,
+        "transect_csv": true,
+        "coco_json": true
+      },
+      "export_errors": null,
+      "stage_timings": {
+        "total_elapsed_sec": 96.46,
+        "critical_path_elapsed_sec": 96.46,
+        "compile_warmup_sec": 0.0,
+        "initialization_sec": 2.829,
+        "video_decode_prep_sec": 2.27,
+        "motion_scan_sec": 0.0,
+        "chunk_prep_sec": 2.27,
+        "synchronized_gpu_inference_sec": 68.286,
+        "mask_transfer_sec": 0.245,
+        "geometry_extraction_sec": 1.785,
+        "queue_wait_sec": 24.332,
+        "keyframe_discovery_sec": 13.709,
+        "background_classification_sec": 1.556,
+        "keyframe_classification_sec": 1.556,
+        "persistence_sec": 0.198,
+        "export_deliverables_sec": 0.448,
+        "export_annotated_mp4_sec": 5.106,
+        "unaccounted_idle_sec": 4.412,
+        "pct_gpu_inference": 70.8,
+        "pct_video_decode_prep": 2.4,
+        "pct_keyframe_discovery": 14.2,
+        "pct_geometry_and_transfer": 2.1,
+        "pct_persistence": 0.2,
+        "pct_export": 5.8,
+        "pct_unaccounted_idle": 4.6,
+        "unique_colonies_count": 27,
+        "keyframes_count": 9,
+        "committed_frames": 202
+      },
+      "call_stats": {
+        "sam2_load": {
+          "calls": 2,
+          "total_sec": 0.0,
+          "mean_ms": 0.0,
+          "p50_ms": 0.0,
+          "p95_ms": 0.0,
+          "max_ms": 0.0
+        },
+        "sam2_init_video": {
+          "calls": 2,
+          "total_sec": 2.8292,
+          "mean_ms": 1414.62,
+          "p50_ms": 1183.84,
+          "p95_ms": 1645.4,
+          "max_ms": 1645.4
+        },
+        "keyframe_segmentation": {
+          "calls": 10,
+          "total_sec": 13.7085,
+          "mean_ms": 1370.85,
+          "p50_ms": 1346.15,
+          "p95_ms": 1516.71,
+          "max_ms": 1516.71
+        },
+        "sam2_register_mask": {
+          "calls": 144,
+          "total_sec": 2.7747,
+          "mean_ms": 19.27,
+          "p50_ms": 17.94,
+          "p95_ms": 28.57,
+          "max_ms": 60.41
+        },
+        "crop_regions": {
+          "calls": 10,
+          "total_sec": 0.004,
+          "mean_ms": 0.4,
+          "p50_ms": 0.33,
+          "p95_ms": 0.86,
+          "max_ms": 0.86
+        },
+        "bioclip_taxonomy_batch": {
+          "calls": 10,
+          "total_sec": 1.3782,
+          "mean_ms": 137.82,
+          "p50_ms": 102.63,
+          "p95_ms": 293.88,
+          "max_ms": 293.88
+        },
+        "yolo_bleaching_batch": {
+          "calls": 10,
+          "total_sec": 0.1773,
+          "mean_ms": 17.73,
+          "p50_ms": 14.36,
+          "p95_ms": 45.66,
+          "max_ms": 45.66
+        },
+        "sam2_propagate_per_frame": {
+          "calls": 207,
+          "total_sec": 68.4711,
+          "mean_ms": 330.78,
+          "p50_ms": 323.29,
+          "p95_ms": 573.17,
+          "max_ms": 1163.67
+        },
+        "sam2_retire_objects": {
+          "calls": 1,
+          "total_sec": 0.0043,
+          "mean_ms": 4.34,
+          "p50_ms": 4.34,
+          "p95_ms": 4.34,
+          "max_ms": 4.34
+        },
+        "export_all": {
+          "calls": 1,
+          "total_sec": 5.5542,
+          "mean_ms": 5554.17,
+          "p50_ms": 5554.17,
+          "p95_ms": 5554.17,
+          "max_ms": 5554.17
+        }
+      },
+      "peak_rss_mb": 8735.5,
+      "peak_vram_alloc_mib": 907.7
+    },
+    "all_runs": [
+      {
+        "frames": 202,
+        "video_sec": 8.08,
+        "wall_sec": 101.774,
+        "submit_standardize_sec": 0.022,
+        "model_load_sec": {
+          "coralscop": 2.032,
+          "bioclip": 0.689,
+          "bleaching": 0.042
+        },
+        "pipeline_sec": 96.5,
+        "e2e_fps": 1.98,
+        "pipeline_fps": 2.09,
+        "analysis_fps_excl_export": 2.24,
+        "tracker_fps": 3.03,
+        "realtime_factor": 0.079,
+        "keyframes": 9,
+        "unique_corals": 27,
+        "export_status": "partial",
+        "exports": {
+          "annotated_mp4": false,
+          "transect_csv": true,
+          "coco_json": true
+        },
+        "export_errors": null,
+        "stage_timings": {
+          "total_elapsed_sec": 96.5,
+          "critical_path_elapsed_sec": 96.5,
+          "compile_warmup_sec": 0.0,
+          "initialization_sec": 5.962,
+          "video_decode_prep_sec": 2.231,
+          "motion_scan_sec": 0.0,
+          "chunk_prep_sec": 2.231,
+          "synchronized_gpu_inference_sec": 68.324,
+          "mask_transfer_sec": 0.159,
+          "geometry_extraction_sec": 1.278,
+          "queue_wait_sec": 25.223,
+          "keyframe_discovery_sec": 13.558,
+          "background_classification_sec": 2.171,
+          "keyframe_classification_sec": 2.171,
+          "persistence_sec": 0.167,
+          "export_deliverables_sec": 0.589,
+          "export_annotated_mp4_sec": 5.651,
+          "unaccounted_idle_sec": 4.543,
+          "pct_gpu_inference": 70.8,
+          "pct_video_decode_prep": 2.3,
+          "pct_keyframe_discovery": 14.0,
+          "pct_geometry_and_transfer": 1.5,
+          "pct_persistence": 0.2,
+          "pct_export": 6.5,
+          "pct_unaccounted_idle": 4.7,
+          "unique_colonies_count": 27,
+          "keyframes_count": 9,
+          "committed_frames": 202
+        },
+        "call_stats": {
+          "sam2_load": {
+            "calls": 3,
+            "total_sec": 1.8309,
+            "mean_ms": 610.29,
+            "p50_ms": 0.0,
+            "p95_ms": 1830.87,
+            "max_ms": 1830.87
+          },
+          "sam2_init_video": {
+            "calls": 2,
+            "total_sec": 2.2998,
+            "mean_ms": 1149.92,
+            "p50_ms": 648.13,
+            "p95_ms": 1651.7,
+            "max_ms": 1651.7
+          },
+          "keyframe_segmentation": {
+            "calls": 10,
+            "total_sec": 13.5578,
+            "mean_ms": 1355.78,
+            "p50_ms": 1325.75,
+            "p95_ms": 1583.44,
+            "max_ms": 1583.44
+          },
+          "sam2_register_mask": {
+            "calls": 144,
+            "total_sec": 3.0404,
+            "mean_ms": 21.11,
+            "p50_ms": 17.52,
+            "p95_ms": 30.61,
+            "max_ms": 348.11
+          },
+          "crop_regions": {
+            "calls": 10,
+            "total_sec": 0.0035,
+            "mean_ms": 0.35,
+            "p50_ms": 0.33,
+            "p95_ms": 0.64,
+            "max_ms": 0.64
+          },
+          "bioclip_taxonomy_batch": {
+            "calls": 10,
+            "total_sec": 1.3289,
+            "mean_ms": 132.89,
+            "p50_ms": 127.19,
+            "p95_ms": 238.18,
+            "max_ms": 238.18
+          },
+          "yolo_bleaching_batch": {
+            "calls": 10,
+            "total_sec": 0.8418,
+            "mean_ms": 84.18,
+            "p50_ms": 51.5,
+            "p95_ms": 233.38,
+            "max_ms": 233.38
+          },
+          "sam2_propagate_per_frame": {
+            "calls": 207,
+            "total_sec": 68.2459,
+            "mean_ms": 329.69,
+            "p50_ms": 324.3,
+            "p95_ms": 564.56,
+            "max_ms": 919.55
+          },
+          "sam2_retire_objects": {
+            "calls": 1,
+            "total_sec": 0.0044,
+            "mean_ms": 4.43,
+            "p50_ms": 4.43,
+            "p95_ms": 4.43,
+            "max_ms": 4.43
+          },
+          "export_all": {
+            "calls": 1,
+            "total_sec": 6.2396,
+            "mean_ms": 6239.6,
+            "p50_ms": 6239.6,
+            "p95_ms": 6239.6,
+            "max_ms": 6239.6
+          }
+        },
+        "peak_rss_mb": 8054.8,
+        "peak_vram_alloc_mib": 908.7
+      },
+      {
+        "frames": 202,
+        "video_sec": 8.08,
+        "wall_sec": 95.645,
+        "submit_standardize_sec": 0.017,
+        "model_load_sec": {
+          "coralscop": 0.008,
+          "bioclip": 0.0,
+          "bleaching": 0.0
+        },
+        "pipeline_sec": 95.48,
+        "e2e_fps": 2.11,
+        "pipeline_fps": 2.12,
+        "analysis_fps_excl_export": 2.26,
+        "tracker_fps": 3.05,
+        "realtime_factor": 0.084,
+        "keyframes": 9,
+        "unique_corals": 27,
+        "export_status": "partial",
+        "exports": {
+          "annotated_mp4": false,
+          "transect_csv": true,
+          "coco_json": true
+        },
+        "export_errors": null,
+        "stage_timings": {
+          "total_elapsed_sec": 95.48,
+          "critical_path_elapsed_sec": 95.48,
+          "compile_warmup_sec": 0.0,
+          "initialization_sec": 1.528,
+          "video_decode_prep_sec": 2.328,
+          "motion_scan_sec": 0.0,
+          "chunk_prep_sec": 2.328,
+          "synchronized_gpu_inference_sec": 67.861,
+          "mask_transfer_sec": 0.163,
+          "geometry_extraction_sec": 1.275,
+          "queue_wait_sec": 24.063,
+          "keyframe_discovery_sec": 13.645,
+          "background_classification_sec": 1.629,
+          "keyframe_classification_sec": 1.629,
+          "persistence_sec": 0.192,
+          "export_deliverables_sec": 0.468,
+          "export_annotated_mp4_sec": 5.701,
+          "unaccounted_idle_sec": 3.847,
+          "pct_gpu_inference": 71.1,
+          "pct_video_decode_prep": 2.4,
+          "pct_keyframe_discovery": 14.3,
+          "pct_geometry_and_transfer": 1.5,
+          "pct_persistence": 0.2,
+          "pct_export": 6.5,
+          "pct_unaccounted_idle": 4.0,
+          "unique_colonies_count": 27,
+          "keyframes_count": 9,
+          "committed_frames": 202
+        },
+        "call_stats": {
+          "sam2_load": {
+            "calls": 2,
+            "total_sec": 0.0,
+            "mean_ms": 0.0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.01,
+            "max_ms": 0.01
+          },
+          "sam2_init_video": {
+            "calls": 2,
+            "total_sec": 1.528,
+            "mean_ms": 764.0,
+            "p50_ms": 598.8,
+            "p95_ms": 929.2,
+            "max_ms": 929.2
+          },
+          "keyframe_segmentation": {
+            "calls": 10,
+            "total_sec": 13.6449,
+            "mean_ms": 1364.49,
+            "p50_ms": 1330.66,
+            "p95_ms": 1468.93,
+            "max_ms": 1468.93
+          },
+          "sam2_register_mask": {
+            "calls": 144,
+            "total_sec": 2.8426,
+            "mean_ms": 19.74,
+            "p50_ms": 17.95,
+            "p95_ms": 31.81,
+            "max_ms": 75.98
+          },
+          "crop_regions": {
+            "calls": 10,
+            "total_sec": 0.0042,
+            "mean_ms": 0.42,
+            "p50_ms": 0.36,
+            "p95_ms": 0.89,
+            "max_ms": 0.89
+          },
+          "bioclip_taxonomy_batch": {
+            "calls": 10,
+            "total_sec": 1.3079,
+            "mean_ms": 130.79,
+            "p50_ms": 122.98,
+            "p95_ms": 230.13,
+            "max_ms": 230.13
+          },
+          "yolo_bleaching_batch": {
+            "calls": 10,
+            "total_sec": 0.3212,
+            "mean_ms": 32.12,
+            "p50_ms": 24.73,
+            "p95_ms": 70.84,
+            "max_ms": 70.84
+          },
+          "sam2_propagate_per_frame": {
+            "calls": 207,
+            "total_sec": 67.8833,
+            "mean_ms": 327.94,
+            "p50_ms": 320.87,
+            "p95_ms": 526.94,
+            "max_ms": 1144.03
+          },
+          "sam2_retire_objects": {
+            "calls": 1,
+            "total_sec": 0.0044,
+            "mean_ms": 4.43,
+            "p50_ms": 4.43,
+            "p95_ms": 4.43,
+            "max_ms": 4.43
+          },
+          "export_all": {
+            "calls": 1,
+            "total_sec": 6.169,
+            "mean_ms": 6169.0,
+            "p50_ms": 6169.0,
+            "p95_ms": 6169.0,
+            "max_ms": 6169.0
+          }
+        },
+        "peak_rss_mb": 8686.4,
+        "peak_vram_alloc_mib": 908.7
+      },
+      {
+        "frames": 202,
+        "video_sec": 8.08,
+        "wall_sec": 96.7,
+        "submit_standardize_sec": 0.017,
+        "model_load_sec": {
+          "coralscop": 0.005,
+          "bioclip": 0.0,
+          "bleaching": 0.0
+        },
+        "pipeline_sec": 96.46,
+        "e2e_fps": 2.09,
+        "pipeline_fps": 2.09,
+        "analysis_fps_excl_export": 2.22,
+        "tracker_fps": 3.02,
+        "realtime_factor": 0.084,
+        "keyframes": 9,
+        "unique_corals": 27,
+        "export_status": "partial",
+        "exports": {
+          "annotated_mp4": false,
+          "transect_csv": true,
+          "coco_json": true
+        },
+        "export_errors": null,
+        "stage_timings": {
+          "total_elapsed_sec": 96.46,
+          "critical_path_elapsed_sec": 96.46,
+          "compile_warmup_sec": 0.0,
+          "initialization_sec": 2.829,
+          "video_decode_prep_sec": 2.27,
+          "motion_scan_sec": 0.0,
+          "chunk_prep_sec": 2.27,
+          "synchronized_gpu_inference_sec": 68.286,
+          "mask_transfer_sec": 0.245,
+          "geometry_extraction_sec": 1.785,
+          "queue_wait_sec": 24.332,
+          "keyframe_discovery_sec": 13.709,
+          "background_classification_sec": 1.556,
+          "keyframe_classification_sec": 1.556,
+          "persistence_sec": 0.198,
+          "export_deliverables_sec": 0.448,
+          "export_annotated_mp4_sec": 5.106,
+          "unaccounted_idle_sec": 4.412,
+          "pct_gpu_inference": 70.8,
+          "pct_video_decode_prep": 2.4,
+          "pct_keyframe_discovery": 14.2,
+          "pct_geometry_and_transfer": 2.1,
+          "pct_persistence": 0.2,
+          "pct_export": 5.8,
+          "pct_unaccounted_idle": 4.6,
+          "unique_colonies_count": 27,
+          "keyframes_count": 9,
+          "committed_frames": 202
+        },
+        "call_stats": {
+          "sam2_load": {
+            "calls": 2,
+            "total_sec": 0.0,
+            "mean_ms": 0.0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+            "max_ms": 0.0
+          },
+          "sam2_init_video": {
+            "calls": 2,
+            "total_sec": 2.8292,
+            "mean_ms": 1414.62,
+            "p50_ms": 1183.84,
+            "p95_ms": 1645.4,
+            "max_ms": 1645.4
+          },
+          "keyframe_segmentation": {
+            "calls": 10,
+            "total_sec": 13.7085,
+            "mean_ms": 1370.85,
+            "p50_ms": 1346.15,
+            "p95_ms": 1516.71,
+            "max_ms": 1516.71
+          },
+          "sam2_register_mask": {
+            "calls": 144,
+            "total_sec": 2.7747,
+            "mean_ms": 19.27,
+            "p50_ms": 17.94,
+            "p95_ms": 28.57,
+            "max_ms": 60.41
+          },
+          "crop_regions": {
+            "calls": 10,
+            "total_sec": 0.004,
+            "mean_ms": 0.4,
+            "p50_ms": 0.33,
+            "p95_ms": 0.86,
+            "max_ms": 0.86
+          },
+          "bioclip_taxonomy_batch": {
+            "calls": 10,
+            "total_sec": 1.3782,
+            "mean_ms": 137.82,
+            "p50_ms": 102.63,
+            "p95_ms": 293.88,
+            "max_ms": 293.88
+          },
+          "yolo_bleaching_batch": {
+            "calls": 10,
+            "total_sec": 0.1773,
+            "mean_ms": 17.73,
+            "p50_ms": 14.36,
+            "p95_ms": 45.66,
+            "max_ms": 45.66
+          },
+          "sam2_propagate_per_frame": {
+            "calls": 207,
+            "total_sec": 68.4711,
+            "mean_ms": 330.78,
+            "p50_ms": 323.29,
+            "p95_ms": 573.17,
+            "max_ms": 1163.67
+          },
+          "sam2_retire_objects": {
+            "calls": 1,
+            "total_sec": 0.0043,
+            "mean_ms": 4.34,
+            "p50_ms": 4.34,
+            "p95_ms": 4.34,
+            "max_ms": 4.34
+          },
+          "export_all": {
+            "calls": 1,
+            "total_sec": 5.5542,
+            "mean_ms": 5554.17,
+            "p50_ms": 5554.17,
+            "p95_ms": 5554.17,
+            "max_ms": 5554.17
+          }
+        },
+        "peak_rss_mb": 8735.5,
+        "peak_vram_alloc_mib": 907.7
+      }
+    ]
+  },
+  "markdown": "### Tesla T4  (sample_reef_transect_25fps.mp4, 202 frames, 8.08s)\n\n- ORT providers: `['CUDAExecutionProvider', 'CPUExecutionProvider']`   tracker device: `cuda` dtype: `torch.float16`\n- cold run wall 101.774s  |  warm median wall 96.7s\n- **e2e 2.09 FPS** | pipeline 2.09 FPS | analysis (no export) 2.22 FPS | tracker 3.02 FPS | realtime x0.084\n- keyframes 9 | corals 27 | peak VRAM 907.7 MiB\n- cold model load: {'coralscop': 2.032, 'bioclip': 0.689, 'bleaching': 0.042}\n\n| stage | sec | % wall | ms/frame |\n|---|---:|---:|---:|\n| submit + 25fps standardise | 0.017 | 0.0 | 0.08 |\n| decode / ego-motion prep | 2.270 | 2.3 | 11.24 |\n| SAM2 propagation (GPU) | 68.286 | 70.6 | 338.05 |\n| mask transfer GPU->CPU | 0.245 | 0.3 | 1.21 |\n| geometry (contours) | 1.785 | 1.8 | 8.84 |\n| keyframe discovery (CoralSCOP) | 13.709 | 14.2 | 67.87 |\n| classification (async BioCLIP+YOLO) | 1.556 | 1.6 | 7.70 |\n| persistence (SQLite) | 0.198 | 0.2 | 0.98 |\n| export CSV+COCO | 0.448 | 0.5 | 2.22 |\n| export annotated MP4 | 5.106 | 5.3 | 25.28 |\n| unaccounted / idle | 4.412 | 4.6 | 21.84 |\n\n| call | n | mean ms | p50 | p95 | max |\n|---|---:|---:|---:|---:|---:|\n| bioclip_taxonomy_batch | 10 | 137.82 | 102.63 | 293.88 | 293.88 |\n| crop_regions | 10 | 0.4 | 0.33 | 0.86 | 0.86 |\n| export_all | 1 | 5554.17 | 5554.17 | 5554.17 | 5554.17 |\n| keyframe_segmentation | 10 | 1370.85 | 1346.15 | 1516.71 | 1516.71 |\n| sam2_init_video | 2 | 1414.62 | 1183.84 | 1645.4 | 1645.4 |\n| sam2_load | 2 | 0.0 | 0.0 | 0.0 | 0.0 |\n| sam2_propagate_per_frame | 207 | 330.78 | 323.29 | 573.17 | 1163.67 |\n| sam2_register_mask | 144 | 19.27 | 17.94 | 28.57 | 60.41 |\n| sam2_retire_objects | 1 | 4.34 | 4.34 | 4.34 | 4.34 |\n| yolo_bleaching_batch | 10 | 17.73 | 14.36 | 45.66 | 45.66 |\n"
+}
