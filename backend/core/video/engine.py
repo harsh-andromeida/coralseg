@@ -10,6 +10,7 @@ import time
 import queue
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Optional, Callable, Tuple
 
 try:
@@ -617,6 +618,37 @@ class VideoProcessor:
                     keyframes_count=len(keyframe_indices), keyframe_indices=sorted(keyframe_indices),
                 )
 
+        # Polygon extraction for frame n runs in a worker while frame n+1 is decoded and flow-tracked.
+        geo_pool = ThreadPoolExecutor(max_workers=1)
+        pending: Optional[Tuple[int, Any, Any]] = None  # (frame index, FlowStep, geometry future)
+
+        def _commit_pending():
+            nonlocal pending, t_geometry
+            if pending is None:
+                return
+            idx, step, fut = pending
+            pending = None
+            t0 = time.perf_counter()
+            geometry = fut.result()
+            t_geometry += time.perf_counter() - t0  # only the time actually spent waiting
+            for cid, g in geometry.items():
+                trk = tracks.get(cid)
+                if trk is None:
+                    tracks[cid] = CoralTrack(
+                        track_id=cid, bbox=g["bbox"], polygon=g["polygon"], area_px=g["area_px"],
+                        area_pct=g["area_pct"], predicted_iou=0.85, centroid=g["centroid"],
+                        color_rgb=colony_color(cid), frame_idx=idx,
+                    )
+                else:
+                    trk.update_geometry(
+                        bbox=g["bbox"], polygon=g["polygon"], centroid=g["centroid"], area_px=g["area_px"],
+                        area_pct=g["area_pct"], frame_idx=idx,
+                    )
+            for cid, trk in tracks.items():
+                trk.active = cid in geometry
+            _apply_classifications()
+            _record_frame(idx, [tracks[c] for c in geometry], step)
+
         try:
             frame_idx = 0
             while True:
@@ -631,33 +663,15 @@ class VideoProcessor:
                 if not ok:
                     break
 
-                step = tracker.step(frame_bgr)
+                step = tracker.step(frame_bgr)  # step.labels is never modified afterwards, so it is safe to share
                 if step.is_keyframe or frame_idx == 0:
                     keyframe_indices.add(frame_idx)
-
-                t0 = time.perf_counter()
-                geometry = labels_to_geometry(step.labels, width, height)
-                for cid, g in geometry.items():
-                    trk = tracks.get(cid)
-                    if trk is None:
-                        tracks[cid] = CoralTrack(
-                            track_id=cid, bbox=g["bbox"], polygon=g["polygon"], area_px=g["area_px"],
-                            area_pct=g["area_pct"], predicted_iou=0.85, centroid=g["centroid"],
-                            color_rgb=colony_color(cid), frame_idx=frame_idx,
-                        )
-                    else:
-                        trk.update_geometry(
-                            bbox=g["bbox"], polygon=g["polygon"], centroid=g["centroid"], area_px=g["area_px"],
-                            area_pct=g["area_pct"], frame_idx=frame_idx,
-                        )
-                for cid, trk in tracks.items():
-                    trk.active = cid in geometry
-                t_geometry += time.perf_counter() - t0
-
-                _apply_classifications()
-                _record_frame(frame_idx, [tracks[c] for c in geometry], step)
+                fut = geo_pool.submit(labels_to_geometry, step.labels, width, height)
+                _commit_pending()
+                pending = (frame_idx, step, fut)
                 frame_idx += 1
 
+            _commit_pending()
             tracker.finish()
             _apply_classifications()
             _flush_frames()
@@ -732,4 +746,5 @@ class VideoProcessor:
                        log_entry=f"ERROR: {err_msg}")
         finally:
             cap.release()
+            geo_pool.shutdown(wait=False)
             tracker.cancel()

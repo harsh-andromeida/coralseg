@@ -20,6 +20,9 @@ import numpy as np
 from core.video.video_export import export_annotated_video, export_transect_csv, export_coco_video
 
 
+POLYGON_EPSILON_PX = 1.0  # outline simplification tolerance, in label-image pixels
+
+
 def colony_color(colony_id: int) -> Tuple[int, int, int]:
     """Stable, well-separated RGB colour per colony id (golden-ratio hue walk)."""
     h = (colony_id * 0.61803398875) % 1.0
@@ -61,7 +64,9 @@ def labels_to_geometry(labels: np.ndarray, width: int, height: int, min_pixels: 
         outline = max(contours, key=cv2.contourArea)
         if len(outline) < 3:
             continue
-        polygon = [[int(round((px + x0) * fx)), int(round((py + y0) * fy))] for px, py in outline[:, 0, :]]
+        simplified = cv2.approxPolyDP(outline, POLYGON_EPSILON_PX, True)
+        pts = (simplified if len(simplified) >= 3 else outline)[:, 0, :]
+        polygon = np.rint((pts + (x0, y0)) * (fx, fy)).astype(np.int32).tolist()
         area_px = int(round(int(counts[k]) * fx * fy))
         out[cid] = {
             "bbox": [int(round(x0 * fx)), int(round(y0 * fy)),

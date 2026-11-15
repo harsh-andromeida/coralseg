@@ -46,12 +46,13 @@ The mask decoder (about 63% of T4 time) costs per prompt point and is compute-bo
 
 | | SAM2 pipeline (before) | flow pipeline (app engine) |
 |---|---:|---:|
-| wall time, end to end with exports | 96.7 s | 16.3 s |
-| end-to-end FPS | 2.1 | 12.4 |
-| processing loop only (what the job's FPS readout shows) | 2.1 | about 18 |
-| colonies | 27 | 31 |
+| wall time, end to end with exports | 96.7 s | 12.3 s |
+| end-to-end FPS | 2.1 | 16.4 |
+| processing loop only (what the job's FPS readout shows) | 2.1 | about 25 |
+| colonies | 27 | 29 |
 
-Main-thread cost per frame in the app: decode 8.5 ms, ego-motion 5 ms, flow + warp 13 ms, label-to-polygon geometry 16 ms; CoralSCOP keyframes (0.78 s each) run in the background. Geometry extraction is now the largest single per-frame cost and the next thing to optimise.
+Main-thread cost per frame in the app: decode 12 ms, ego-motion 5 ms, flow + warp 11 ms; CoralSCOP keyframes (0.74 s each) run in the background.
+Polygon extraction (`labels_to_geometry`) was the largest per-frame cost (16 ms). Outlines are now simplified (1 px tolerance, about 6x fewer points) and scaled with numpy, and the work runs in a worker thread one frame behind the tracker, so it no longer sits on the main loop (4 ms per call, hidden).
 The annotated MP4 export used to be rejected as "unreadable or corrupted" on every run (ffmpeg was not given time to finalise the file); that is fixed.
 
 ## Reproduce
