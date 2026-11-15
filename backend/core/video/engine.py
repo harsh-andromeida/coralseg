@@ -36,6 +36,46 @@ from core.video.pipeline_stages import (
 )
 
 
+class _FramePrefetcher:
+    """Decodes frames on a reader thread (cv2 releases the GIL) so decode overlaps with tracking."""
+
+    _END = object()
+
+    def __init__(self, cap, depth: int = 8):
+        self._cap = cap
+        self._q: "queue.Queue" = queue.Queue(maxsize=depth)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _put(self, item) -> bool:
+        while not self._stop.is_set():
+            try:
+                self._q.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _run(self):
+        try:
+            while not self._stop.is_set():
+                ok, frame = self._cap.read()
+                if not ok or not self._put(frame):
+                    break
+        finally:
+            self._put(self._END)
+
+    def read(self):
+        """Next frame, or None at end of video."""
+        item = self._q.get()
+        return None if item is self._END else item
+
+    def close(self):
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
 class VideoJobState:
     QUEUED = "queued"
     PREPARING = "preparing"
@@ -620,6 +660,7 @@ class VideoProcessor:
 
         # Polygon extraction for frame n runs in a worker while frame n+1 is decoded and flow-tracked.
         geo_pool = ThreadPoolExecutor(max_workers=1)
+        prefetch = _FramePrefetcher(cap)
         pending: Optional[Tuple[int, Any, Any]] = None  # (frame index, FlowStep, geometry future)
 
         def _commit_pending():
@@ -658,9 +699,9 @@ class VideoProcessor:
                     time.sleep(0.1)
 
                 t0 = time.perf_counter()
-                ok, frame_bgr = cap.read()
+                frame_bgr = prefetch.read()  # time spent waiting for the decoder thread
                 t_decode += time.perf_counter() - t0
-                if not ok:
+                if frame_bgr is None:
                     break
 
                 step = tracker.step(frame_bgr)  # step.labels is never modified afterwards, so it is safe to share
@@ -688,49 +729,72 @@ class VideoProcessor:
                         f"Committed {len(committed_frames)}/{total_frames} frames."
                     )
 
-                with self._lock:
-                    job["state"] = VideoJobState.FINALIZING
-                self.store.set_job_state(job_id, VideoJobState.FINALIZING)
-                _set_stage(stage="Finalizing survey deliverables...", model="Transect Exporter",
-                           action="Generating analytics CSV and COCO dataset", detail="Writing survey deliverables to cache")
-
-                exports = run_deliverable_exports(
-                    cache_dir=self.cache_dir, job_id=job_id, filename=job["filename"], video_path=video_path,
-                    width=width, height=height, total_frames=total_frames, fps=video_fps,
-                    tracks=list(tracks.values()), time_series_data=self.store.get_time_series(job_id),
-                    frame_adapter=StoreFrameMapAdapter(self.store, job_id),
-                    export_mp4=opts.get("export_mp4", True), set_stage=_set_stage,
-                )
-                t_export_deliv, t_export_mp4 = exports.deliverables_sec, exports.mp4_sec
-
+                # Results are final once every frame is persisted: report completion now and write the
+                # deliverables (CSV, COCO, annotated MP4) in the background; export_status tracks them.
                 elapsed_total = round(time.time() - pipeline_start, 2)
-                _set_stage(
-                    stage="Transect analysis completed", model="Completed", action="Ready for playback & review",
-                    detail=f"Tracked {len(tracks)} unique corals in {elapsed_total}s ({job['analysis_fps']} FPS)",
-                    log_entry=(f"Survey finished: {len(tracks)} corals, {job['bleaching_prevalence_pct']}% bleaching "
-                               f"across {len(committed_frames)} frames in {elapsed_total}s (export_status={exports.status})"),
-                )
                 tm = tracker.timings
-                pipeline_timings = build_pipeline_timings(
-                    elapsed_total=elapsed_total, model_load_sec=t_model_load, decode_sec=t_decode + tm["proxy"],
-                    ego_motion_sec=tm["ego_motion"], flow_sec=tm["flow"] + tm["warp"], geometry_sec=t_geometry,
-                    keyframe_blocked_sec=tm["blocked_on_keyframe"], keyframe_segmentation_sec=tm["keyframe_segmentation"],
-                    classification_sec=tm["classification"], persistence_sec=t_persistence,
-                    export_deliverables_sec=t_export_deliv, export_mp4_sec=t_export_mp4,
-                    unique_colonies=len(tracks), keyframes_count=len(keyframe_indices),
-                    committed_frames=len(committed_frames),
+                tracks_snapshot = list(tracks.values())
+                n_tracks, n_frames, n_keyframes = len(tracks), len(committed_frames), len(keyframe_indices)
+                _set_stage(
+                    stage="Tracking complete", model="Transect Exporter",
+                    action="Results ready for playback; writing survey deliverables in the background",
+                    detail=f"Tracked {n_tracks} unique corals in {elapsed_total}s ({job['analysis_fps']} FPS)",
+                    log_entry=(f"Tracking finished: {n_tracks} corals, {job['bleaching_prevalence_pct']}% bleaching "
+                               f"across {n_frames} frames in {elapsed_total}s; exporting deliverables"),
                 )
                 with self._lock:
-                    job["timings"] = pipeline_timings
                     job["state"] = VideoJobState.COMPLETED
                     job["completed_at"] = time.time()
-                    job["export_status"] = exports.status
-                    job["export_paths"] = exports.paths
-                    job["export_errors"] = exports.errors
+                    job["export_status"] = "pending"
                 self.store.set_job_state(
-                    job_id=job_id, state=VideoJobState.COMPLETED, completed_at=time.time(),
-                    export_paths=exports.paths, export_status=exports.status, timings=pipeline_timings,
+                    job_id=job_id, state=VideoJobState.COMPLETED, completed_at=time.time(), export_status="pending",
                 )
+                loop_timings = dict(
+                    decode_sec=t_decode + tm["proxy"], ego_motion_sec=tm["ego_motion"], flow_sec=tm["flow"] + tm["warp"],
+                    geometry_sec=t_geometry, keyframe_blocked_sec=tm["blocked_on_keyframe"],
+                    keyframe_segmentation_sec=tm["keyframe_segmentation"], classification_sec=tm["classification"],
+                    persistence_sec=t_persistence,
+                )
+
+                def _export_in_background():
+                    try:
+                        exports = run_deliverable_exports(
+                            cache_dir=self.cache_dir, job_id=job_id, filename=job["filename"], video_path=video_path,
+                            width=width, height=height, total_frames=total_frames, fps=video_fps,
+                            tracks=tracks_snapshot, time_series_data=self.store.get_time_series(job_id),
+                            frame_adapter=StoreFrameMapAdapter(self.store, job_id),
+                            export_mp4=opts.get("export_mp4", True), set_stage=_set_stage,
+                        )
+                        total = round(time.time() - pipeline_start, 2)
+                        timings = build_pipeline_timings(
+                            elapsed_total=total, model_load_sec=t_model_load,
+                            export_deliverables_sec=exports.deliverables_sec, export_mp4_sec=exports.mp4_sec,
+                            unique_colonies=n_tracks, keyframes_count=n_keyframes, committed_frames=n_frames,
+                            **loop_timings,
+                        )
+                        _set_stage(
+                            stage="Transect analysis completed", model="Completed", action="Ready for playback & review",
+                            log_entry=(f"Deliverables {exports.status} in {round(exports.deliverables_sec + exports.mp4_sec, 1)}s "
+                                       f"(total {total}s)"),
+                        )
+                        with self._lock:
+                            job["timings"] = timings
+                            job["export_status"] = exports.status
+                            job["export_paths"] = exports.paths
+                            job["export_errors"] = exports.errors
+                        self.store.set_job_state(
+                            job_id=job_id, state=VideoJobState.COMPLETED, export_paths=exports.paths,
+                            export_status=exports.status, timings=timings,
+                        )
+                    except Exception as exp_err:
+                        traceback.print_exc()
+                        with self._lock:
+                            job["export_status"] = "failed"
+                            job["export_errors"] = {"export": str(exp_err)}
+                        self.store.set_job_state(job_id=job_id, state=VideoJobState.COMPLETED, export_status="failed")
+                        _set_stage(log_entry=f"Export failed: {exp_err}")
+
+                threading.Thread(target=_export_in_background, daemon=True, name=f"export-{job_id}").start()
 
         except Exception as e:
             traceback.print_exc()
@@ -745,6 +809,7 @@ class VideoProcessor:
             _set_stage(stage="Pipeline execution halted on error", model="Error", detail=err_msg,
                        log_entry=f"ERROR: {err_msg}")
         finally:
+            prefetch.close()
             cap.release()
             geo_pool.shutdown(wait=False)
             tracker.cancel()

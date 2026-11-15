@@ -164,9 +164,11 @@ def run_job(processor, video: str, params: Dict[str, Any], poll_ui: str = "off")
     while True:
         time.sleep(0.25)
         job = processor.get_job(job_id)
-        if t_loop_done is None and job and job.get("state") == engine.VideoJobState.FINALIZING:
-            t_loop_done = time.perf_counter() - t0
-        if job and job.get("state") in (engine.VideoJobState.COMPLETED, engine.VideoJobState.ERROR, engine.VideoJobState.CANCELLED):
+        if job and job.get("state") == engine.VideoJobState.COMPLETED and t_loop_done is None:
+            t_loop_done = time.perf_counter() - t0  # results usable from here; exports may still be pending
+        if job and job.get("state") in (engine.VideoJobState.ERROR, engine.VideoJobState.CANCELLED):
+            break
+        if job and job.get("state") == engine.VideoJobState.COMPLETED and job.get("export_status") != "pending":
             break
     wall = time.perf_counter() - t0
     sampler.stop_evt.set()

@@ -259,7 +259,8 @@ def test_video_api_endpoints():
             s_resp = client.get(f"/api/video/status/{job_id}")
             assert s_resp.status_code == 200
             s_data = s_resp.json()
-            if s_data["state"] in ("completed", "error"):
+            # "completed" means tracking is done; the deliverables are written in the background
+            if s_data["state"] == "error" or (s_data["state"] == "completed" and s_data.get("export_status") != "pending"):
                 completed = True
                 break
 
@@ -340,7 +341,7 @@ def test_real_video_sample_pipeline():
         s_data = s_resp.json()
         if poll_idx % 15 == 0:
             print(f"    Progress: frame {s_data.get('current_frame', 0)}/{s_data.get('total_frames', 0)} ({s_data.get('progress_pct', 0.0):.1f}%) | state={s_data.get('state')} | analysis_fps={s_data.get('analysis_fps', 0.0)}")
-        if s_data["state"] in ("completed", "error"):
+        if s_data["state"] == "error" or (s_data["state"] == "completed" and s_data.get("export_status") != "pending"):
             break
 
     assert s_data["state"] == "completed", f"Job failed: {s_data.get('error')}"

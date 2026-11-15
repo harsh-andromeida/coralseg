@@ -186,7 +186,9 @@ export const VideoAnalysisView: React.FC<VideoAnalysisViewProps> = ({
         }
 
         // Only clear interval when job is in terminal state AND all pages have been drained
-        const isJobTerminal = s.state === "completed" || s.state === "error" || s.state === "cancelled";
+        // Completed jobs keep polling until the background exports (MP4/CSV/COCO) leave "pending".
+        const isJobTerminal =
+          (s.state === "completed" && s.export_status !== "pending") || s.state === "error" || s.state === "cancelled";
         const isCaughtUp = !hasMore && (lastCommittedSeqRef.current >= (s.total_frames || 0) || s.current_frame === 0);
         if (isJobTerminal && isCaughtUp) {
           clearInterval(interval);

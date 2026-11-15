@@ -31,3 +31,18 @@ The loop is decode-bound, not GPU-bound.
 1. Keep the live view; the process-first UI is not justified by throughput.
 2. Biggest win: do not wait for the MP4 export. Mark results ready after the tracking loop and export in the background (saves ~10 s of 27).
 3. Second: decode in a prefetch thread so it overlaps with ego-motion/flow (up to 7.6 s of the 16 s loop, bounded by the 2 vCPUs).
+
+## After the changes (same setup, Colab T4, 2 vCPUs)
+
+Jobs now report `completed` once every frame is persisted, and CSV/COCO/MP4 are written in a background thread (`export_status`
+goes `pending` -> `ready`). Decoding runs on a prefetch thread (`_FramePrefetcher` in `core/video/engine.py`).
+
+| | before | after |
+|---|---:|---:|
+| results usable (job `completed`) | 26.7 s | **14.9 s** (headless), 15.4 s (live view) |
+| tracking loop FPS (job-reported) | 13.4-13.7 | 14.4 (headless), 14.0 (live view) |
+| deliverables ready (end to end) | 26.7 s | 25.1 s (unchanged: the MP4 encode still takes ~10 s) |
+
+Time to results dropped by about 44%, almost all from reporting completion before the exports. Prefetch decode adds only a few
+percent of loop FPS on 2 vCPUs, where decode, ego-motion and flow compete for the same cores; expect more on a host with more cores.
+The remaining ceiling is CPU: ego-motion and proxy resize/flow are still sequential on the main thread.
