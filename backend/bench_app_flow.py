@@ -6,6 +6,7 @@ per-call latency by wrapping the hot calls from the outside, so no app code is m
 
     python bench_app_flow.py --video ../demo_images/sample_reef_transect_25fps.mp4 --runs 3
     python bench_app_flow.py --trim-sec 1 --runs 1          # local smoke test only
+    python bench_app_flow.py --poll-ui live                  # A/B: cost of the live results view on throughput
 """
 
 import argparse
@@ -17,6 +18,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from typing import Any, Dict, List
@@ -85,20 +87,99 @@ def gpu_info() -> Dict[str, Any]:
     return {"name": "CPU / MPS"}
 
 
-def run_job(processor, video: str, params: Dict[str, Any]) -> Dict[str, Any]:
+class UiPoller(threading.Thread):
+    """Mimics the live results view: status every 400 ms plus delta pages drained like VideoAnalysisView does."""
+
+    def __init__(self, processor, job_id: str):
+        super().__init__(daemon=True)
+        self.processor, self.job_id, self.stop_evt = processor, job_id, threading.Event()
+        self.polls = 0
+        self.bytes = 0
+
+    def run(self):
+        seq = 0
+        while not self.stop_evt.wait(0.4):
+            try:
+                job = self.processor.get_job(self.job_id)
+                if not job:
+                    continue
+                payload = {k: v for k, v in job.items() if k not in ("frame_tracks_map", "time_series")}
+                self.bytes += len(json.dumps(payload, default=str))
+                for _ in range(4):  # same drain cap as the UI
+                    frames, max_seq = self.processor.get_frames_delta(self.job_id, seq, 64)
+                    self.bytes += len(json.dumps({"max_seq": max_seq, "frames": frames}, default=str))
+                    if frames:
+                        seq = max(seq, max_seq)
+                    if len(frames) < 64:
+                        break
+                self.polls += 1
+            except Exception:
+                pass
+
+
+class UtilSampler(threading.Thread):
+    """Samples process CPU % and GPU utilisation (nvidia-smi) every 0.5 s while a job runs."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.stop_evt = threading.Event()
+        self.cpu: List[float] = []
+        self.gpu: List[float] = []
+
+    def run(self):
+        try:
+            import psutil
+            proc = psutil.Process()
+            proc.cpu_percent(None)
+        except ImportError:
+            proc = None
+        while not self.stop_evt.wait(0.5):
+            if proc is not None:
+                self.cpu.append(proc.cpu_percent(None))
+            try:
+                out = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                                     capture_output=True, text=True, timeout=2).stdout.strip().splitlines()
+                if out:
+                    self.gpu.append(float(out[0]))
+            except Exception:
+                pass
+
+    def summary(self) -> Dict[str, Any]:
+        def stats(v):
+            return {"mean": round(statistics.mean(v), 1), "max": round(max(v), 1)} if v else None
+        return {"process_cpu_pct": stats(self.cpu), "gpu_util_pct": stats(self.gpu)}
+
+
+def run_job(processor, video: str, params: Dict[str, Any], poll_ui: str = "off") -> Dict[str, Any]:
     _SAMPLES.clear()
+    sampler = UtilSampler()
+    sampler.start()
     t0 = time.perf_counter()
     job_id = processor.start_job(video_path=video, params=dict(params))
+    poller = None
+    if poll_ui == "live":
+        poller = UiPoller(processor, job_id)
+        poller.start()
+    t_loop_done = None
     while True:
         time.sleep(0.25)
         job = processor.get_job(job_id)
+        if t_loop_done is None and job and job.get("state") == engine.VideoJobState.FINALIZING:
+            t_loop_done = time.perf_counter() - t0
         if job and job.get("state") in (engine.VideoJobState.COMPLETED, engine.VideoJobState.ERROR, engine.VideoJobState.CANCELLED):
             break
     wall = time.perf_counter() - t0
+    sampler.stop_evt.set()
+    if poller:
+        poller.stop_evt.set()
     if job["state"] != engine.VideoJobState.COMPLETED:
         raise RuntimeError(f"job ended in {job['state']}: {job.get('error')}")
     frames, dur = job["total_frames"], job["metadata"]["duration_sec"]
     return {
+        "poll_ui": poll_ui, "ui_polls": poller.polls if poller else 0, "ui_bytes": poller.bytes if poller else 0,
+        "tracking_done_sec": round(t_loop_done, 3) if t_loop_done else None,
+        "loop_fps": round(frames / t_loop_done, 2) if t_loop_done else None,  # incl. model load; see job analysis_fps
+        "job_analysis_fps": job.get("analysis_fps"), "utilisation": sampler.summary(),
         "frames": frames, "video_sec": dur, "wall_sec": round(wall, 3), "fps": round(frames / wall, 2),
         "realtime_factor": round(dur / wall, 3), "keyframes": job.get("keyframes_count"),
         "unique_corals": job.get("total_unique_corals"), "bleaching_pct": job.get("bleaching_prevalence_pct"),
@@ -115,7 +196,10 @@ def markdown(report: Dict[str, Any]) -> str:
         f"### {report['gpu']['name']}  ({report['video']}, {w['frames']} frames, {w['video_sec']}s)",
         "",
         f"- ORT provider: `{report['ort_provider']}`",
+        f"- ui polling: `{w['poll_ui']}` ({w['ui_polls']} polls, {w['ui_bytes'] // 1024} KiB serialised)",
         f"- cold run {report['cold']['wall_sec']}s | warm median {w['wall_sec']}s",
+        f"- tracking loop ended at {w['tracking_done_sec']}s | job-reported loop FPS {w['job_analysis_fps']}",
+        f"- utilisation: {w['utilisation']}",
         f"- **{w['fps']} FPS** | {w['realtime_factor']}x real time | {w['unique_corals']} colonies | "
         f"{w['keyframes']} keyframes | exports {w['export_status']}",
         "", "| stage | sec |", "|---|---:|",
@@ -133,6 +217,8 @@ def main():
     ap.add_argument("--runs", type=int, default=3, help="1 cold + (runs-1) warm")
     ap.add_argument("--trim-sec", type=float, default=None)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--poll-ui", choices=["off", "live"], default="off",
+                    help="live: a thread polls status + frame deltas like the live results view")
     ap.add_argument("--out-json", default="bench_result.json")
     ap.add_argument("--out-md", default="bench_result.md")
     ap.add_argument("--out-video", default=None, help="accepted for the Modal runner; the annotated MP4 is the job export")
@@ -162,13 +248,13 @@ def main():
 
     runs = []
     for i in range(args.runs):
-        r = run_job(processor, video, params)
+        r = run_job(processor, video, params, args.poll_ui)
         runs.append(r)
         print(f"run {i + 1}/{args.runs} ({'cold' if i == 0 else 'warm'}): {r['wall_sec']}s  {r['fps']} FPS", flush=True)
 
     warm = runs[1:] or runs
     report = {
-        "video": os.path.basename(video), "gpu": gpu_info(), "ort_provider": providers.get("ort"), "params": params,
+        "video": os.path.basename(video), "poll_ui": args.poll_ui, "gpu": gpu_info(), "ort_provider": providers.get("ort"), "params": params,
         "cold": runs[0], "warm_median": sorted(warm, key=lambda r: r["wall_sec"])[len(warm) // 2], "all_runs": runs,
     }
     processor.close()
