@@ -51,6 +51,27 @@ def start_ngrok_tunnel(token: str):
         return None
 
 
+DEMO_BASE_URL = "https://raw.githubusercontent.com/harsh-andromeida/coralseg/main/demo_images"
+DEMO_FILES = ["sample_reef_transect_25fps.mp4", "sample_reef_transect.mp4"]
+
+
+def ensure_demo_assets():
+    """Downloads the sample videos from GitHub if the upload/clone did not include demo_images/."""
+    demo_dir = os.path.join(ROOT_DIR, "demo_images")
+    os.makedirs(demo_dir, exist_ok=True)
+    for name in DEMO_FILES:
+        dest = os.path.join(demo_dir, name)
+        if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+            continue
+        try:
+            print(f"  📥 Fetching missing demo asset {name}...", flush=True)
+            urllib.request.urlretrieve(f"{DEMO_BASE_URL}/{name}", dest)
+        except Exception as e:
+            print(f"  ⚠️ Could not fetch {name} ({e}); 'Load Sample Video' will be unavailable.", flush=True)
+            if os.path.isfile(dest):
+                os.remove(dest)
+
+
 def _can_execute_binary(bin_path: str) -> bool:
     """Verifies that a binary actually executes and is not blocked by noexec filesystem flags."""
     try:
@@ -525,6 +546,7 @@ def ensure_production_frontend():
 
 def main():
     load_dotenv()
+    ensure_demo_assets()
     print("=" * 65, flush=True)
     print("🪸  Andromeida Reef Vision Studio - Colab / Cloud Runner", flush=True)
     print("=" * 65, flush=True)
@@ -609,6 +631,11 @@ def main():
                 print("\nStopping ReefVision servers...", flush=True)
             finally:
                 server_proc.terminate()
+                try:
+                    from pyngrok import ngrok
+                    ngrok.kill()
+                except Exception:
+                    pass
             return
 
     # 4. Expose public URL via Cloudflare Tunnel on unified port 8000
