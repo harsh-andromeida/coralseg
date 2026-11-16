@@ -52,6 +52,10 @@ export function setCustomApiUrl(url: string | null) {
   }
 }
 
+/** fetch with a hard timeout so a stalled tunnel request can never hang a polling loop. */
+const fetchWithTimeout = (url: string, ms = 15000): Promise<Response> =>
+  fetch(url, { signal: AbortSignal.timeout(ms) });
+
 const API_BASE = {
   toString: () => getApiBase(),
 };
@@ -578,7 +582,7 @@ export async function getActiveVideoStatus(): Promise<import("../types").VideoJo
 }
 
 export async function getVideoStatus(jobId: string): Promise<import("../types").VideoJobStatus> {
-  const res = await fetch(`${API_BASE}/video/status/${jobId}`);
+  const res = await fetchWithTimeout(`${API_BASE}/video/status/${jobId}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "Failed to fetch video status");
@@ -648,7 +652,7 @@ export async function getVideoFramesDelta(
     tracks: import("../types").VideoTrackItem[];
   }>;
 }> {
-  const res = await fetch(`${API_BASE}/video/delta/${jobId}?since_seq=${sinceSeq}&limit=${limit}`);
+  const res = await fetchWithTimeout(`${API_BASE}/video/delta/${jobId}?since_seq=${sinceSeq}&limit=${limit}`);
   if (!res.ok) throw new Error("Failed to fetch delta frame annotations");
   return res.json();
 }

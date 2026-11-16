@@ -24,6 +24,33 @@ BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
 DIST_DIR = os.path.join(ROOT_DIR, "dist")
 
 
+def load_dotenv():
+    """Loads KEY=VALUE pairs from ROOT_DIR/.env into os.environ (existing env vars win)."""
+    path = os.path.join(ROOT_DIR, ".env")
+    if not os.path.isfile(path):
+        return
+    for raw in open(path, encoding="utf-8"):
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+def start_ngrok_tunnel(token: str):
+    """Opens an ngrok HTTPS tunnel to port 8000 via pyngrok. Returns the public URL or None."""
+    try:
+        try:
+            from pyngrok import ngrok, conf
+        except ImportError:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "pyngrok"], check=True)
+            from pyngrok import ngrok, conf
+        conf.get_default().auth_token = token
+        return ngrok.connect(8000, "http").public_url.replace("http://", "https://")
+    except Exception as e:
+        print(f"  ⚠️ ngrok failed ({e}); falling back to Cloudflare Tunnel.", flush=True)
+        return None
+
+
 def _can_execute_binary(bin_path: str) -> bool:
     """Verifies that a binary actually executes and is not blocked by noexec filesystem flags."""
     try:
@@ -497,6 +524,7 @@ def ensure_production_frontend():
 
 
 def main():
+    load_dotenv()
     print("=" * 65, flush=True)
     print("🪸  Andromeida Reef Vision Studio - Colab / Cloud Runner", flush=True)
     print("=" * 65, flush=True)
@@ -561,6 +589,27 @@ def main():
         print(f"❌ Error: Backend did not respond on port 8000 within {timeout}s.", flush=True)
         server_proc.terminate()
         return
+
+    # 4a. Prefer ngrok (much faster for large downloads) when NGROK_AUTHTOKEN is set
+    ngrok_token = os.environ.get("NGROK_AUTHTOKEN", "").strip()
+    if ngrok_token:
+        print("\n[4/4] Exposing port 8000 via ngrok...", flush=True)
+        ng_url = start_ngrok_tunnel(ngrok_token)
+        if ng_url:
+            print("\n" + "=" * 65, flush=True)
+            print("🚀 REEFVISION STUDIO IS READY AT:", flush=True)
+            print(f"👉 {ng_url}", flush=True)
+            print(f"  In Desktop App: Click 'Remote/Colab' & paste {ng_url}", flush=True)
+            print("=" * 65 + "\n", flush=True)
+            try:
+                while server_proc.poll() is None:
+                    time.sleep(1)
+                print("\n❌ Backend server process stopped unexpectedly.", flush=True)
+            except KeyboardInterrupt:
+                print("\nStopping ReefVision servers...", flush=True)
+            finally:
+                server_proc.terminate()
+            return
 
     # 4. Expose public URL via Cloudflare Tunnel on unified port 8000
     cf_bin = get_cloudflared_binary()

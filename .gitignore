@@ -94,3 +94,6 @@ dist/
 
 # Benchmark output videos
 docs/benchmarks/raw/*.mp4
+
+# secrets
+.env
