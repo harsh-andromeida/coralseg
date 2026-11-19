@@ -1,0 +1,855 @@
+<title>Reef Vision Handover Guide</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: "Coral Atlas" — one colour per chapter, sticky chapter rail on wide screens, white figure plates so generated art reads in both themes */
+:root{
+  --bg:#FFFFFF; --surface:#F7F8FA; --plate:#FFFFFF; --line:#E3E6EC; --ink:#1B1F2A; --muted:#4F5869; --faint:#6B7383;
+  --brand-a:#0E2656; --brand-b:#129D89;
+  --c1:#B33A06; --t1:#FFF4E6; /* intro */
+  --c2:#9A3412; --t2:#FFE8CC; /* models */
+  --c3:#087F5B; --t3:#E6FCF5; /* image flow */
+  --c4:#1864AB; --t4:#E7F5FF; /* video flow */
+  --c5:#5F3DC4; --t5:#F3F0FF; /* stack */
+  --c6:#8F5F00; --t6:#FFF9DB; /* files */
+  --bad:#C92A2A; --badt:#FFF5F5; --good:#087F5B;
+  --code-bg:#0F1A2E; --code-ink:#DCE6F2;
+  --f-display:"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-body:"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E131C; --surface:#151C28; --plate:#FFFFFF; --line:#273142; --ink:#E8ECF2; --muted:#AEB7C6; --faint:#8F99AA;
+  --c1:#FF9A5C; --t1:#2A1A10; --c2:#FFA94D; --t2:#2B1C0E; --c3:#4CD4A4; --t3:#0F2620; --c4:#74B8F5; --t4:#0F2033;
+  --c5:#B197FC; --t5:#1E1934; --c6:#F5C15A; --t6:#2A230F; --bad:#FF8787; --badt:#2C1517; --good:#4CD4A4;
+  --code-bg:#0A101A; --code-ink:#DCE6F2; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E131C; --surface:#151C28; --plate:#FFFFFF; --line:#273142; --ink:#E8ECF2; --muted:#AEB7C6; --faint:#8F99AA;
+  --c1:#FF9A5C; --t1:#2A1A10; --c2:#FFA94D; --t2:#2B1C0E; --c3:#4CD4A4; --t3:#0F2620; --c4:#74B8F5; --t4:#0F2033;
+  --c5:#B197FC; --t5:#1E1934; --c6:#F5C15A; --t6:#2A230F; --bad:#FF8787; --badt:#2C1517; --good:#4CD4A4;
+  --code-bg:#0A101A; --code-ink:#DCE6F2; color-scheme:dark}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16.5px;line-height:1.68;-webkit-font-smoothing:antialiased}
+a{color:var(--c4);text-underline-offset:3px}
+a:focus-visible,button:focus-visible{outline:3px solid var(--c4);outline-offset:2px;border-radius:4px}
+h1,h2,h3,h4{font-family:var(--f-display);line-height:1.18;text-wrap:balance;margin:0}
+p{margin:0}
+code,kbd{font-family:var(--f-mono);font-size:.86em;background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:.08em .38em}
+.wrap{max-width:1240px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.shell{display:flex;flex-wrap:wrap;gap:48px;align-items:flex-start}
+.rail{flex:1 1 220px;max-width:240px;position:sticky;top:calc(env(safe-area-inset-top,0px) + 24px);padding-block:24px;display:flex;flex-direction:column;gap:6px}
+.main{flex:999 1 640px;min-width:0;display:flex;flex-direction:column;gap:96px;padding-block:24px 120px}
+@media (max-width:1000px){.rail{display:none}}
+
+/* stripe + cover */
+.stripe{display:grid;grid-template-columns:repeat(6,1fr);height:10px}
+.stripe span:nth-child(1){background:#F76707}.stripe span:nth-child(2){background:#E8590C}.stripe span:nth-child(3){background:#0CA678}.stripe span:nth-child(4){background:#1C7ED6}.stripe span:nth-child(5){background:#7048E8}.stripe span:nth-child(6){background:#F59F00}
+.cover{padding-block:48px 24px;display:flex;flex-direction:column;gap:28px}
+.brandline{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between}
+.logo-pill{background:#fff;border:1px solid var(--line);border-radius:999px;padding:10px 18px;display:inline-flex}
+.logo-pill img{height:22px;width:auto;display:block}
+.meta{display:flex;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted)}
+.meta span{border:1px solid var(--line);border-radius:999px;padding:4px 12px;background:var(--surface)}
+.cover h1{font-size:clamp(40px,6.4vw,76px);font-weight:800;letter-spacing:-.03em;max-width:15ch}
+.cover .lede{font-size:clamp(17px,2vw,21px);color:var(--muted);max-width:62ch}
+.hero-img{border-radius:24px;overflow:hidden;border:1px solid var(--line);background:#fff}
+.hero-img img{display:block;width:100%;height:auto}
+.toc{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px}
+.toc a{display:flex;flex-direction:column;gap:2px;padding:16px 18px;border-radius:14px;text-decoration:none;font-weight:700;font-size:15px}
+.toc a small{font-weight:500;font-size:13px;opacity:.85}
+
+/* rail */
+.rail .rl{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:700;margin-bottom:6px}
+.rail a{display:flex;gap:10px;align-items:center;text-decoration:none;color:var(--muted);font-size:14px;font-weight:600;padding:8px 10px;border-radius:10px}
+.rail a:hover{background:var(--surface);color:var(--ink)}
+.rail a i{width:10px;height:10px;border-radius:3px;flex:none}
+.rail .sub{padding-left:30px;font-weight:500;font-size:13px;padding-block:4px}
+
+/* chapters */
+.chapter{display:flex;flex-direction:column;gap:40px;scroll-margin-top:24px}
+.ch-head{border-radius:24px;overflow:hidden;position:relative;display:grid;grid-template-columns:minmax(0,1fr)}
+.ch-head img{grid-area:1/1;width:100%;height:auto;display:block;min-height:200px;object-fit:cover;object-position:right center}
+.ch-head .ch-title{grid-area:1/1;align-self:center;padding:28px clamp(20px,4vw,48px);max-width:min(52%,520px);display:flex;flex-direction:column;gap:10px}
+.ch-num{font-family:var(--f-mono);font-size:13px;font-weight:500;letter-spacing:.08em}
+.ch-head h2{font-size:clamp(26px,3.6vw,44px);font-weight:800;letter-spacing:-.02em;color:#1B1F2A}
+.ch-head p{color:#3A4252;font-size:15.5px;line-height:1.55}
+@media (max-width:640px){.ch-head{display:flex;flex-direction:column}.ch-head .ch-title{max-width:none;order:2;background:inherit}.ch-head img{min-height:0;order:1}}
+section.block{display:flex;flex-direction:column;gap:18px;scroll-margin-top:24px}
+section.block > h3{font-size:clamp(22px,2.6vw,28px);font-weight:700;letter-spacing:-.01em}
+section.block > h3 .k{font-family:var(--f-mono);font-size:13px;font-weight:500;vertical-align:middle;margin-right:10px;padding:3px 8px;border-radius:6px}
+h4{font-size:18px;font-weight:700}
+.prose{display:flex;flex-direction:column;gap:14px;max-width:72ch}
+.prose ul,.prose ol{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:6px}
+.muted{color:var(--muted)}
+
+/* chapter colour plumbing */
+.k1{--c:var(--c1);--t:var(--t1)}.k2{--c:var(--c2);--t:var(--t2)}.k3{--c:var(--c3);--t:var(--t3)}.k4{--c:var(--c4);--t:var(--t4)}.k5{--c:var(--c5);--t:var(--t5)}.k6{--c:var(--c6);--t:var(--t6)}
+.k1 .ch-head{background:#FFF4E6}.k2 .ch-head{background:#FFE8CC}.k3 .ch-head{background:#E6FCF5}.k4 .ch-head{background:#E7F5FF}.k5 .ch-head{background:#F3F0FF}.k6 .ch-head{background:#FFF9DB}
+.k1 .ch-num{color:#B33A06}.k2 .ch-num{color:#A33608}.k3 .ch-num{color:#066649}.k4 .ch-num{color:#124F86}.k5 .ch-num{color:#4C2FA8}.k6 .ch-num{color:#7A5100}
+.chapter .k{background:var(--t);color:var(--c)}
+.toc a.k1,.toc a.k2,.toc a.k3,.toc a.k4,.toc a.k5,.toc a.k6{background:var(--t);color:var(--c)}
+
+/* figures */
+figure{margin:0;display:flex;flex-direction:column;gap:10px}
+.plate{background:var(--plate);border:1px solid var(--line);border-radius:18px;overflow:hidden}
+.plate img{display:block;width:100%;height:auto}
+.plate.pad{padding:clamp(12px,2.4vw,28px)}
+.shot{border-radius:14px;border:1px solid var(--line);overflow:hidden;background:#fff;box-shadow:0 1px 2px rgba(15,26,46,.06),0 8px 28px rgba(15,26,46,.07)}
+.shot img{display:block;width:100%;height:auto}
+figcaption{font-size:13.5px;color:var(--faint);line-height:1.5}
+figcaption b{color:var(--muted)}
+.plate figcaption,.shot figcaption{color:#525B6B}
+.plate figcaption b,.shot figcaption b{color:#2E3544}
+.plate figcaption code,.shot figcaption code{background:#F1F3F6;border-color:#E3E6EC;color:#1B1F2A}
+.duo{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:20px;align-items:start}
+.trio{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:20px;align-items:start}
+.split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:28px;align-items:start}
+
+/* cards, callouts, tables */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.card h4{font-size:17px}
+.card .tag{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--c,var(--muted));font-weight:500}
+.card p,.card li{font-size:15px;color:var(--muted)}
+.card ul{margin:0;padding-left:1.1em;display:flex;flex-direction:column;gap:4px}
+.model{background:var(--surface);border:1px solid var(--line);border-radius:22px;overflow:hidden;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+@media (min-width:760px){.model{grid-template-columns:minmax(0,2fr) minmax(0,3fr)}}
+.model .art{background:#fff;display:flex;align-items:center;justify-content:center;padding:18px;border-right:1px solid var(--line)}
+.model .art img{max-height:280px;width:auto;max-width:100%}
+.model .body{padding:26px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.model h4{font-size:22px}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 16px;font-size:14.5px}
+.kv dt{color:var(--faint);font-weight:600}
+.kv dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.callout{border-radius:16px;padding:18px 22px;display:flex;flex-direction:column;gap:6px;background:var(--t,var(--surface));border:1px solid color-mix(in srgb,var(--c,var(--line)) 30%,transparent)}
+.callout .lbl{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--c,var(--muted))}
+.callout.warn{--c:var(--bad);--t:var(--badt)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:14px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--surface);font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.num{font-family:var(--f-mono);white-space:nowrap}
+td.win{color:var(--good);font-weight:600}
+td.lose{color:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:14px}
+.stat{border-radius:16px;padding:18px;background:var(--t);display:flex;flex-direction:column;gap:2px}
+.stat b{font-family:var(--f-display);font-size:30px;font-weight:800;color:var(--c);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat span{font-size:13.5px;color:var(--muted)}
+.steps{counter-reset:s;display:flex;flex-direction:column;gap:14px;padding:0;margin:0;list-style:none}
+.steps li{counter-increment:s;display:grid;grid-template-columns:36px minmax(0,1fr);gap:14px;align-items:start}
+.steps li::before{content:counter(s);width:32px;height:32px;border-radius:10px;background:var(--t);color:var(--c);font-weight:800;display:flex;align-items:center;justify-content:center;font-size:15px}
+.steps li div{display:flex;flex-direction:column;gap:4px}
+.steps li b{font-size:16px}
+.steps li p{color:var(--muted);font-size:15px}
+pre{margin:0;background:var(--code-bg);color:var(--code-ink);border-radius:14px;padding:18px 20px;overflow-x:auto;font-family:var(--f-mono);font-size:13.5px;line-height:1.7}
+pre .c{color:#7F93AD}
+.pill{display:inline-block;font-size:12px;font-weight:700;padding:2px 10px;border-radius:999px;background:var(--t);color:var(--c)}
+
+/* stack */
+.stack{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:14px}
+.tech{display:grid;grid-template-columns:56px minmax(0,1fr);gap:14px;align-items:start;padding:18px;border:1px solid var(--line);border-radius:16px;background:var(--surface)}
+.tech .lg{width:56px;height:56px;border-radius:14px;background:#fff;border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
+.tech .lg img{width:32px;height:32px}
+.tech .lg.txt{font-family:var(--f-mono);font-weight:500;font-size:12px;color:#1B1F2A}
+.tech h4{font-size:16px}
+.tech p{font-size:14.5px;color:var(--muted);line-height:1.55}
+.tech .layer{font-size:11.5px;font-family:var(--f-mono);color:var(--c5);letter-spacing:.05em;text-transform:uppercase}
+
+/* file tree */
+.tree{font-family:var(--f-mono);font-size:13.5px;line-height:1.85;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px 22px;overflow-x:auto}
+.tree div{white-space:nowrap}
+.tree .d{color:var(--c6);font-weight:500}
+.tree .n{color:var(--faint);font-family:var(--f-body);font-size:13px;margin-left:10px}
+
+.closing{border-radius:24px;overflow:hidden;background:#E6FCF5;display:grid}
+.closing img{grid-area:1/1;width:100%;height:auto;display:block}
+.closing .txt{grid-area:1/1;align-self:center;padding:28px clamp(20px,4vw,48px);max-width:min(46%,480px);display:flex;flex-direction:column;gap:10px;color:#1B1F2A}
+.closing h2{font-size:clamp(24px,3vw,38px);font-weight:800}
+.closing p{color:#3A4252}
+@media (max-width:640px){.closing{display:flex;flex-direction:column}.closing .txt{max-width:none}}
+.sources{font-size:14px;color:var(--muted);display:flex;flex-direction:column;gap:6px;padding-left:1.1em;margin:0}
+footer{border-top:1px solid var(--line);padding-block:28px;font-size:13px;color:var(--faint);display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
+</style>
+
+<div class="stripe" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+
+<div class="wrap">
+<header class="cover">
+  <div class="brandline">
+    <span class="logo-pill"><img src="img/andromeida_logo.svg" alt="Andromeida"></span>
+    <div class="meta"><span>Handover guide · v1.0</span><span>November 2026</span><span>Repository: CoralSeg (Reef Vision Studio 0.1.0)</span></div>
+  </div>
+  <h1>Reef Vision Studio, from first launch to file tree.</h1>
+  <p class="lede">Everything a new owner needs to run, understand and extend Andromeida's desktop application for segmenting, classifying and health-scoring coral colonies in underwater survey images and video.</p>
+  <figure class="hero-img"><img src="img/cover-hero.webp" alt="Illustrated reef with coral colonies outlined and labelled like a segmentation overlay" width="2000" height="857"></figure>
+  <nav class="toc" aria-label="Chapters">
+    <a class="k1" href="#intro">01 · Introduction<small>Why it exists, what it solves, every feature</small></a>
+    <a class="k2" href="#models">02 · Core models &amp; home screen<small>CoralSCOP, BioCLIP, YOLO11n, ONNX, devices</small></a>
+    <a class="k3" href="#image">03 · Image flow<small>Bulk &amp; single images, editing, exports</small></a>
+    <a class="k4" href="#video">04 · Video flow<small>Legacy SAM 2 pipeline vs optical flow</small></a>
+    <a class="k5" href="#stack">05 · Tech stack<small>What each technology is for</small></a>
+    <a class="k6" href="#files">06 · File structure<small>Every folder, key files, how to run</small></a>
+  </nav>
+</header>
+
+<div class="shell">
+<nav class="rail" aria-label="On this page">
+  <div class="rl">Contents</div>
+  <a href="#intro"><i style="background:#F76707"></i>Introduction</a>
+  <a class="sub" href="#features">Features</a>
+  <a href="#models"><i style="background:#E8590C"></i>Core models</a>
+  <a class="sub" href="#onnx">Why ONNX</a>
+  <a class="sub" href="#first-launch">First launch</a>
+  <a class="sub" href="#devices">Inference devices</a>
+  <a href="#image"><i style="background:#0CA678"></i>Image flow</a>
+  <a class="sub" href="#analysis">Analysis screen</a>
+  <a class="sub" href="#editor">Mask editor</a>
+  <a class="sub" href="#image-exports">Exports</a>
+  <a href="#video"><i style="background:#1C7ED6"></i>Video flow</a>
+  <a class="sub" href="#legacy">Legacy pipeline</a>
+  <a class="sub" href="#flow">New pipeline</a>
+  <a class="sub" href="#video-walk">Walkthrough</a>
+  <a href="#stack"><i style="background:#7048E8"></i>Tech stack</a>
+  <a href="#files"><i style="background:#F59F00"></i>File structure</a>
+  <a class="sub" href="#run">Run &amp; test</a>
+  <a class="sub" href="#next">Known issues</a>
+</nav>
+
+<main class="main">
+
+<!-- ============ 01 INTRO ============ -->
+<article class="chapter k1" id="intro">
+  <div class="ch-head">
+    <img src="img/ch01-intro.webp" alt="" width="2000" height="667">
+    <div class="ch-title"><span class="ch-num">CHAPTER 01</span><h2>Introduction</h2><p>Why the project exists, the problems it removes and the full feature set.</p></div>
+  </div>
+
+  <section class="block">
+    <h3><span class="k">1.1</span>Why this project is being made</h3>
+    <div class="split">
+      <div class="prose">
+        <p>Coral reef monitoring runs on photographs and video transects shot by divers, ROVs and AUVs. Turning that footage into numbers (how much of the seafloor is live coral, which genera are present, how many colonies are bleached) has traditionally meant a researcher tracing colony outlines by hand, image after image. A single survey can produce thousands of frames, so the analysis lags months behind the dive.</p>
+        <p>Reef Vision Studio does that work automatically, on the researcher's own computer. It outlines every colony, names its genus and growth form, flags bleaching, lets a human correct anything in a fast editor, and exports the result as standard machine-learning datasets and spreadsheets.</p>
+      </div>
+      <figure class="plate"><img src="img/problem-manual-annotation.webp" alt="Researcher tracing corals by hand versus the same researcher with every coral outlined automatically" width="2000" height="1250"><figcaption style="padding:0 14px 12px">Hours of manual tracing become a review of automatic outlines.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="block">
+    <h3><span class="k">1.2</span>The journey it supports</h3>
+    <figure class="plate"><img src="img/field-to-dataset.webp" alt="Diver filming a reef, laptop on a boat, segmented corals on screen, then datasets and charts" width="2000" height="750"></figure>
+    <p class="muted" style="max-width:72ch">Footage comes off the dive, is processed on a laptop (even on the boat, with no internet once the models are downloaded), and leaves as COCO datasets for model training plus CSV reports for reef scientists.</p>
+  </section>
+
+  <section class="block">
+    <h3><span class="k">1.3</span>Challenges it solves</h3>
+    <div class="cards">
+      <div class="card"><span class="tag">Labour</span><h4>Manual annotation</h4><p>Automatic instance segmentation replaces hand tracing; people only review and correct.</p></div>
+      <div class="card"><span class="tag">Expertise</span><h4>Identifying corals</h4><p>Zero-shot genus and growth-form labels across 16 genera, so non-specialists get a usable first pass.</p></div>
+      <div class="card"><span class="tag">Health</span><h4>Bleaching at scale</h4><p>Every colony gets a healthy / bleached call with a confidence score, ready for reef-health statistics.</p></div>
+      <div class="card"><span class="tag">Video</span><h4>Survey video, not just photos</h4><p>Colonies are tracked through a transect with persistent IDs, so each is counted once instead of once per frame.</p></div>
+      <div class="card"><span class="tag">Hardware</span><h4>Any laptop</h4><p>One ONNX runtime uses an NVIDIA GPU, Apple Silicon or plain CPU. No cloud account is needed.</p></div>
+      <div class="card"><span class="tag">Data</span><h4>Usable outputs</h4><p>COCO JSON, dataset zips, CSV census tables and annotated MP4s plug straight into training pipelines and spreadsheets.</p></div>
+    </div>
+  </section>
+
+  <section class="block" id="features">
+    <h3><span class="k">1.4</span>Every feature, in detail</h3>
+    <div class="cards">
+      <div class="card"><span class="tag">Image analysis</span><ul>
+        <li><b>Dense instance segmentation</b> with CoralSCOP: automatic grid-prompted masks, a coral/non-coral head and box NMS to drop duplicates.</li>
+        <li><b>Tunable inference</b>: grid density, IoU threshold, stability threshold and minimum mask area.</li>
+        <li><b>Taxonomy enrichment</b>: genus, common name and growth form per colony from BioCLIP, with top-k confidence.</li>
+        <li><b>Bleaching assessment</b>: healthy or bleached per colony from a NOAA-trained YOLO11n classifier.</li>
+        <li><b>Survey metrics</b>: corals detected, reef coverage %, average IoU confidence, average stability.</li>
+      </ul></div>
+      <div class="card"><span class="tag">Review &amp; editing</span><ul>
+        <li><b>Four layouts</b>: side by side, overlay, original, masks on black.</li>
+        <li><b>Four colour modes</b>: colony instances, health condition, taxonomy, taxonomy + health.</li>
+        <li><b>Mask editor</b> on a Konva canvas: drag vertices, add or delete points, change genus, growth form and condition.</li>
+        <li><b>SAM smart click</b>: place foreground and background points, run the decoder, accept the new mask.</li>
+        <li><b>Polygon tool</b>, undo / redo history, 20-second auto-save and a full shortcuts sheet.</li>
+      </ul></div>
+      <div class="card"><span class="tag">Batch &amp; export</span><ul>
+        <li><b>Bulk processing</b> of a folder, multi-select or .zip, in a background thread with pause, resume and cancel.</li>
+        <li><b>Sample library</b> of bundled reef images for demos.</li>
+        <li><b>Exports</b>: COCO JSON, overlay PNG, segments CSV, raw model telemetry, and a full dataset folder or .zip.</li>
+      </ul></div>
+      <div class="card"><span class="tag">Video transects</span><ul>
+        <li><b>25 FPS standardisation</b> of any .mp4, .mov or .avi.</li>
+        <li><b>Optical-flow tracking</b> with persistent colony IDs and async CoralSCOP keyframes.</li>
+        <li><b>Live results</b> while the job runs, plus playback, scrubbing and a telemetry log.</li>
+        <li><b>Exports</b>: annotated MP4, transect telemetry CSV, COCO-video tracking JSON.</li>
+      </ul></div>
+      <div class="card"><span class="tag">Platform</span><ul>
+        <li><b>Desktop app</b> (Tauri) that starts and health-checks its own local engine.</li>
+        <li><b>Offline</b> after the one-time model download.</li>
+        <li><b>Hardware tiers</b>: CUDA, CoreML, multi-threaded or single-threaded CPU.</li>
+        <li><b>Remote engine mode</b>: point the UI at a Colab GPU runtime through a tunnel.</li>
+      </ul></div>
+    </div>
+  </section>
+</article>
+
+<!-- ============ 02 MODELS ============ -->
+<article class="chapter k2" id="models">
+  <div class="ch-head">
+    <img src="img/ch02-models.webp" alt="" width="2000" height="667">
+    <div class="ch-title"><span class="ch-num">CHAPTER 02</span><h2>Core models &amp; the home screen</h2><p>The three public models, why they were chosen, how they arrive and where they run.</p></div>
+  </div>
+
+  <section class="block">
+    <h3><span class="k">2.1</span>Three models, three questions</h3>
+    <p class="muted" style="max-width:72ch">Each colony passes through three models in turn. CoralSCOP answers <em>where is coral?</em>, BioCLIP answers <em>what is it?</em> and the YOLO11n classifier answers <em>is it healthy?</em> All three are public research models; Andromeida converted them to ONNX and hosts the converted files.</p>
+
+    <div class="model">
+      <div class="art"><img src="img/model-coralscop.webp" alt="Coral colony divided into outline masks" width="1200" height="900"></div>
+      <div class="body">
+        <span class="card tag" style="all:unset;font-family:var(--f-mono);font-size:12px;letter-spacing:.06em;color:var(--c2)">SEGMENTATION · ~383 MB</span>
+        <h4>CoralSCOP</h4>
+        <p class="muted">A foundation model for dense coral segmentation from HKUST and collaborators, published at CVPR 2024 (a Highlight paper). It is built on Meta's Segment Anything (SAM, ViT-B backbone) and trained on CoralMask, 41,297 coral images with 330,144 masks. It accepts point or box prompts, which is exactly what the editor's smart click uses.</p>
+        <dl class="kv">
+          <dt>Source</dt><dd><a href="https://huggingface.co/reefsupport/CoralSCOP">reefsupport/CoralSCOP</a> · <a href="https://openaccess.thecvf.com/content/CVPR2024/html/Zheng_CoralSCOP_Segment_any_COral_Image_on_this_Planet_CVPR_2024_paper.html">paper</a></dd>
+          <dt>License</dt><dd>Apache-2.0</dd>
+          <dt>Files here</dt><dd><code>sam_image_encoder.onnx</code> (359 MB), <code>sam_mask_decoder.onnx</code> (24 MB)</dd>
+          <dt>Code</dt><dd><code>core/segmentation.py</code>, <code>core/interactive_segmentation.py</code></dd>
+        </dl>
+        <div class="callout"><span class="lbl">Why this one</span><p>Generic SAM outlines everything: rocks, fish, the transect tape. CoralSCOP was trained on coral, has a category head that rejects non-coral, and keeps SAM's promptable decoder, so one model serves both automatic segmentation and interactive editing.</p></div>
+      </div>
+    </div>
+
+    <div class="model">
+      <div class="art"><img src="img/model-bioclip.webp" alt="Coral linked to a branching tree-of-life diagram" width="1200" height="900"></div>
+      <div class="body">
+        <span style="font-family:var(--f-mono);font-size:12px;letter-spacing:.06em;color:var(--c2)">TAXONOMY · ~345 MB</span>
+        <h4>BioCLIP</h4>
+        <p class="muted">A vision foundation model for the tree of life from the Imageomics Institute (CVPR 2024 oral, Best Student Paper). It is a CLIP ViT-B/16 trained on TreeOfLife-10M, images of more than 450,000 species, and learns a representation that follows the biological hierarchy. The app uses ReefNet's fine-tuned release.</p>
+        <dl class="kv">
+          <dt>Source</dt><dd><a href="https://huggingface.co/ReefNet/finetuned-bioclip">ReefNet/finetuned-bioclip</a> · <a href="https://imageomics.github.io/bioclip">project</a></dd>
+          <dt>License</dt><dd>MIT</dd>
+          <dt>Files here</dt><dd><code>bioclip_visual.onnx</code> (345 MB), <code>coral_taxonomy_embeddings.npy</code> (37 KB)</dd>
+          <dt>Code</dt><dd><code>core/taxonomy.py</code></dd>
+        </dl>
+        <div class="callout"><span class="lbl">Why this one</span><p>It is zero-shot. Only the image encoder runs; the text side was precomputed into a small embedding matrix for 18 labels over 16 genera (Acropora, Porites, Millepora, Galaxea and more). Adding a genus means adding a text embedding, not retraining a classifier.</p></div>
+      </div>
+    </div>
+
+    <div class="model">
+      <div class="art"><img src="img/model-bleaching.webp" alt="Healthy and bleached colonies of the same species in labelled boxes" width="1200" height="900"></div>
+      <div class="body">
+        <span style="font-family:var(--f-mono);font-size:12px;letter-spacing:.06em;color:var(--c2)">HEALTH · ~6 MB</span>
+        <h4>YOLO11n bleaching classifier</h4>
+        <p class="muted">NOAA Fisheries' YOLO11n-cls model, trained on the NOAA Pacific Islands Ecosystem Sciences Division coral bleaching dataset with expert-annotated points. It has two classes, <code>CORAL</code> (healthy) and <code>CORAL_BL</code> (bleached). YOLO11 is Ultralytics' September 2024 generation; the nano size has about 2.6 M parameters.</p>
+        <dl class="kv">
+          <dt>Source</dt><dd><a href="https://huggingface.co/NMFS-OSI/yolo11n-cls-noaa-esd-coral-bleaching">NMFS-OSI/yolo11n-cls-noaa-esd-coral-bleaching</a></dd>
+          <dt>License</dt><dd>AGPL-3.0 (see the licensing note in chapter 06)</dd>
+          <dt>Files here</dt><dd><code>bleaching_yolo11n.onnx</code> (6 MB)</dd>
+          <dt>Code</dt><dd><code>core/taxonomy.py</code> (bleaching functions)</dd>
+        </dl>
+        <div class="callout"><span class="lbl">Why this one</span><p>It is tiny and fast enough to run once per colony even on CPU, and it was trained by a reef-monitoring agency on real survey imagery. The model card warns it may generalise less well outside its training region, so treat its calls as a first pass.</p></div>
+      </div>
+    </div>
+
+    <div class="split">
+      <figure class="plate pad"><img src="img/growth-forms-set.webp" alt="Six coral growth form icons" width="2000" height="500"><figcaption>Growth forms reported in the table: <b>branching, massive, encrusting, foliose, plate (tabular), solitary</b>, plus columnar and meandering variants from the taxonomy list.</figcaption></figure>
+      <figure class="plate pad"><img src="img/bleaching-explainer.webp" alt="Healthy, stressed and bleached coral" width="2000" height="1125"><figcaption><b>Bleaching</b>: under heat stress corals expel their symbiotic algae and turn white. Persistent bleaching kills the colony, which is why the app reports a bleaching percentage per survey.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="block" id="onnx">
+    <h3><span class="k">2.2</span>Why the models are converted to ONNX</h3>
+    <div class="split">
+      <div class="prose">
+        <p>All three originals ship as PyTorch checkpoints with their own training code. Inside the app they run as ONNX graphs through ONNX Runtime instead:</p>
+        <ul>
+          <li><b>One runtime, three accelerators.</b> The same file runs on CUDA, Apple CoreML and CPU by switching the execution provider.</li>
+          <li><b>No PyTorch at runtime.</b> The packaged app avoids a multi-gigabyte dependency and starts faster.</li>
+          <li><b>Faster inference.</b> Graph optimisations and an fp16 CoralSCOP path (encoder and decoder) cut T4 keyframe time from 1,370 ms to 817 ms with about 0.99 mask agreement.</li>
+          <li><b>Split SAM.</b> CoralSCOP is exported as a separate encoder and decoder, so an image is encoded once and every click only runs the small decoder.</li>
+        </ul>
+      </div>
+      <figure class="plate pad"><img src="img/onnx-conversion.webp" alt="A bulky training model pressed into a compact cartridge that fits GPU, Apple chip and CPU" width="1600" height="800"></figure>
+    </div>
+  </section>
+
+  <section class="block" id="first-launch">
+    <h3><span class="k">2.3</span>First launch: downloading the models</h3>
+    <div class="prose">
+      <p>On the very first launch no models are present. The home screen shows <b>Foundation Models Required</b> with the three model groups and their sizes. One click on <b>Download Foundation Models Now</b> pulls all five files from the public Hugging Face repository <a href="https://huggingface.co/harsh-awasthi/Andromeida-ReefVision-ONNX">harsh-awasthi/Andromeida-ReefVision-ONNX</a> into the local Hugging Face cache (about 735 MB in total). After that the app works offline, and models can be re-downloaded or deleted individually.</p>
+    </div>
+    <figure class="plate pad"><img src="img/fig-02-first-launch.webp" alt="Flowchart: app starts, checks the local cache, downloads five files from Hugging Face, then picks an inference device" width="2000" height="1125"><figcaption>Figure 2.1 · First-launch flow (<code>core/models.py</code>, <code>routers/system.py</code>).</figcaption></figure>
+    <div class="trio">
+      <figure class="shot"><img src="img/scr-01-home-first-load.webp" alt="Home screen asking to download foundation models" width="1440" height="900"></figure>
+      <figure class="shot"><img src="img/scr-04-models-downloading.webp" alt="Models downloading, segmentation model done" width="1440" height="900"></figure>
+      <figure class="shot"><img src="img/scr-05-home-ready.webp" alt="Home screen ready with tabs for upload, samples and video" width="1440" height="900"></figure>
+    </div>
+    <figcaption>Left to right: first load, download in progress (models tick to <b>Downloaded</b> one by one), and the ready home screen with its three tabs: <b>Upload Images</b>, <b>Sample Library</b> and <b>Video Transect</b>.</figcaption>
+    <div class="tbl"><table>
+      <thead><tr><th>File</th><th>Model</th><th>Size</th></tr></thead>
+      <tbody>
+        <tr><td><code>sam_image_encoder.onnx</code></td><td>CoralSCOP encoder</td><td class="num">359 MB</td></tr>
+        <tr><td><code>sam_mask_decoder.onnx</code></td><td>CoralSCOP decoder</td><td class="num">24 MB</td></tr>
+        <tr><td><code>bioclip_visual.onnx</code></td><td>BioCLIP image encoder</td><td class="num">345 MB</td></tr>
+        <tr><td><code>coral_taxonomy_embeddings.npy</code></td><td>Precomputed genus text embeddings</td><td class="num">37 KB</td></tr>
+        <tr><td><code>bleaching_yolo11n.onnx</code></td><td>YOLO11n bleaching classifier</td><td class="num">6 MB</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="block" id="devices">
+    <h3><span class="k">2.4</span>The home screen and inference devices</h3>
+    <div class="prose">
+      <p>The left card on the home screen shows engine status (<b>Ready</b>) and the active accelerator, here <b>NVIDIA CUDA GPU</b>. <b>Settings</b> opens the engine panel: connection state, the model list and <b>Hardware Acceleration</b>.</p>
+    </div>
+    <div class="split">
+      <figure class="plate pad"><img src="img/fig-03-device-tiers.webp" alt="Decision tree for CUDA, CoreML and CPU tiers" width="2000" height="1125"><figcaption>Figure 2.2 · How <code>core/device.py</code> picks a tier.</figcaption></figure>
+      <figure class="plate pad"><img src="img/hardware-tiers.webp" alt="Three podiums for GPU, neural engine laptop and CPU" width="1600" height="700"></figure>
+    </div>
+    <div class="duo">
+      <figure class="shot"><img src="img/scr-02-settings-device.webp" alt="Settings dialog showing engine, models and hardware acceleration" width="1440" height="900"></figure>
+      <figure class="shot"><img src="img/scr-03-device-options.webp" alt="Device preference options" width="1440" height="900"></figure>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>Device preference</th><th>What it does</th><th>When to use it</th></tr></thead>
+      <tbody>
+        <tr><td><b>Auto</b></td><td>Picks the best available tier: CUDA, then CoreML on Apple Silicon, then CPU.</td><td>Default for everyone.</td></tr>
+        <tr><td><b>GPU acceleration</b></td><td>Forces the CUDA execution provider (fp16 SAM on NVIDIA).</td><td>NVIDIA laptops and Colab; fastest.</td></tr>
+        <tr><td><b>Multi-threaded CPU</b></td><td>CPU provider using all cores (2 threads on a Colab VM).</td><td>No GPU, or debugging GPU issues.</td></tr>
+        <tr><td><b>Single-threaded CPU</b></td><td>One thread, lowest memory and heat.</td><td>Low-power machines, or while other work runs.</td></tr>
+        <tr><td><b>Batch concurrency</b></td><td>Number of images processed in parallel; default 1 worker (sequential, safe).</td><td>Raise only with spare GPU memory.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><span class="lbl">Watch out</span><p>If CUDA libraries are missing, ONNX Runtime can report success but silently run on CPU. An earlier Modal run hit this through a missing <code>libcurand</code>; the app now checks the active provider.</p></div>
+  </section>
+</article>
+
+<!-- ============ 03 IMAGE FLOW ============ -->
+<article class="chapter k3" id="image">
+  <div class="ch-head">
+    <img src="img/ch03-image-flow.webp" alt="" width="2000" height="667">
+    <div class="ch-title"><span class="ch-num">CHAPTER 03</span><h2>Image flow: bulk &amp; single</h2><p>From an upload to an edited, exported dataset, screen by screen.</p></div>
+  </div>
+
+  <section class="block">
+    <h3><span class="k">3.1</span>The pipeline</h3>
+    <figure class="plate pad"><img src="img/fig-04-image-pipeline.webp" alt="Image pipeline: register, segment with CoralSCOP, enrich with BioCLIP and YOLO11n, overlay, review, export" width="2000" height="560"><figcaption>Figure 3.1 · Single images and batch folders share one pipeline.</figcaption></figure>
+    <ol class="steps">
+      <li><div><b>Register</b><p><code>POST /api/images/register</code> stores the image in the engine's in-memory image store (<code>app/state.py</code>).</p></div></li>
+      <li><div><b>Segment</b><p><code>/api/analysis/segment</code> runs the CoralSCOP encoder once, prompts the decoder with a grid of points (grid density 16 by default), keeps masks above the IoU and stability thresholds and the minimum area, rejects non-coral with the category head and removes duplicates with box NMS.</p></div></li>
+      <li><div><b>Enrich</b><p><code>/api/analysis/enrich</code> crops each colony and runs BioCLIP (genus and growth form against the taxonomy embeddings) and YOLO11n (healthy or bleached).</p></div></li>
+      <li><div><b>Overlay</b><p><code>/api/analysis/overlay</code> renders masks in distinct colours (<code>core/visualization.py</code>).</p></div></li>
+      <li><div><b>Review, edit and export</b><p>The analysis screen, the mask editor and the export panel, all described below.</p></div></li>
+    </ol>
+    <div class="callout"><span class="lbl">Why these models and not others</span><p>Generic detectors (YOLO detection, Mask R-CNN) need coral-specific training data that does not exist at scale, and draw boxes or coarse masks. Plain SAM over-segments rocks and fish. Closed-set classifiers would need retraining for every new genus. CoralSCOP plus zero-shot BioCLIP plus a small specialist classifier gives pixel masks, open-ended labels and health calls with no training of our own.</p></div>
+  </section>
+
+  <section class="block">
+    <h3><span class="k">3.2</span>Uploading and batch processing</h3>
+    <div class="split">
+      <div class="prose">
+        <p>On <b>Upload Images</b>, drop in photos (.jpg, .jpeg, .png, .webp) or a .zip. Staged images appear as numbered thumbnails and <b>Start Batch Processing</b> shows the count. The <b>Sample Library</b> tab offers bundled reef images with presets such as <em>First 6 Samples</em>.</p>
+        <p>Processing runs in <code>BatchProcessor</code>, a background thread. The progress card shows <em>n / total Done</em>, the current file and stage, <b>Pause</b> and <b>Cancel</b>. <b>Open Studio</b> becomes available as soon as the first image is ready, so review can start while the rest of the batch runs.</p>
+      </div>
+      <figure class="plate pad"><img src="img/fig-06-batch-lifecycle.webp" alt="Batch states: queued, running, paused, completed, cancelled" width="2000" height="1125"><figcaption>Figure 3.2 · Batch job states.</figcaption></figure>
+    </div>
+    <div class="duo">
+      <figure class="shot"><img src="img/scr-06-upload-staged.webp" alt="Four images staged for analysis" width="1440" height="900"><figcaption style="padding:8px 12px">Four survey images staged.</figcaption></figure>
+      <figure class="shot"><img src="img/scr-07-batch-progress.webp" alt="Batch progress card at 25 percent" width="1440" height="900"><figcaption style="padding:8px 12px">Batch at 1 / 4 with Pause, Cancel, Open Studio and Export Dataset.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="block" id="analysis">
+    <h3><span class="k">3.3</span>The analysis screen</h3>
+    <figure><img src="img/laptop-analysis.webp" alt="Laptop showing the analysis screen" width="1800" height="1125" style="width:100%;height:auto;display:block"></figure>
+    <div class="prose">
+      <p>The studio has three regions. The <b>top bar</b> holds <em>Back to Library</em>, the Andromeida brand, the active accelerator and, during a batch, a status strip with <em>Export Dataset</em>. The <b>sidebar</b> on the left holds every control. The <b>central workspace</b> holds the image pager, the image panels, summary cards, the segments table and the export panel.</p>
+    </div>
+    <figure class="shot"><img src="img/scr-09-analysis-fullpage.webp" alt="Full analysis page including table and export panel" width="1440" height="1500"><figcaption style="padding:8px 12px">The whole page: pager, original vs overlay, summary cards, segments table and export panel.</figcaption></figure>
+
+    <h4>Central workspace</h4>
+    <div class="cards">
+      <div class="card"><span class="tag">Pager</span><p>File name, <em>1 of 4</em>, numbered pages with a green dot when each image has finished, Previous and Next.</p></div>
+      <div class="card"><span class="tag">Image panels</span><p><b>Original Image</b> and <b>Segmentation Overlay</b>, each with fullscreen. <b>Edit Masks</b> opens the editor.</p></div>
+      <div class="card"><span class="tag">Summary cards</span><p><b>Corals detected</b>, <b>reef coverage</b> (% and pixels), <b>average IoU confidence</b> and <b>average stability score</b>.</p></div>
+    </div>
+    <figure class="shot"><img src="img/scr-crop-image-kpis.webp" alt="Summary cards: 26 corals, 23.9 percent coverage, 0.665 IoU, 0.825 stability" width="1052" height="153"></figure>
+
+    <h4>The segments table</h4>
+    <figure class="shot"><img src="img/scr-10-segments-table.webp" alt="Detected coral segments table" width="1040" height="900"></figure>
+    <div class="tbl"><table>
+      <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><b>ID</b></td><td>Colony number with its overlay colour.</td></tr>
+        <tr><td><b>Taxon genus</b> / <b>Growth form</b></td><td>BioCLIP's top label, for example <em>Galaxea · Massive</em> or <em>Millepora · Branching / Encrusting</em>.</td></tr>
+        <tr><td><b>Taxon conf</b></td><td>BioCLIP's confidence in that label.</td></tr>
+        <tr><td><b>Condition</b> / <b>Condition conf</b></td><td>HEALTHY or BLEACHED from YOLO11n and its confidence.</td></tr>
+        <tr><td><b>Area (%)</b> / <b>Area (px)</b></td><td>Colony size relative to the image and in pixels.</td></tr>
+        <tr><td><b>IoU confidence</b></td><td>CoralSCOP's predicted mask quality.</td></tr>
+        <tr><td><b>Action</b></td><td><em>Edit</em> opens that colony in the editor. Every column sorts.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h4>The sidebar</h4>
+    <div class="split">
+      <figure class="shot" style="max-width:340px"><img src="img/scr-crop-image-sidebar.webp" alt="Analysis controls sidebar" width="320" height="944"></figure>
+      <div class="prose">
+        <p><b>Inference parameters</b> rerun segmentation with new settings:</p>
+        <ul>
+          <li><b>Grid density</b> (16): points per side of the prompt grid. Higher finds smaller colonies but is slower.</li>
+          <li><b>IoU threshold</b> (0.50): minimum predicted mask quality to keep.</li>
+          <li><b>Stability threshold</b> (0.50): how stable a mask must be when its cut-off shifts.</li>
+          <li><b>Min mask area</b> (100 px): drops specks.</li>
+        </ul>
+        <p><b>Display controls</b> only change how results look:</p>
+        <ul>
+          <li><b>View layout</b>: side by side, overlay, original, masks on black.</li>
+          <li><b>Colour mode</b>: colony instances, health condition, taxonomy, taxonomy + health.</li>
+          <li><b>Overlay opacity</b> (0.45).</li>
+          <li><b>Annotations</b>: borders, ID badges, bounding boxes.</li>
+          <li><b>Filter / highlight coral</b>: show all corals or highlight one.</li>
+        </ul>
+        <p>The sidebar collapses with the button beside its title.</p>
+      </div>
+    </div>
+    <div class="trio">
+      <figure class="shot"><img src="img/scr-11a-image-mode-health.webp" alt="Health condition colour mode" width="1440" height="1500"><figcaption style="padding:8px 12px">Health condition colours.</figcaption></figure>
+      <figure class="shot"><img src="img/scr-11b-image-mode-taxonomy.webp" alt="Taxonomy colour mode" width="1440" height="1500"><figcaption style="padding:8px 12px">Taxonomy colours (one per genus).</figcaption></figure>
+      <figure class="shot"><img src="img/scr-11c-image-masks-on-black.webp" alt="Masks on black layout" width="1440" height="1500"><figcaption style="padding:8px 12px">Masks on black, labelled by genus.</figcaption></figure>
+    </div>
+  </section>
+
+  <section class="block" id="editor">
+    <h3><span class="k">3.4</span>The mask editor</h3>
+    <figure class="shot"><img src="img/scr-12-editor.webp" alt="Mask editor with a colony selected" width="1440" height="900"></figure>
+    <div class="cards">
+      <div class="card"><span class="tag">Header</span><p>Human-annotation badge, file and resolution, auto-save status, the three tool modes, undo / redo, previous / next image, <b>Save</b> and help.</p></div>
+      <div class="card"><span class="tag">Canvas</span><p>Every colony with its ID badge. The selected colony shows draggable vertices; the HUD explains drag, add and remove. Zoom, fit and opacity controls sit bottom-left.</p></div>
+      <div class="card"><span class="tag">Right panel</span><p>Genus, growth form and healthy / bleached for the selected colony, its area and coverage, <b>Delete Mask</b>, then the instance list with visibility and delete per colony and <b>Add Coral</b>.</p></div>
+    </div>
+    <div class="split">
+      <div class="prose">
+        <h4>SAM smart click</h4>
+        <p>Press <kbd>W</kbd>, click on a coral the automatic pass missed (Alt or Shift-click adds a background point), then <b>Run SAM Model</b>. The cached image embedding means only the decoder runs, so the mask appears almost instantly. <b>Accept Mask</b> adds it; <b>Re-run</b> or <b>Discard</b> try again.</p>
+        <p>The mask is traced into a polygon (Moore-neighbour contour, then RDP simplification) so it can be edited like any other colony. <kbd>P</kbd> draws a polygon by hand instead.</p>
+      </div>
+      <figure class="plate pad"><img src="img/fig-05-interactive-sam.webp" alt="Interactive SAM loop from click to editable polygon" width="2000" height="700"><figcaption>Figure 3.3 · Smart-click loop.</figcaption></figure>
+    </div>
+    <div class="duo">
+      <figure class="shot"><img src="img/scr-13-editor-sam-click.webp" alt="One foreground point placed" width="1440" height="900"><figcaption style="padding:8px 12px">One foreground point placed.</figcaption></figure>
+      <figure class="shot"><img src="img/scr-14-editor-sam-result.webp" alt="SAM mask ready to accept" width="1440" height="900"><figcaption style="padding:8px 12px">Mask ready (0.72% cover), waiting for Accept.</figcaption></figure>
+    </div>
+    <figure class="shot"><img src="img/scr-16-editor-shortcuts.webp" alt="Editor shortcuts dialog" width="1440" height="900"><figcaption style="padding:8px 12px">The shortcuts sheet (help button): navigation, tool modes, vertex editing, SAM, polygon drawing and workflow keys. <kbd>⌘S</kbd> saves; work also auto-saves every 20 s.</figcaption></figure>
+  </section>
+
+  <section class="block" id="image-exports">
+    <h3><span class="k">3.5</span>Exports and why each exists</h3>
+    <figure class="plate pad"><img src="img/fig-07-exports-map.webp" alt="Map of image and video export formats" width="2000" height="1125"></figure>
+    <div class="duo">
+      <figure class="shot"><img src="img/scr-crop-image-exports.webp" alt="Export and data inspector panel" width="1052" height="230"></figure>
+      <figure class="shot"><img src="img/scr-17-export-dataset-modal.webp" alt="Export dataset to custom folder dialog" width="1440" height="900"></figure>
+    </div>
+    <div class="tbl"><table>
+      <thead><tr><th>Export</th><th>Contents</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><b>COCO JSON</b></td><td>Polygons, bounding boxes and categories for the current image.</td><td>The standard format for training detection and segmentation models.</td></tr>
+        <tr><td><b>Overlay PNG</b></td><td>The rendered overlay at full resolution.</td><td>Reports, slides and quick visual QA.</td></tr>
+        <tr><td><b>Segments CSV</b></td><td>One row per colony: genus, growth form, condition, confidences, area.</td><td>Ecologists work in spreadsheets and R.</td></tr>
+        <tr><td><b>Raw telemetry (JSON)</b></td><td>Raw model output for the image.</td><td>Debugging and reproducibility.</td></tr>
+        <tr><td><b>Export Dataset</b> (folder or .zip)</td><td><code>annotations/instances_default.json</code>, <code>images/</code>, <code>summary.csv</code>, <code>README.md</code> for every processed image.</td><td>A ready-to-train dataset in one step (<code>core/image_export.py</code>).</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+</article>
+
+<!-- ============ 04 VIDEO FLOW ============ -->
+<article class="chapter k4" id="video">
+  <div class="ch-head">
+    <img src="img/ch04-video-flow.webp" alt="" width="2000" height="667">
+    <div class="ch-title"><span class="ch-num">CHAPTER 04</span><h2>Video flow</h2><p>The first pipeline, why it was replaced, and the optical-flow design that ships today.</p></div>
+  </div>
+
+  <section class="block" id="legacy">
+    <h3><span class="k">4.1</span>The legacy pipeline (SAM 2 tracking)</h3>
+    <figure class="plate pad"><img src="img/fig-08-legacy-video.webp" alt="Legacy video pipeline with overlap decision, SAM 2 tracking and full segmentation path" width="2000" height="1125"><figcaption>Figure 4.1 · The original design, redrawn.</figcaption></figure>
+    <div class="prose">
+      <p>The video was standardised to 25 FPS. For each frame the pipeline measured how much of it overlapped the last keyframe:</p>
+      <p style="font-family:var(--f-mono);font-size:15px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 16px">Overlap(t) = Area(F<sub>t</sub> ∩ F<sub>key</sub>) / Area(F<sub>t</sub>)</p>
+      <p>Above the threshold, <b>SAM 2</b> propagated every known colony mask into the new frame. Below it, the frame became a new keyframe and went through full segmentation (1–2 s), bleaching (0.5 s) and taxonomy (10–25 s) before tracking resumed.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <h3><span class="k">4.2</span>Why it was not good enough</h3>
+    <div class="stats">
+      <div class="stat"><b>96.7 s</b><span>for an 8 s, 202-frame 1080p clip (Modal T4)</span></div>
+      <div class="stat"><b>2.1 FPS</b><span>tracking speed, 0.08× real time</span></div>
+      <div class="stat"><b>~20 ms</b><span>per colony per frame; 27 colonies ≈ 350 ms</span></div>
+      <div class="stat"><b>67–83%</b><span>of wall time spent in SAM 2 propagation</span></div>
+    </div>
+    <div class="prose">
+      <ul>
+        <li><b>Cost grew with colony count.</b> SAM 2 tracks each object separately, so a busy reef was slower than a sparse one.</li>
+        <li><b>A bigger GPU did not help.</b> About 5,000 tiny kernels per frame left the GPU idle about half the time. An H100 (65 s) was no faster than an A10G (65 s); the best, an L40S, still took 51 s.</li>
+        <li><b>Heavy dependency.</b> SAM 2 needed PyTorch at runtime, against the ONNX-only design.</li>
+        <li><b>Results arrived late.</b> On Colab the UI waited 26.7 s before results were usable.</li>
+      </ul>
+    </div>
+    <figure class="plate pad"><img src="img/chart-old-vs-new.webp" alt="Bar charts comparing SAM 2 and optical flow on end-to-end time, tracking FPS and time to usable results" width="1800" height="630"><figcaption>Figure 4.2 · Source: <code>docs/VIDEO_PIPELINE_SUMMARY.md</code>, <code>docs/benchmarks/</code>.</figcaption></figure>
+  </section>
+
+  <section class="block" id="flow">
+    <h3><span class="k">4.3</span>The new pipeline: dense optical-flow mask propagation</h3>
+    <div class="callout"><span class="lbl">The insight</span><p>Corals do not move; the camera does. So instead of tracking every colony, warp a single label image (every colony at once) along the camera's optical flow. The cost is the same for 3 colonies or 300.</p></div>
+    <figure class="plate pad"><img src="img/fig-10-why-flow.webp" alt="Before: SAM 2 tracks every colony; after: one flow field warps one label image" width="2000" height="1125"></figure>
+    <figure class="plate pad"><img src="img/fig-09-flow-pipeline.webp" alt="New pipeline with real-time path, async keyframes and async classification" width="2000" height="900"><figcaption>Figure 4.3 · The shipping pipeline (<code>core/video/flow_tracking.py</code>, <code>core/video/engine.py</code>).</figcaption></figure>
+    <ol class="steps">
+      <li><div><b>Decode and proxy</b><p>A prefetch thread decodes 1080p frames; tracking runs on a 480p proxy.</p></div></li>
+      <li><div><b>DIS optical flow</b><p>OpenCV's DIS flow at half resolution, about 1 ms per frame.</p></div></li>
+      <li><div><b>Warp one label image</b><p>All colony masks move together; geometry (polygons, boxes) is computed in a worker thread one frame behind.</p></div></li>
+      <li><div><b>Async CoralSCOP keyframes</b><p>An ego-motion selector (stride 10–25 frames, overlap gate 0.7) queues keyframes to fp16 CoralSCOP in the background, with one guided prompt per known colony plus grid points only in unknown areas. New masks are carried forward through the recorded flows and matched one-to-one by IoU. Tracking never waits for SAM.</p></div></li>
+      <li><div><b>Async classification</b><p>Each new colony is classified once (BioCLIP genus and YOLO11n bleaching) from a padded full-resolution crop.</p></div></li>
+      <li><div><b>Persist, complete, export</b><p>Frames are batch-written to SQLite (WAL). The job reports <em>completed</em> as soon as frames are saved; the MP4, CSV and COCO exports render in a background thread (<em>export: pending → ready</em>).</p></div></li>
+    </ol>
+    <div class="split">
+      <div class="prose">
+        <h4>Why this design and not another</h4>
+        <ul>
+          <li><b>Faster GPU for SAM 2</b>: ruled out by the benchmark; the bottleneck was kernel launch overhead, not compute.</li>
+          <li><b>CoralSCOP on every frame</b>: about 0.8–1.4 s per frame on a T4, far from real time.</li>
+          <li><b>A thinner prompt grid</b> (12×12, 8×8): lost most masks. Guided prompts keep coverage at lower cost.</li>
+          <li><b>Optical flow</b> matches the physics of a transect (static subject, moving camera), runs on CPU, needs no PyTorch and keeps the GPU for keyframes.</li>
+        </ul>
+      </div>
+      <figure class="plate pad"><img src="img/old-vs-new-race.webp" alt="Slow submarine towing many balloons versus a fast one carrying one sheet" width="1600" height="800"></figure>
+    </div>
+  </section>
+
+  <section class="block">
+    <h3><span class="k">4.4</span>Results</h3>
+    <div class="stats">
+      <div class="stat"><b>7.9×</b><span>faster end to end: 96.7 s → 12.3 s</span></div>
+      <div class="stat"><b>16.4 FPS</b><span>end to end on a Modal T4 (~25 FPS tracking loop)</span></div>
+      <div class="stat"><b>0.8–1.5×</b><span>real time depending on the GPU</span></div>
+      <div class="stat"><b>−44%</b><span>Colab time to usable results: 26.7 s → 14.9 s</span></div>
+    </div>
+    <figure class="plate pad"><img src="img/chart-fps-by-gpu.webp" alt="Bar chart of flow pipeline FPS per GPU" width="1800" height="690"><figcaption>Figure 4.4 · From the A10G upward the host CPU (decode, ego-motion, flow) is the limit, not the GPU.</figcaption></figure>
+    <div class="tbl"><table>
+      <thead><tr><th>GPU (Modal)</th><th>Wall time</th><th>FPS</th><th>× real time</th></tr></thead>
+      <tbody>
+        <tr><td>T4</td><td class="num">10.3 s</td><td class="num">19.7</td><td class="num">0.79</td></tr>
+        <tr><td>L4</td><td class="num">8.1 s</td><td class="num">25.0</td><td class="num">1.00</td></tr>
+        <tr><td>A10G</td><td class="num">6.2 s</td><td class="num">32.6</td><td class="num">1.30</td></tr>
+        <tr><td>L40S</td><td class="num">6.1 s</td><td class="num">33.2</td><td class="num">1.33</td></tr>
+        <tr><td>A100-40GB</td><td class="num">8.4 s</td><td class="num">23.9</td><td class="num">0.96</td></tr>
+        <tr><td>A100-80GB</td><td class="num">10.3 s</td><td class="num">19.6</td><td class="num">0.78</td></tr>
+        <tr><td>H100</td><td class="num">5.5 s</td><td class="num">36.5</td><td class="num">1.46</td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted" style="max-width:72ch">A check run for this guide on a Colab T4 (2 vCPUs) processed the same clip in 16.3 s (13.0 FPS), found 32 colonies over 9 keyframes with 27.8% bleached, and had all exports ready 11.4 s later. Colab's smaller CPU explains the gap to the Modal figures.</p>
+    <div class="callout warn"><span class="lbl">Known limits</span><p>Accuracy is not yet validated against ground truth. After about 25 flow-only frames, warped masks match a fresh keyframe detection at IoU ≈ 0.71; edges drift, and tall colonies or newly exposed areas are weaker than with a tracker. Keyframe timing depends on the GPU, so colony counts vary slightly between runs.</p></div>
+  </section>
+
+  <section class="block" id="video-walk">
+    <h3><span class="k">4.5</span>Walkthrough: processing a transect</h3>
+    <div class="duo">
+      <figure class="shot"><img src="img/scr-20-video-tab.webp" alt="Video transect tab" width="1440" height="900"><figcaption style="padding:8px 12px"><b>Video Transect</b> tab: drop a video or <b>Load Sample Video</b>.</figcaption></figure>
+      <figure class="shot"><img src="img/scr-21-video-loaded.webp" alt="Sample video loaded" width="1440" height="900"><figcaption style="padding:8px 12px">Clip details (1920×1080, 25 FPS, 202 frames) and <b>Launch Video Tracking</b>.</figcaption></figure>
+    </div>
+    <figure><img src="img/laptop-video.webp" alt="Laptop showing live video tracking" width="1800" height="1125" style="width:100%;height:auto;display:block"><figcaption>Live inference while the job runs: frame counter, FPS, execution provider, export status and labelled colonies.</figcaption></figure>
+    <div class="cards">
+      <div class="card"><span class="tag">Player bar</span><p>File, processed frame count, timecode, 25 FPS CFR badge, step back / forward, Play and a scrubber.</p></div>
+      <div class="card"><span class="tag">Pipeline card</span><p>Status, frame progress and FPS, the execution provider and precision, engine name, export status, Pause, Cancel and the Activity Log. Counters for colonies discovered, keyframes and bleaching %.</p></div>
+      <div class="card"><span class="tag">Telemetry log</span><p>Timestamped engine messages: job enqueued, keyframe settings, models loaded, tracking finished, deliverables ready.</p></div>
+      <div class="card"><span class="tag">Tracking overlay</span><p>The same layouts, colour modes, opacity and annotation toggles as the image studio, applied per frame.</p></div>
+    </div>
+    <figure class="shot"><img src="img/scr-crop-video-telemetry.webp" alt="Completed pipeline card and telemetry log" width="1058" height="302"></figure>
+    <figure class="shot"><img src="img/scr-25-video-fullpage.webp" alt="Completed video analysis page" width="1440" height="2400"><figcaption style="padding:8px 12px">The finished job: overlay, summary cards, per-colony table and the export panel.</figcaption></figure>
+    <div class="duo">
+      <figure class="shot"><img src="img/scr-26-video-side-health.webp" alt="Side by side with health colours" width="1440" height="1200"><figcaption style="padding:8px 12px">Side by side, health condition colours.</figcaption></figure>
+      <figure class="shot"><img src="img/scr-26b-video-masks-taxonomy.webp" alt="Masks on black with taxonomy colours" width="1440" height="1200"><figcaption style="padding:8px 12px">Masks on black, taxonomy colours.</figcaption></figure>
+    </div>
+    <h4>How the UI talks to the engine</h4>
+    <figure class="plate pad"><img src="img/fig-11-video-dataflow.webp" alt="Sequence diagram between UI, FastAPI, VideoProcessor and SQLite" width="2000" height="1125"><figcaption>Figure 4.5 · Upload, process, poll status and frame deltas about once a second, then fetch exports.</figcaption></figure>
+    <h4>Video exports</h4>
+    <figure class="shot"><img src="img/scr-crop-video-exports.webp" alt="Video export panel" width="1058" height="298"></figure>
+    <div class="tbl"><table>
+      <thead><tr><th>Export</th><th>Contents</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><b>Annotated video (.mp4)</b></td><td>H.264 video with colony contours and labels burned in.</td><td>Review and reporting; plays anywhere.</td></tr>
+        <tr><td><b>Transect telemetry (.csv)</b></td><td>Frame-by-frame scientific log of colonies along the dive.</td><td>Analysis in spreadsheets, R or pandas.</td></tr>
+        <tr><td><b>COCO-video tracking (.json)</b></td><td>Per-frame tracks with persistent IDs (MOT-style).</td><td>Training and evaluating video models.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="duo">
+      <figure class="shot"><img src="img/vid-annotated-frame-1_5s.webp" alt="Frame from the exported annotated video at 1.5 seconds" width="1600" height="900"></figure>
+      <figure class="shot"><img src="img/vid-annotated-frame-5s.webp" alt="Frame from the exported annotated video at 5 seconds" width="1600" height="900"></figure>
+    </div>
+    <figcaption>Two frames of the exported annotated MP4 (1.5 s and 5 s).</figcaption>
+  </section>
+</article>
+
+<!-- ============ 05 STACK ============ -->
+<article class="chapter k5" id="stack">
+  <div class="ch-head">
+    <img src="img/ch05-tech-stack.webp" alt="" width="2000" height="667">
+    <div class="ch-title"><span class="ch-num">CHAPTER 05</span><h2>Tech stack</h2><p>What each technology does here, and why it was picked.</p></div>
+  </div>
+  <section class="block">
+    <figure class="plate pad"><img src="img/fig-01-architecture.webp" alt="System architecture: Tauri shell, React UI, FastAPI engine, ONNX Runtime models, SQLite and exports" width="2000" height="1125"><figcaption>Figure 5.1 · How the layers fit together.</figcaption></figure>
+    <div class="stack">
+      <div class="tech"><span class="lg"><img src="img/stack/tauri-original.svg" alt=""></span><div><span class="layer">Desktop shell</span><h4>Tauri v2</h4><p>Wraps the UI as a native desktop app with a small footprint, starts and health-checks the Python engine and provides the native save dialog.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/rust-original.svg" alt=""></span><div><span class="layer">Desktop shell</span><h4>Rust</h4><p>Tauri's language. The shell is one small file (<code>src-tauri/src/lib.rs</code>) handling process lifecycle safely.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/react-original.svg" alt=""></span><div><span class="layer">UI</span><h4>React 19</h4><p>Component model for three dense views (upload, image studio, video studio) with lots of shared state.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/typescript-original.svg" alt=""></span><div><span class="layer">UI</span><h4>TypeScript</h4><p>Typed API contracts in <code>types/index.ts</code> catch backend shape changes at compile time.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/vitejs-original.svg" alt=""></span><div><span class="layer">UI tooling</span><h4>Vite</h4><p>Instant dev server (port 1425) and the production bundle in <code>dist/</code> that FastAPI or Tauri serves.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/tailwindcss-original.svg" alt=""></span><div><span class="layer">UI styling</span><h4>Tailwind CSS 4</h4><p>Utility styling with theme tokens in <code>src/styles/</code>, so the studio stays visually consistent.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/si-radixui.svg" alt=""></span><div><span class="layer">UI components</span><h4>Radix UI + shadcn/ui</h4><p>Accessible dialogs, selects, sliders and tabs (<code>components/ui/</code>, generated, not hand-edited).</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/si-konva.svg" alt=""></span><div><span class="layer">Editor</span><h4>Konva + react-konva</h4><p>Canvas engine for the mask editor: thousands of vertices, zoom, pan and hit-testing at 60 FPS.</p></div></div>
+      <div class="tech"><span class="lg txt">TQ</span><div><span class="layer">UI data</span><h4>TanStack Query &amp; Table, Zustand</h4><p>Polling and caching of engine status, the sortable segments table and small shared stores.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/python-original.svg" alt=""></span><div><span class="layer">Engine</span><h4>Python 3.10+</h4><p>Where the computer-vision ecosystem lives: NumPy, OpenCV, ONNX Runtime, pycocotools.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/fastapi-original.svg" alt=""></span><div><span class="layer">Engine</span><h4>FastAPI + Uvicorn + Pydantic</h4><p>A fast local HTTP API with validated request models; the same engine runs locally or on Colab.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/si-onnx.svg" alt=""></span><div><span class="layer">Inference</span><h4>ONNX Runtime</h4><p>Runs all models on CUDA, CoreML or CPU from one file format, with no PyTorch at runtime.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/opencv-original.svg" alt=""></span><div><span class="layer">Vision</span><h4>OpenCV</h4><p>DIS optical flow, contour tracing, polygon simplification and video decode / encode.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/numpy-original.svg" alt=""></span><div><span class="layer">Vision</span><h4>NumPy</h4><p>Pre- and post-processing, mask maths and BioCLIP's embedding matrix multiply.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/sqlite-original.svg" alt=""></span><div><span class="layer">Storage</span><h4>SQLite (WAL)</h4><p>Durable video job store: jobs, chunks, frames and metrics, readable while being written.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/si-huggingface.svg" alt=""></span><div><span class="layer">Model hosting</span><h4>Hugging Face Hub</h4><p>Free, versioned hosting for the five ONNX files, with resumable downloads via <code>huggingface_hub</code>.</p></div></div>
+      <div class="tech"><span class="lg txt">ffmpeg</span><div><span class="layer">Media</span><h4>ffmpeg</h4><p>H.264 encoding with faststart for browser playback of the annotated MP4.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/pytorch-original.svg" alt=""></span><div><span class="layer">Model prep</span><h4>PyTorch (offline only)</h4><p>The models' original framework, used only to export them to ONNX. Not shipped with the app.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/si-googlecolab.svg" alt=""></span><div><span class="layer">Cloud GPU</span><h4>Google Colab CLI</h4><p>Default place for GPU tests and benchmarks; can also host the whole app for remote use.</p></div></div>
+      <div class="tech"><span class="lg txt">Modal</span><div><span class="layer">Cloud GPU</span><h4>Modal</h4><p>On-request multi-GPU sweeps (T4 to H100) via <code>backend/modal_flow.py</code>.</p></div></div>
+      <div class="tech"><span class="lg"><img src="img/stack/si-ngrok.svg" alt=""></span><div><span class="layer">Tunnel</span><h4>ngrok</h4><p>Public HTTPS URL for an engine running on Colab (token in <code>.env</code>); Cloudflare quick tunnel as fallback.</p></div></div>
+    </div>
+  </section>
+</article>
+
+<!-- ============ 06 FILES ============ -->
+<article class="chapter k6" id="files">
+  <div class="ch-head">
+    <img src="img/ch06-file-structure.webp" alt="" width="2000" height="667">
+    <div class="ch-title"><span class="ch-num">CHAPTER 06</span><h2>File structure</h2><p>What every folder and key file does, how to run it and what is left to do.</p></div>
+  </div>
+
+  <section class="block">
+    <h3><span class="k">6.1</span>Repository map</h3>
+    <div class="tree" role="list">
+      <div><span class="d">CoralSeg/</span></div>
+      <div>├── <span class="d">src/</span><span class="n">React 19 UI</span></div>
+      <div>│   ├── App.tsx, main.tsx<span class="n">app root and view switching</span></div>
+      <div>│   ├── <span class="d">views/</span><span class="n">UploadView, AnalysisView, VideoAnalysisView</span></div>
+      <div>│   ├── <span class="d">components/</span><span class="n">TopBar, Sidebar, SegmentsTable, MetricCards, ExportPanel, ExportDatasetModal…</span></div>
+      <div>│   │   ├── <span class="d">upload/</span><span class="n">tabs, batch and video progress cards, model and remote-engine modals</span></div>
+      <div>│   │   ├── <span class="d">segmentation/</span><span class="n">Konva editor: canvas, hotkeys, history, SAM and polygon HUDs</span></div>
+      <div>│   │   ├── <span class="d">video/</span><span class="n">viewer, controls bar, timeline, export panel and modal</span></div>
+      <div>│   │   └── <span class="d">ui/</span><span class="n">shadcn/Radix primitives (generated; do not hand-edit)</span></div>
+      <div>│   ├── <span class="d">services/</span>api.ts<span class="n">every backend call; base URL in getApiBase</span></div>
+      <div>│   ├── <span class="d">types/</span>index.ts<span class="n">shared API and domain types</span></div>
+      <div>│   ├── <span class="d">lib/</span><span class="n">query client, utils</span></div>
+      <div>│   └── <span class="d">styles/</span><span class="n">theme tokens and global CSS</span></div>
+      <div>├── <span class="d">backend/</span><span class="n">FastAPI engine (run via run_server.py)</span></div>
+      <div>│   ├── <span class="d">app/</span><span class="n">main.py (app factory, CORS, serves dist/), state.py (singletons, caches), schemas.py</span></div>
+      <div>│   │   └── <span class="d">routers/</span><span class="n">system.py, images.py, batch.py, video.py</span></div>
+      <div>│   ├── <span class="d">core/</span><span class="n">models, device, schema, segmentation, interactive_segmentation, taxonomy, visualization, batch_processor, image_export, fp16_models</span></div>
+      <div>│   │   └── <span class="d">video/</span><span class="n">engine, flow_tracking, keyframe_selector, preprocessor, pipeline_stages, store, tracker, video_export</span></div>
+      <div>│   ├── test_*.py<span class="n">API, video pipeline, flow tracking, pipeline stages</span></div>
+      <div>│   ├── bench_app_flow.py, modal_flow.py<span class="n">engine benchmark harness, Modal runner</span></div>
+      <div>│   └── requirements.txt, requirements-gpu.txt</div>
+      <div>├── <span class="d">src-tauri/</span><span class="n">Rust shell: lib.rs, main.rs, tauri.conf.json, capabilities/</span></div>
+      <div>├── <span class="d">docs/</span><span class="n">pipeline summary, benchmarks, Colab runner, legacy notes, this handover</span></div>
+      <div>├── <span class="d">scripts/</span>colab-cloud.mjs<span class="n">npm run colab launcher</span></div>
+      <div>├── <span class="d">public/</span><span class="n">logo and app icons</span></div>
+      <div>├── <span class="d">demo_images/</span><span class="n">sample reef images and transect videos</span></div>
+      <div>├── <span class="d">.agents/skills/</span><span class="n">vendored agent skills (not project code)</span></div>
+      <div>└── AGENTS.md, README.md, package.json, vite.config.ts, start_backend.sh, .env.example</div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h3><span class="k">6.2</span>Key backend files</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+      <tbody>
+        <tr><td><code>core/schema.py</code></td><td>TypedDicts for every segment dict (<code>Segment</code>, <code>EnrichedSegment</code>, <code>SegmentRow</code>). Read this first.</td></tr>
+        <tr><td><code>core/models.py</code></td><td>ONNX session loading, Hugging Face download, model locks, active-job counter.</td></tr>
+        <tr><td><code>core/device.py</code></td><td>Hardware tier resolution, memory budget, session options.</td></tr>
+        <tr><td><code>core/segmentation.py</code></td><td>CoralSCOP automatic mask generation and NMS (<code>run_segmentation</code>).</td></tr>
+        <tr><td><code>core/interactive_segmentation.py</code></td><td>Point / box prompts, mask ↔ polygon, <code>SAM_SESSION</code> embedding cache.</td></tr>
+        <tr><td><code>core/taxonomy.py</code></td><td>BioCLIP genus / growth form, YOLO11n bleaching, <code>enrich_masks_with_taxonomy_and_bleaching</code>.</td></tr>
+        <tr><td><code>core/batch_processor.py</code></td><td><code>BatchProcessor</code> worker thread.</td></tr>
+        <tr><td><code>core/video/engine.py</code></td><td><code>VideoProcessor</code>; <code>_run_job_pipeline</code> is the whole video pipeline.</td></tr>
+        <tr><td><code>core/video/flow_tracking.py</code></td><td><code>FlowTracker</code>: DIS warp, async keyframes, async classification.</td></tr>
+        <tr><td><code>core/video/pipeline_stages.py</code></td><td>Pure, unit-tested stages: label image → polygons, colours, exports, timing report.</td></tr>
+        <tr><td><code>core/video/store.py</code></td><td><code>VideoJobStore</code> SQLite (WAL) persistence.</td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted">Every backend file name is unique, so searching by file name is safe. Image results live in memory only (<code>app/state.py</code>); video results persist in SQLite.</p>
+  </section>
+
+  <section class="block" id="run">
+    <h3><span class="k">6.3</span>Run, build and test</h3>
+    <div class="split">
+<pre><span class="c"># install</span>
+npm install
+npm run setup:backend      <span class="c"># creates .venv, installs requirements</span>
+
+<span class="c"># develop</span>
+npm run dev                <span class="c"># FastAPI + Vite together</span>
+npm run tauri dev          <span class="c"># native desktop window</span>
+
+<span class="c"># build</span>
+npm run build
+npm run tauri build        <span class="c"># .dmg / .exe / .deb</span></pre>
+<pre><span class="c"># tests (fast, local)</span>
+npm run test:backend
+python backend/test_pipeline_stages.py
+python backend/test_flow_tracking.py
+
+<span class="c"># GPU work: Colab first, Modal only on request</span>
+npm run colab              <span class="c"># app on a Colab T4 + public URL</span>
+npm run colab:logs
+npm run colab:stop         <span class="c"># always release the runtime</span>
+colab run --gpu T4 backend/bench_app_flow.py</pre>
+    </div>
+    <div class="callout"><span class="lbl">Project rules (AGENTS.md)</span><p>Never run the full heavy pipeline locally; use Colab or a scaled-down sample. Never commit model weights, installers or virtual environments. Commit and push after every verified step.</p></div>
+  </section>
+
+  <section class="block" id="next">
+    <h3><span class="k">6.4</span>Known issues and next steps</h3>
+    <div class="cards">
+      <div class="card" style="--c:var(--bad)"><span class="tag">Licensing</span><p>The bleaching model is <b>AGPL-3.0</b>. Check obligations before distributing the app commercially, or replace the model. CoralSCOP is Apache-2.0 and BioCLIP is MIT.</p></div>
+      <div class="card"><span class="tag">Accuracy</span><p>Evaluate flow tracking on a labelled clip; warped masks reach IoU ≈ 0.71 after 25 frames.</p></div>
+      <div class="card"><span class="tag">Performance</span><p>Overlap ego-motion and flow with decode on multi-core hosts; NVENC or proxy-resolution overlay for the MP4 (~10 s CPU encode on Colab); lazy MP4 export.</p></div>
+      <div class="card"><span class="tag">UI polish</span><p>The download progress bar stays at 0% while models download. The live video view requests some frames before they are saved (404s, harmless). On Colab the sample library is empty because <code>demo_images/</code> is not uploaded, and the dataset export defaults to the VM's <code>/root</code>.</p></div>
+    </div>
+  </section>
+
+  <div class="closing">
+    <img src="img/handover-team.webp" alt="" width="2000" height="833">
+    <div class="txt"><h2>Over to you.</h2><p>The engine, the studio and the cloud tooling are all in the repository. Start with <code>AGENTS.md</code>'s code map and <code>core/schema.py</code>, then run the app once on Colab.</p></div>
+  </div>
+
+  <section class="block">
+    <h3>Sources</h3>
+    <ul class="sources">
+      <li><a href="https://openaccess.thecvf.com/content/CVPR2024/html/Zheng_CoralSCOP_Segment_any_COral_Image_on_this_Planet_CVPR_2024_paper.html">Zheng et al., CoralSCOP: Segment any Coral Image on this Planet, CVPR 2024</a> · <a href="https://huggingface.co/reefsupport/CoralSCOP">reefsupport/CoralSCOP</a></li>
+      <li><a href="https://openaccess.thecvf.com/content/CVPR2024/html/Stevens_BioCLIP_A_Vision_Foundation_Model_for_the_Tree_of_Life_CVPR_2024_paper.html">Stevens et al., BioCLIP: A Vision Foundation Model for the Tree of Life, CVPR 2024</a> · <a href="https://huggingface.co/ReefNet/finetuned-bioclip">ReefNet/finetuned-bioclip</a></li>
+      <li><a href="https://huggingface.co/NMFS-OSI/yolo11n-cls-noaa-esd-coral-bleaching">NOAA NMFS-OSI YOLO11n coral bleaching classifier</a> · <a href="https://docs.ultralytics.com/models/yolo11/">Ultralytics YOLO11 docs</a></li>
+      <li><a href="https://huggingface.co/harsh-awasthi/Andromeida-ReefVision-ONNX">Andromeida-ReefVision-ONNX model repository</a></li>
+      <li>Benchmarks: <code>docs/VIDEO_PIPELINE_SUMMARY.md</code> and <code>docs/benchmarks/</code> in this repository.</li>
+    </ul>
+  </section>
+</article>
+
+</main>
+</div>
+
+<footer>
+  <span class="logo-pill"><img src="img/andromeida_logo.svg" alt="Andromeida"></span>
+  <span>Reef Vision Studio handover guide · November 2026</span>
+</footer>
+</div>
